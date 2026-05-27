@@ -12,16 +12,12 @@
 //! 4. Completed runs only persist when they have output or a non-success status.
 use super::HistoryCell;
 use super::plain_lines;
-use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
 use crate::motion::shimmer_text;
-use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
 use crate::ui_consts::TRANSCRIPT_HINT;
-use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_line;
 use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::HookOutputEntry;
 use codex_app_server_protocol::HookOutputEntryKind;
@@ -52,10 +48,22 @@ const HOOK_RUN_REVEAL_DELAY: Duration = Duration::from_millis(300);
 /// This pairs with `HOOK_RUN_REVEAL_DELAY`: once the user has seen a hook row, keep it stable long
 /// enough to read instead of removing it immediately when the success event arrives.
 const QUIET_HOOK_MIN_VISIBLE: Duration = Duration::from_millis(600);
+const HOOK_OUTPUT_DISPLAY_MAX_ENTRIES: usize = 2;
+const HOOK_OUTPUT_DISPLAY_MAX_CHARS: usize = 180;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HookOutputRenderMode {
+    Compact,
+    Full,
+}
+
+struct SessionStartSummary {
+    title: String,
+    details: Vec<String>,
+}
 
 const HOOK_OUTPUT_INDENT: &str = "  ";
 const HOOK_OUTPUT_BODY_INDENT: &str = "    ";
-const HOOK_CONTEXT_MAX_DISPLAY_ROWS: usize = 3;
 
 #[derive(Debug)]
 struct HookRunCell {
@@ -300,9 +308,40 @@ impl HookCell {
             run.reveal_running_after_delayed_redraw_for_test(now);
         }
     }
+}
 
-    /// Builds hook lines for either the bounded main viewport or the full transcript overlay.
-    fn output_lines(&self, width: u16, render_full_context: bool) -> Vec<Line<'static>> {
+impl HistoryCell for HookCell {
+    /// Builds viewport lines while coalescing adjacent visible-running hooks.
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.lines(width, HookOutputRenderMode::Compact)
+    }
+
+    /// Hook transcript output preserves full hook entries.
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.lines(width, HookOutputRenderMode::Full)
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        plain_lines(self.lines(u16::MAX, HookOutputRenderMode::Full))
+    }
+
+    /// Produces a coarse cache key for transcript overlays while hook animations are active.
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled {
+            return None;
+        }
+        let elapsed = self
+            .runs
+            .iter()
+            .filter(|run| run.state.is_running_visible())
+            .find_map(|run| run.state.start_time())?
+            .elapsed();
+        Some(elapsed.as_millis() as u64 / 600)
+    }
+}
+
+impl HookCell {
+    fn lines(&self, width: u16, output_mode: HookOutputRenderMode) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let mut running_group: Option<RunningHookGroup> = None;
         for run in &self.runs {
@@ -317,12 +356,7 @@ impl HookCell {
                     push_running_hook_group(&mut lines, &group, self.animations_enabled);
                 }
                 push_hook_line_separator(&mut lines);
-                run.push_display_lines(
-                    &mut lines,
-                    self.animations_enabled,
-                    width,
-                    render_full_context,
-                );
+                run.push_display_lines(&mut lines, self.animations_enabled, width, output_mode);
                 continue;
             };
 
@@ -346,36 +380,6 @@ impl HookCell {
             push_running_hook_group(&mut lines, &group, self.animations_enabled);
         }
         lines
-    }
-}
-
-impl HistoryCell for HookCell {
-    /// Builds viewport lines while coalescing adjacent visible-running hooks.
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.output_lines(width, /*render_full_context*/ false)
-    }
-
-    /// The transcript overlay preserves complete hook context hidden by the viewport preview.
-    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.output_lines(width, /*render_full_context*/ true)
-    }
-
-    fn raw_lines(&self) -> Vec<Line<'static>> {
-        plain_lines(self.output_lines(u16::MAX, /*render_full_context*/ true))
-    }
-
-    /// Produces a coarse cache key for transcript overlays while hook animations are active.
-    fn transcript_animation_tick(&self) -> Option<u64> {
-        if !self.animations_enabled {
-            return None;
-        }
-        let elapsed = self
-            .runs
-            .iter()
-            .filter(|run| run.state.is_running_visible())
-            .find_map(|run| run.state.start_time())?
-            .elapsed();
-        Some(elapsed.as_millis() as u64 / 600)
     }
 }
 
@@ -441,7 +445,7 @@ impl HookRunCell {
         lines: &mut Vec<Line<'static>>,
         animations_enabled: bool,
         width: u16,
-        render_full_context: bool,
+        output_mode: HookOutputRenderMode,
     ) {
         let label = hook_event_label(self.event_name);
         match &self.state {
@@ -457,123 +461,27 @@ impl HookRunCell {
                 );
             }
             HookRunState::Completed { status, entries } => {
-                let system_message = entries
-                    .iter()
-                    .find(|entry| entry.kind == HookOutputEntryKind::Warning);
-                let mut system_message_lines = system_message.map(|entry| entry.text.split('\n'));
-                let status_text = format!("{status:?}").to_lowercase();
-                let header_text = if let Some(first_line) =
-                    system_message_lines.as_mut().and_then(Iterator::next)
+                if self.event_name == HookEventName::SessionStart
+                    && *status == HookRunStatus::Completed
+                    && output_mode == HookOutputRenderMode::Compact
                 {
-                    format!("{label} ({status_text}) says: {first_line}")
-                } else {
-                    format!("{label} hook ({status_text})")
-                };
+                    push_session_start_summary(lines, entries);
+                    return;
+                }
+                let status_text = format!("{status:?}").to_lowercase();
                 lines.push(
                     vec![
                         hook_completed_bullet(*status, entries),
                         " ".into(),
-                        header_text.into(),
+                        format!("{label} hook ({status_text})").into(),
                     ]
                     .into(),
                 );
-                if let Some(system_message_lines) = system_message_lines {
-                    for line in system_message_lines {
-                        if line.is_empty() {
-                            lines.push("".into());
-                        } else {
-                            lines.push(format!("{HOOK_OUTPUT_BODY_INDENT}{line}").into());
-                        }
-                    }
-                }
-                for entry in entries {
-                    if entry.kind == HookOutputEntryKind::Warning {
-                        continue;
-                    }
-                    if !render_full_context && entry.kind == HookOutputEntryKind::Context {
-                        lines.extend(hook_context_preview_lines(&entry.text, width));
-                    } else {
-                        push_full_hook_output_entry(lines, entry);
-                    }
-                }
+                push_hook_output_entries(lines, entries, width, output_mode);
             }
             HookRunState::PendingReveal { .. } => {}
         }
     }
-}
-
-fn push_full_hook_output_entry(lines: &mut Vec<Line<'static>>, entry: &HookOutputEntry) {
-    let prefix = hook_output_prefix(entry.kind);
-    let mut output_lines = entry.text.split('\n');
-    if let Some(first_line) = output_lines.next() {
-        lines.push(format!("{HOOK_OUTPUT_INDENT}{prefix}{first_line}").into());
-    }
-    for line in output_lines {
-        if line.is_empty() {
-            lines.push("".into());
-        } else {
-            lines.push(format!("{HOOK_OUTPUT_BODY_INDENT}{line}").into());
-        }
-    }
-}
-
-fn hook_context_preview_lines(text: &str, width: u16) -> Vec<Line<'static>> {
-    let width = usize::from(width.max(1));
-    let mut wrapped = Vec::new();
-    let mut source_lines = text.split('\n');
-    let first_line = source_lines.next().unwrap_or_default();
-    push_wrapped_hook_context_line(
-        &mut wrapped,
-        first_line,
-        width,
-        Line::from(format!(
-            "{HOOK_OUTPUT_INDENT}{}",
-            hook_output_prefix(HookOutputEntryKind::Context)
-        )),
-    );
-    for line in source_lines {
-        if line.is_empty() {
-            wrapped.push("".into());
-        } else {
-            push_wrapped_hook_context_line(
-                &mut wrapped,
-                line,
-                width,
-                Line::from(HOOK_OUTPUT_BODY_INDENT),
-            );
-        }
-    }
-
-    if wrapped.len() <= HOOK_CONTEXT_MAX_DISPLAY_ROWS {
-        return wrapped;
-    }
-
-    let retained_rows = HOOK_CONTEXT_MAX_DISPLAY_ROWS - 1;
-    let omitted_rows = wrapped.len() - retained_rows;
-    wrapped.truncate(retained_rows);
-    let hint = vec![
-        HOOK_OUTPUT_BODY_INDENT.into(),
-        format!("… +{omitted_rows} lines ({TRANSCRIPT_HINT})").dim(),
-    ]
-    .into();
-    wrapped.push(truncate_line_with_ellipsis_if_overflow(hint, width));
-    wrapped
-}
-
-fn push_wrapped_hook_context_line(
-    output: &mut Vec<Line<'static>>,
-    text: &str,
-    width: usize,
-    initial_indent: Line<'static>,
-) {
-    let line = Line::from(text.to_string());
-    let wrapped = word_wrap_line(
-        &line,
-        RtOptions::new(width)
-            .initial_indent(initial_indent)
-            .subsequent_indent(Line::from(HOOK_OUTPUT_BODY_INDENT)),
-    );
-    push_owned_lines(&wrapped, output);
 }
 
 impl HookRunState {
@@ -803,7 +711,16 @@ pub(crate) fn new_completed_hook_cell(run: HookRunSummary, animations_enabled: b
 
 /// Returns true for hook completions that should be invisible in history.
 fn hook_run_is_quiet_success(run: &HookRunSummary) -> bool {
-    run.status == HookRunStatus::Completed && run.entries.is_empty()
+    run.status == HookRunStatus::Completed
+        && (run.entries.is_empty() || hook_run_is_context_only_routine_success(run))
+}
+
+fn hook_run_is_context_only_routine_success(run: &HookRunSummary) -> bool {
+    run.event_name != HookEventName::SessionStart
+        && run
+            .entries
+            .iter()
+            .all(|entry| entry.kind == HookOutputEntryKind::Context)
 }
 
 fn hook_completed_bullet(status: HookRunStatus, entries: &[HookOutputEntry]) -> Span<'static> {
@@ -831,6 +748,256 @@ fn hook_output_prefix(kind: HookOutputEntryKind) -> &'static str {
         HookOutputEntryKind::Context => "hook context: ",
         HookOutputEntryKind::Error => "error: ",
     }
+}
+
+fn push_hook_output_entries(
+    lines: &mut Vec<Line<'static>>,
+    entries: &[HookOutputEntry],
+    width: u16,
+    output_mode: HookOutputRenderMode,
+) {
+    match output_mode {
+        HookOutputRenderMode::Full => {
+            for entry in entries {
+                let prefix = hook_output_prefix(entry.kind);
+                let mut output_lines = entry.text.split('\n');
+                if let Some(first_line) = output_lines.next() {
+                    lines.push(format!("{HOOK_OUTPUT_INDENT}{prefix}{first_line}").into());
+                }
+                for line in output_lines {
+                    if line.is_empty() {
+                        lines.push("".into());
+                    } else {
+                        lines.push(format!("{HOOK_OUTPUT_BODY_INDENT}{line}").into());
+                    }
+                }
+            }
+        }
+        HookOutputRenderMode::Compact => {
+            let mut any_entry_truncated = false;
+            let mut shown = 0;
+            for entry in entries.iter().take(HOOK_OUTPUT_DISPLAY_MAX_ENTRIES) {
+                let (preview, truncated) = hook_output_preview(entry, width);
+                lines.push(preview.into());
+                any_entry_truncated |= truncated;
+                shown += 1;
+            }
+
+            let hidden_entries = entries.len().saturating_sub(shown);
+            if hidden_entries > 0 || any_entry_truncated {
+                let hidden = if hidden_entries > 0 {
+                    format!(
+                        "... +{} {} ({TRANSCRIPT_HINT})",
+                        hidden_entries,
+                        if hidden_entries == 1 {
+                            "entry"
+                        } else {
+                            "entries"
+                        }
+                    )
+                } else {
+                    format!("... more hook output ({TRANSCRIPT_HINT})")
+                };
+                lines.push(format!("  {hidden}").dim().into());
+            }
+        }
+    }
+}
+
+fn push_session_start_summary(lines: &mut Vec<Line<'static>>, entries: &[HookOutputEntry]) {
+    let summary = summarize_session_start(entries);
+    lines.push(vec!["•".green().bold(), " ".into(), summary.title.into()].into());
+    for detail in summary.details {
+        lines.push(vec!["  └ ".dim(), detail.dim()].into());
+    }
+}
+
+fn summarize_session_start(entries: &[HookOutputEntry]) -> SessionStartSummary {
+    let text = entries
+        .iter()
+        .filter(|entry| entry.kind == HookOutputEntryKind::Context)
+        .map(|entry| entry.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut summary = if text.contains("Live project inventory") {
+        summarize_project_inventory_session_start(&text)
+    } else {
+        SessionStartSummary {
+            title: "SessionStart hook completed".to_string(),
+            details: Vec::new(),
+        }
+    };
+
+    let actionable_details = session_start_actionable_details(entries);
+    if !actionable_details.is_empty() {
+        summary.title = session_start_attention_title(&summary.title);
+        let mut details = actionable_details;
+        details.extend(summary.details);
+        summary.details = details;
+    }
+
+    let has_hidden_context = !text.trim().is_empty();
+    let clean_project_inventory =
+        text.contains("Live project inventory") && summary.details.is_empty();
+    if (!clean_project_inventory && has_hidden_context || !summary.details.is_empty())
+        && !summary
+            .details
+            .iter()
+            .any(|detail| detail == TRANSCRIPT_HINT)
+    {
+        summary.details.push(TRANSCRIPT_HINT.to_string());
+    }
+
+    summary
+}
+
+fn summarize_project_inventory_session_start(text: &str) -> SessionStartSummary {
+    let project_count = ["Active", "On-hold", "Archived"]
+        .into_iter()
+        .filter_map(|bucket| project_bucket_count(text, bucket))
+        .sum::<usize>();
+    let sentinels = active_sentinel_summaries(text);
+    let attention = session_start_attention_summary(text);
+
+    let title = if project_count > 0 && !sentinels.is_empty() {
+        format!(
+            "SessionStart: {project_count} projects indexed, {} active {}",
+            sentinels.len(),
+            pluralize(sentinels.len(), "sentinel", "sentinels")
+        )
+    } else if project_count > 0 && attention.is_some() {
+        format!("SessionStart: {project_count} projects indexed, needs attention")
+    } else if project_count > 0 {
+        "SessionStart: project inventory OK".to_string()
+    } else if !sentinels.is_empty() {
+        format!(
+            "SessionStart: {} active {}",
+            sentinels.len(),
+            pluralize(sentinels.len(), "sentinel", "sentinels")
+        )
+    } else if attention.is_some() {
+        "SessionStart: project inventory needs attention".to_string()
+    } else {
+        "SessionStart: project inventory OK".to_string()
+    };
+
+    let mut details = sentinels.into_iter().take(2).collect::<Vec<_>>();
+    if let Some(attention) = attention
+        && details.is_empty()
+    {
+        details.push(attention);
+    }
+    if !details.is_empty() {
+        details.push(TRANSCRIPT_HINT.to_string());
+    }
+
+    SessionStartSummary { title, details }
+}
+
+fn session_start_actionable_details(entries: &[HookOutputEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|entry| entry.kind != HookOutputEntryKind::Context)
+        .map(session_start_actionable_detail)
+        .collect()
+}
+
+fn session_start_actionable_detail(entry: &HookOutputEntry) -> String {
+    let text = entry.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let full = format!("{}{}", hook_output_prefix(entry.kind), text);
+    let char_count = full.chars().count();
+    if char_count <= HOOK_OUTPUT_DISPLAY_MAX_CHARS {
+        return full;
+    }
+
+    let keep = HOOK_OUTPUT_DISPLAY_MAX_CHARS.saturating_sub(3);
+    let mut preview: String = full.chars().take(keep).collect();
+    preview.push_str("...");
+    preview
+}
+
+fn session_start_attention_title(title: &str) -> String {
+    if let Some(prefix) = title.strip_suffix(", inventory OK") {
+        format!("{prefix}, needs attention")
+    } else if title == "SessionStart: project inventory OK" {
+        "SessionStart: project inventory needs attention".to_string()
+    } else {
+        title.to_string()
+    }
+}
+
+fn project_bucket_count(text: &str, bucket: &str) -> Option<usize> {
+    let marker = format!("**{bucket}** (");
+    let start = text.find(&marker)? + marker.len();
+    let rest = &text[start..];
+    let end = rest.find("):")?;
+    rest[..end].trim().parse().ok()
+}
+
+fn active_sentinel_summaries(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| line.contains("Active sentinel at "))
+        .filter_map(active_sentinel_summary)
+        .collect()
+}
+
+fn active_sentinel_summary(line: &str) -> Option<String> {
+    let name = backtick_value(line)?;
+    let created = line
+        .split("(created ")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .map(str::trim)
+        .filter(|created| !created.is_empty());
+    Some(match created {
+        Some(created) => format!("{name} • created {created}"),
+        None => name,
+    })
+}
+
+fn backtick_value(text: &str) -> Option<String> {
+    let (_, rest) = text.split_once('`')?;
+    let (value, _) = rest.split_once('`')?;
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn session_start_attention_summary(text: &str) -> Option<String> {
+    [
+        ("PARSER WARNING", "parser warning"),
+        ("OpenClaw liveness warning", "OpenClaw liveness warning"),
+        (
+            "OpenClaw liveness breadcrumb not found",
+            "OpenClaw liveness breadcrumb missing",
+        ),
+        ("NOT in cluster map", "cluster map drift"),
+        ("NOT in workspace tables", "workspace table drift"),
+        ("missing a CLAUDE.md", "active project missing CLAUDE.md"),
+    ]
+    .into_iter()
+    .find_map(|(needle, label)| text.contains(needle).then(|| label.to_string()))
+}
+
+fn pluralize<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
+    if count == 1 { singular } else { plural }
+}
+
+fn hook_output_preview(entry: &HookOutputEntry, width: u16) -> (String, bool) {
+    let prefix = hook_output_prefix(entry.kind);
+    let text = entry.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let full = format!("  {prefix}{text}");
+    let max_chars = (width as usize)
+        .saturating_sub(2)
+        .clamp(40, HOOK_OUTPUT_DISPLAY_MAX_CHARS);
+    let char_count = full.chars().count();
+    if char_count <= max_chars {
+        return (full, false);
+    }
+
+    let keep = max_chars.saturating_sub(3);
+    let mut preview: String = full.chars().take(keep).collect();
+    preview.push_str("...");
+    (preview, true)
 }
 
 fn hook_event_label(event_name: HookEventName) -> &'static str {
@@ -872,13 +1039,14 @@ mod tests {
     }
 
     #[test]
-    fn completed_hook_short_multiline_context_preserves_display_transcript_and_raw_lines() {
+    fn completed_hook_multiline_context_preserves_display_and_raw_lines() {
         let cell = completed_hook_cell(
             HookEventName::SessionStart,
             HookRunStatus::Completed,
             vec![HookOutputEntry {
                 kind: HookOutputEntryKind::Context,
-                text: "## Working Memory Recall\n\nSource: Codex compaction".to_string(),
+                text: "## Working Memory Recall\n\nSource: Codex compaction\nScope: Durable workspace memory"
+                    .to_string(),
             }],
         );
         let expected = vec![
@@ -886,91 +1054,17 @@ mod tests {
             "  hook context: ## Working Memory Recall".to_string(),
             "".to_string(),
             "    Source: Codex compaction".to_string(),
+            "    Scope: Durable workspace memory".to_string(),
         ];
 
         assert_eq!(line_texts(&cell.display_lines(/*width*/ 80)), expected);
-        assert_eq!(line_texts(&cell.transcript_lines(/*width*/ 80)), expected);
         assert_eq!(line_texts(&cell.raw_lines()), expected);
     }
 
     #[test]
-    fn completed_hook_long_single_line_context_is_truncated_only_in_display() {
-        let full_context = format!(
-            "{}tail-marker",
-            "context words that should wrap across the terminal width ".repeat(8)
-        );
+    fn completed_hook_multiline_warning_prefixes_first_line_only() {
         let cell = completed_hook_cell(
-            HookEventName::SessionStart,
-            HookRunStatus::Completed,
-            vec![HookOutputEntry {
-                kind: HookOutputEntryKind::Context,
-                text: full_context.clone(),
-            }],
-        );
-
-        let display_lines = cell.display_lines(/*width*/ 80);
-        let display = line_texts(&display_lines);
-        assert_eq!(display.len(), 4);
-        assert_eq!(
-            Paragraph::new(Text::from(display_lines[1..].to_vec()))
-                .wrap(Wrap { trim: false })
-                .line_count(/*width*/ 80),
-            HOOK_CONTEXT_MAX_DISPLAY_ROWS
-        );
-        assert!(
-            display
-                .iter()
-                .any(|line| line.contains("ctrl + t to view transcript")),
-            "expected truncated context to advertise the transcript: {display:?}"
-        );
-        assert!(display.iter().all(|line| !line.contains("tail-marker")));
-
-        let expected_full = vec![
-            "• SessionStart hook (completed)".to_string(),
-            format!("  hook context: {full_context}"),
-        ];
-        assert_eq!(
-            line_texts(&cell.transcript_lines(/*width*/ 80)),
-            expected_full
-        );
-        assert_eq!(line_texts(&cell.raw_lines()), expected_full);
-    }
-
-    #[test]
-    fn completed_hook_non_context_entries_are_not_truncated() {
-        for kind in [
-            HookOutputEntryKind::Warning,
-            HookOutputEntryKind::Stop,
-            HookOutputEntryKind::Feedback,
-            HookOutputEntryKind::Error,
-        ] {
-            let cell = completed_hook_cell(
-                HookEventName::UserPromptSubmit,
-                HookRunStatus::Stopped,
-                vec![HookOutputEntry {
-                    kind,
-                    text: "first\nsecond\nthird\nfourth\nfifth".to_string(),
-                }],
-            );
-
-            let display = line_texts(&cell.display_lines(/*width*/ 20));
-            assert!(
-                display.iter().any(|line| line == "    fifth"),
-                "expected {kind:?} output to remain complete: {display:?}"
-            );
-            assert!(
-                display
-                    .iter()
-                    .all(|line| !line.contains("ctrl + t to view transcript")),
-                "did not expect a transcript hint for {kind:?}: {display:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn completed_stop_hook_multiline_system_message_prefixes_first_line_only() {
-        let cell = completed_hook_cell(
-            HookEventName::Stop,
+            HookEventName::PostToolUse,
             HookRunStatus::Completed,
             vec![HookOutputEntry {
                 kind: HookOutputEntryKind::Warning,
@@ -981,7 +1075,8 @@ mod tests {
         assert_eq!(
             line_texts(&cell.display_lines(/*width*/ 80)),
             vec![
-                "• Stop (completed) says: Heads up".to_string(),
+                "• PostToolUse hook (completed)".to_string(),
+                "  warning: Heads up".to_string(),
                 "    Review generated files".to_string(),
             ]
         );
@@ -1062,6 +1157,197 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>()
+    }
+
+    #[test]
+    fn completed_hook_compacts_viewport_but_preserves_transcript() {
+        let long_context = (1..=40)
+            .map(|i| format!("context-{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let entries = vec![
+            HookOutputEntry {
+                kind: HookOutputEntryKind::Context,
+                text: long_context,
+            },
+            HookOutputEntry {
+                kind: HookOutputEntryKind::Feedback,
+                text: "short feedback".to_string(),
+            },
+            HookOutputEntry {
+                kind: HookOutputEntryKind::Warning,
+                text: "third entry hidden from compact viewport".to_string(),
+            },
+        ];
+        let cell = HookCell::new_completed(
+            completed_hook_run_summary("hook-completed", entries),
+            /*animations_enabled*/ false,
+        );
+
+        let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
+        assert_eq!(rendered_display.len(), 4);
+        assert!(
+            rendered_display
+                .iter()
+                .any(|line| line.contains("ctrl + t to view transcript"))
+        );
+        assert!(
+            !rendered_display
+                .iter()
+                .any(|line| line.contains("context-40"))
+        );
+
+        let rendered_transcript = render_lines(&cell.transcript_lines(/*width*/ 80));
+        assert!(
+            rendered_transcript
+                .iter()
+                .any(|line| line.contains("context-40"))
+        );
+        assert!(
+            rendered_transcript
+                .iter()
+                .any(|line| line.contains("third entry hidden from compact viewport"))
+        );
+    }
+
+    #[test]
+    fn context_only_completed_post_tool_use_hook_is_quiet() {
+        let entries = vec![HookOutputEntry {
+            kind: HookOutputEntryKind::Context,
+            text: "TIMESTAMP CHECK: bump Last updated if needed".to_string(),
+        }];
+
+        let cell = HookCell::new_completed(
+            completed_hook_run_summary("post-tool-use-context-only", entries),
+            /*animations_enabled*/ false,
+        );
+
+        assert!(cell.is_empty());
+        assert!(cell.display_lines(/*width*/ 80).is_empty());
+    }
+
+    #[test]
+    fn context_only_completed_session_start_hook_stays_visible() {
+        let entries = vec![HookOutputEntry {
+            kind: HookOutputEntryKind::Context,
+            text: "Live project inventory".to_string(),
+        }];
+        let mut summary = completed_hook_run_summary("session-start-context-only", entries);
+        summary.event_name = HookEventName::SessionStart;
+
+        let cell = HookCell::new_completed(summary, /*animations_enabled*/ false);
+
+        let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
+        assert!(
+            rendered_display
+                .iter()
+                .any(|line| line.contains("SessionStart: project inventory OK"))
+        );
+        assert!(
+            !rendered_display
+                .iter()
+                .any(|line| line.contains("hook context:"))
+        );
+    }
+
+    #[test]
+    fn session_start_inventory_context_compacts_to_counts_and_sentinels() {
+        let entries = vec![HookOutputEntry {
+            kind: HookOutputEntryKind::Context,
+            text: [
+                "## Live project inventory (session-start hook)",
+                "",
+                "**Active** (45):",
+                "- finpulse",
+                "",
+                "**On-hold** (0):",
+                "",
+                "**Archived** (14):",
+                "- taxes-2024",
+                "",
+                "**Cluster map drift check** (live filesystem vs root CLAUDE.md cluster members):",
+                "✓ in sync",
+                "",
+                "**Workspace tables drift check** (live filesystem vs workspace CLAUDE.md active/on-hold/archived tables):",
+                "✓ in sync",
+                "",
+                "**Active sentinel at workspace root**: `SENTINEL_HEALTH.md` (created 6h 8m ago)",
+                "",
+                "  Full file: `/tmp/workspace/SENTINEL_HEALTH.md`",
+            ]
+            .join("\n"),
+        }];
+        let mut summary = completed_hook_run_summary("session-start-inventory", entries);
+        summary.event_name = HookEventName::SessionStart;
+
+        let cell = HookCell::new_completed(summary, /*animations_enabled*/ false);
+
+        let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
+        assert_eq!(
+            rendered_display,
+            vec![
+                "• SessionStart: 59 projects indexed, 1 active sentinel".to_string(),
+                "  └ SENTINEL_HEALTH.md • created 6h 8m ago".to_string(),
+                "  └ ctrl + t to view transcript".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn session_start_mixed_entries_hide_context_in_viewport() {
+        let entries = vec![
+            HookOutputEntry {
+                kind: HookOutputEntryKind::Warning,
+                text: "Heads up from the hook".to_string(),
+            },
+            HookOutputEntry {
+                kind: HookOutputEntryKind::Context,
+                text: "Remember the startup checklist.".to_string(),
+            },
+        ];
+        let mut summary = completed_hook_run_summary("session-start-mixed", entries);
+        summary.event_name = HookEventName::SessionStart;
+
+        let cell = HookCell::new_completed(summary, /*animations_enabled*/ false);
+
+        let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
+        assert_eq!(
+            rendered_display,
+            vec![
+                "• SessionStart hook completed".to_string(),
+                "  └ warning: Heads up from the hook".to_string(),
+                "  └ ctrl + t to view transcript".to_string(),
+            ]
+        );
+
+        let rendered_transcript = render_lines(&cell.transcript_lines(/*width*/ 80));
+        assert!(
+            rendered_transcript
+                .iter()
+                .any(|line| line.contains("hook context: Remember the startup checklist."))
+        );
+    }
+
+    fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn completed_hook_run_summary(id: &str, entries: Vec<HookOutputEntry>) -> HookRunSummary {
+        let mut summary = hook_run_summary(id);
+        summary.status = HookRunStatus::Completed;
+        summary.status_message = None;
+        summary.completed_at = Some(2);
+        summary.duration_ms = Some(1);
+        summary.entries = entries;
+        summary
     }
 
     fn hook_run_summary(id: &str) -> HookRunSummary {

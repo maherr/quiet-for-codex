@@ -193,7 +193,6 @@ impl ChatWidget {
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
-        self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         if !from_replay {
             let body = Notification::agent_turn_preview(&notification_response);
@@ -338,7 +337,6 @@ impl ChatWidget {
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
-        self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.adaptive_chunking.reset();
         self.stream_controller = None;

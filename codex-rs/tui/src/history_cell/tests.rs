@@ -532,9 +532,15 @@ fn unified_exec_interaction_cell_renders_input() {
 
 #[test]
 fn unified_exec_interaction_cell_renders_wait() {
-    let cell = new_unified_exec_interaction(/*command_display*/ None, String::new());
+    let cell = new_unified_exec_interaction(
+        Some("ssh dev@example.internal long remote script".to_string()),
+        String::new(),
+    );
     let lines = render_transcript(&cell);
     assert_eq!(lines, vec!["• Waited for background terminal"]);
+
+    let raw = render_lines(&cell.raw_lines());
+    assert_eq!(raw, vec!["Waited for background terminal"]);
 }
 
 #[test]
@@ -1490,6 +1496,52 @@ fn completed_mcp_tool_call_wrapped_outputs_snapshot() {
     let rendered = render_lines(&cell.display_lines(/*width*/ 40)).join("\n");
 
     insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn completed_mcp_tool_call_compacts_viewport_but_preserves_transcript() {
+    let invocation = McpInvocation {
+        server: "diagnostics".into(),
+        tool: "dump".into(),
+        arguments: Some(json!({
+            "scope": "session",
+        })),
+    };
+    let long_result = (1..=8)
+        .map(|i| format!("line {i}: detailed diagnostic payload"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let result = CallToolResult {
+        content: vec![text_block(&long_result)],
+        is_error: None,
+        structured_content: None,
+        meta: None,
+    };
+
+    let mut cell = new_active_mcp_tool_call(
+        "call-compact".into(),
+        invocation,
+        /*animations_enabled*/ false,
+    );
+    assert!(
+        cell.complete(Duration::from_millis(90), Ok(result))
+            .is_none()
+    );
+
+    let rendered_display = render_lines(&cell.display_lines(/*width*/ 80));
+    assert!(
+        rendered_display
+            .iter()
+            .any(|line| line.contains("ctrl + t to view transcript"))
+    );
+    assert!(!rendered_display.iter().any(|line| line.contains("line 8")));
+
+    let rendered_transcript = render_lines(&cell.transcript_lines(/*width*/ 80));
+    assert!(
+        rendered_transcript
+            .iter()
+            .any(|line| line.contains("line 8: detailed diagnostic payload"))
+    );
 }
 
 #[test]
@@ -2491,7 +2543,7 @@ fn agent_markdown_cell_renders_source_at_different_widths() {
 
     let lines_80 = render_lines(&cell.display_lines(/*width*/ 80));
     assert!(
-        lines_80.first().is_some_and(|line| line.starts_with("• ")),
+        lines_80.first().is_some_and(|line| line.starts_with("● ")),
         "first line should start with bullet prefix: {:?}",
         lines_80[0]
     );
@@ -2549,7 +2601,7 @@ fn agent_markdown_cell_narrow_width_shows_prefix_only() {
     let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
 
     let lines = render_lines(&cell.display_lines(/*width*/ 2));
-    assert_eq!(lines, vec!["• ".to_string()]);
+    assert_eq!(lines, vec!["● ".to_string()]);
 }
 
 #[test]

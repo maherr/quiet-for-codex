@@ -11805,6 +11805,86 @@ mod tests {
         assert!(composer.draft.pending_pastes[0].1.chars().all(|c| c == 'x'));
     }
 
+    #[test]
+    fn burst_paste_fast_large_shell_prompt_stays_hidden_until_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let payload = format!(
+            "$ sed -n '1,200p' codex-rs/tui/src/exec_cell/render.rs\n{}",
+            "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10),
+        );
+        let mut now = Instant::now();
+        let step = Duration::from_millis(1);
+        for ch in payload.chars() {
+            let key = if ch == '\n' {
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            } else {
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)
+            };
+            let _ = composer.handle_input_basic_with_time(key, now);
+            assert!(
+                composer.draft.textarea.text().is_empty(),
+                "raw paste text should stay hidden during burst capture"
+            );
+            now += step;
+        }
+
+        let flush_time = now + PasteBurst::recommended_active_flush_delay() + step;
+        assert!(composer.handle_paste_burst_flush(flush_time));
+
+        let expected_placeholder = format!("[Pasted Content {} chars]", payload.chars().count());
+        assert_eq!(composer.draft.textarea.text(), expected_placeholder);
+        assert_eq!(composer.pending_pastes().len(), 1);
+        assert_eq!(composer.pending_pastes()[0].0, expected_placeholder);
+        assert_eq!(composer.pending_pastes()[0].1, payload);
+        assert!(!composer.is_bang_shell_command());
+    }
+
+    #[test]
+    fn dollar_prefixed_paste_does_not_enter_shell_mode() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        composer.handle_paste("$ sed -n '1,20p' file.rs".to_string());
+
+        assert_eq!(composer.current_text(), "$ sed -n '1,20p' file.rs");
+        assert!(!composer.is_bang_shell_command());
+    }
+
+    #[test]
+    fn humanlike_dollar_typing_appears_after_hold_timeout() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['$', ' ', 'f', 'o', 'o']);
+
+        assert_eq!(composer.current_text(), "$ foo");
+        assert!(composer.pending_pastes().is_empty());
+        assert!(!composer.is_bang_shell_command());
+    }
+
     /// Behavior: human-like typing (with delays between chars) should not be classified as a paste
     /// burst. Characters should appear immediately and should not trigger a paste placeholder.
     #[test]

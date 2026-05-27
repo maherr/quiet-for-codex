@@ -7,13 +7,9 @@ use super::*;
 
 impl ChatWidget {
     pub(super) fn flush_unified_exec_wait_streak(&mut self) {
-        let Some(wait) = self.unified_exec_wait_streak.take() else {
+        if self.unified_exec_wait_streak.take().is_none() {
             return;
         };
-        self.transcript.needs_final_message_separator = true;
-        let cell = history_cell::new_unified_exec_interaction(wait.command_display, String::new());
-        self.app_event_tx
-            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
         self.restore_reasoning_status_header();
     }
 
@@ -255,6 +251,7 @@ impl ChatWidget {
         // Ensure the status indicator is visible while the command runs.
         self.bottom_pane.ensure_status_indicator();
         let parsed_cmd = self.annotate_skill_reads_in_parsed_cmd(parsed_cmd);
+        let is_wait_interaction = source == ExecCommandSource::UnifiedExecInteraction;
         self.running_commands.insert(
             id.clone(),
             RunningCommand {
@@ -263,19 +260,7 @@ impl ChatWidget {
                 source,
             },
         );
-        let is_wait_interaction = matches!(source, ExecCommandSource::UnifiedExecInteraction);
-        let command_display = command.join(" ");
-        let should_suppress_unified_wait = is_wait_interaction
-            && self
-                .last_unified_wait
-                .as_ref()
-                .is_some_and(|wait| wait.is_duplicate(&command_display));
         if is_wait_interaction {
-            self.last_unified_wait = Some(UnifiedExecWaitState::new(command_display));
-        } else {
-            self.last_unified_wait = None;
-        }
-        if should_suppress_unified_wait {
             self.suppressed_exec_calls.insert(id);
             return;
         }
@@ -353,7 +338,10 @@ impl ChatWidget {
         let aggregated_output = aggregated_output.unwrap_or_default();
 
         let running = self.running_commands.remove(&id);
-        if self.suppressed_exec_calls.remove(&id) {
+        let source_for_suppression = running.as_ref().map(|rc| rc.source).unwrap_or(source);
+        if self.suppressed_exec_calls.remove(&id)
+            || source_for_suppression == ExecCommandSource::UnifiedExecInteraction
+        {
             return;
         }
         let (command, parsed, source) = match running {

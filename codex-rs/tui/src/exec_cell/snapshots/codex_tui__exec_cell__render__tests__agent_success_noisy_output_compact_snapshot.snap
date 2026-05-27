@@ -1,0 +1,6 @@
+---
+source: tui/src/exec_cell/render.rs
+expression: "render_display(&completed_agent_cell(\"cargo test -p codex-tui\", &output, 0,))"
+---
+• Ran tests cargo test -p codex-tui
+  └ ✓ completed • 1.50s • +8 lines in transcript

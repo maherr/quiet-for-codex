@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::path::Path;
+use std::time::Duration;
 use std::time::Instant;
 
 use super::model::CommandOutput;
@@ -21,7 +24,6 @@ use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_shell_command::bash::extract_bash_command;
 use codex_utils_elapsed::format_duration;
-use itertools::Itertools;
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
 use ratatui::style::Stylize;
@@ -32,7 +34,13 @@ use unicode_width::UnicodeWidthStr;
 
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
 const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
+const AGENT_SUCCESS_PREVIEW_MAX_LINES: usize = 2;
+const AGENT_SUCCESS_PREVIEW_MAX_CHARS: usize = 240;
+const AGENT_FAILURE_PREVIEW_MAX_LINES: usize = 3;
 const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
+const COMPACT_REMOTE_COMMAND_MIN_CHARS: usize = 160;
+const COMPACT_REMOTE_COMMAND_MIN_LINES: usize = 4;
+const COMPACT_COMMAND_MAX_CHARS: usize = 120;
 
 pub(crate) struct OutputLinesParams {
     pub(crate) line_limit: usize,
@@ -75,7 +83,7 @@ fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> S
             let preview = summarize_interaction_input(data);
             format!("Interacted with `{command_display}`, sent `{preview}`")
         }
-        _ => format!("Waited for `{command_display}`"),
+        _ => "Waited for background terminal".to_string(),
     }
 }
 
@@ -92,6 +100,272 @@ fn summarize_interaction_input(input: &str) -> String {
     }
     preview.push_str("...");
     preview
+}
+
+#[derive(Clone)]
+struct ReadDisplay {
+    key: String,
+    label: String,
+}
+
+impl ReadDisplay {
+    fn new(name: &str, path: &Path) -> Self {
+        let path_label = path.to_string_lossy().to_string();
+        let label = if name.trim().is_empty() {
+            path_label.clone()
+        } else {
+            name.to_string()
+        };
+        let key = if path_label.is_empty() {
+            label.clone()
+        } else {
+            path_label
+        };
+        Self { key, label }
+    }
+}
+
+fn agent_command_title(command: &[String]) -> &'static str {
+    let command_display = strip_bash_lc_and_escape(command);
+    let command = command_display.trim_start();
+    if is_test_command(command) {
+        "Ran tests"
+    } else if is_dependency_install_command(command) {
+        "Installed deps"
+    } else {
+        "Ran"
+    }
+}
+
+fn is_test_command(command: &str) -> bool {
+    [
+        "cargo test",
+        "cargo nextest",
+        "npm test",
+        "npm run test",
+        "pnpm test",
+        "pnpm run test",
+        "yarn test",
+        "yarn run test",
+        "bun test",
+        "bun run test",
+        "pytest",
+        "go test",
+        "swift test",
+        "zig build test",
+        "just test",
+    ]
+    .iter()
+    .any(|prefix| command_has_prefix(command, prefix))
+}
+
+fn is_dependency_install_command(command: &str) -> bool {
+    [
+        "npm install",
+        "npm ci",
+        "pnpm install",
+        "yarn install",
+        "bun install",
+        "cargo fetch",
+    ]
+    .iter()
+    .any(|prefix| command_has_prefix(command, prefix))
+}
+
+fn command_has_prefix(command: &str, prefix: &str) -> bool {
+    command
+        .strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+}
+
+fn compact_command_for_viewport(command: &str) -> String {
+    if let Some(compact) = compact_ssh_command_for_viewport(command)
+        .or_else(|| compact_gh_command_for_viewport(command))
+        && compact != command
+    {
+        return compact;
+    }
+
+    let line_count = command.lines().count();
+    if command.chars().count() < COMPACT_REMOTE_COMMAND_MIN_CHARS
+        && line_count < COMPACT_REMOTE_COMMAND_MIN_LINES
+    {
+        return command.to_string();
+    }
+
+    truncate_command_for_viewport(command)
+}
+
+fn compact_ssh_command_for_viewport(command: &str) -> Option<String> {
+    let parts = shlex::split(command.trim())?;
+    if parts.first()? != "ssh" {
+        return None;
+    }
+
+    let mut user: Option<String> = None;
+    let mut index = 1usize;
+    while index < parts.len() {
+        let part = &parts[index];
+        if part == "--" {
+            return parts.get(index + 1).map(|host| format!("ssh {host}"));
+        }
+        if part == "-l" {
+            user = parts.get(index + 1).cloned();
+            index += 2;
+            continue;
+        }
+        if let Some(inline_user) = part.strip_prefix("-l")
+            && !inline_user.is_empty()
+        {
+            user = Some(inline_user.to_string());
+            index += 1;
+            continue;
+        }
+        if part.starts_with('-') {
+            index += 1 + usize::from(ssh_option_takes_value(part));
+            continue;
+        }
+
+        let host = if part.contains('@') {
+            part.clone()
+        } else if let Some(user) = user {
+            format!("{user}@{part}")
+        } else {
+            part.clone()
+        };
+        return Some(format!("ssh {host}"));
+    }
+
+    None
+}
+
+fn ssh_option_takes_value(option: &str) -> bool {
+    if option.len() > 2 {
+        return false;
+    }
+    matches!(
+        option,
+        "-B" | "-b"
+            | "-c"
+            | "-D"
+            | "-E"
+            | "-e"
+            | "-F"
+            | "-I"
+            | "-i"
+            | "-J"
+            | "-L"
+            | "-m"
+            | "-O"
+            | "-o"
+            | "-p"
+            | "-Q"
+            | "-R"
+            | "-S"
+            | "-W"
+            | "-w"
+    )
+}
+
+fn compact_gh_command_for_viewport(command: &str) -> Option<String> {
+    let parts = shlex::split(command.trim())?;
+    if parts.first()? != "gh" {
+        return None;
+    }
+
+    let subcommand = parts.get(1).map(String::as_str)?;
+    match subcommand {
+        "issue" | "pr" if parts.get(2).is_some_and(|part| part == "view") => {
+            let target = parts.get(3).map(String::as_str)?;
+            let mut compact = format!("gh {subcommand} view {target}");
+            if let Some(repo) = command_arg_value(&parts, "--repo") {
+                compact.push_str(" --repo ");
+                compact.push_str(repo);
+            }
+            Some(compact)
+        }
+        "api" => {
+            let endpoint = parts.get(2).map(String::as_str).unwrap_or("");
+            Some(if endpoint.is_empty() {
+                "gh api".to_string()
+            } else {
+                format!("gh api {endpoint}")
+            })
+        }
+        "search" => {
+            let target = parts.get(2).map(String::as_str).unwrap_or("");
+            Some(if target.is_empty() {
+                "gh search".to_string()
+            } else {
+                format!("gh search {target}")
+            })
+        }
+        _ => None,
+    }
+}
+
+fn command_arg_value<'a>(parts: &'a [String], flag: &str) -> Option<&'a str> {
+    parts
+        .windows(2)
+        .find_map(|window| (window[0] == flag).then(|| window[1].as_str()))
+}
+
+fn truncate_command_for_viewport(command: &str) -> String {
+    let char_count = command.chars().count();
+    if char_count <= COMPACT_COMMAND_MAX_CHARS {
+        return command.to_string();
+    }
+
+    let mut compact: String = command.chars().take(COMPACT_COMMAND_MAX_CHARS).collect();
+    compact.push('…');
+    compact
+}
+
+fn completion_summary_line(
+    output: &CommandOutput,
+    duration: Option<Duration>,
+    hidden_lines: Option<usize>,
+) -> Line<'static> {
+    let duration = duration
+        .map(format_duration)
+        .unwrap_or_else(|| "unknown".to_string());
+    let mut spans = if output.exit_code == 0 {
+        vec!["✓".green().bold(), " completed".dim()]
+    } else {
+        vec![
+            "✗".red().bold(),
+            " failed".red().bold(),
+            format!(" (exit {})", output.exit_code).dim(),
+        ]
+    };
+    spans.push(format!(" • {duration}").dim());
+    if let Some(hidden_lines) = hidden_lines.filter(|lines| *lines > 0) {
+        spans.push(format!(" • +{hidden_lines} lines in transcript").dim());
+    }
+    Line::from(spans)
+}
+
+fn dimmed_output_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|raw| {
+            let mut line = ansi_escape_line(raw);
+            dim_line(&mut line);
+            line
+        })
+        .collect()
+}
+
+fn tail_output_lines(output: &str, limit: usize) -> Vec<Line<'static>> {
+    let lines: Vec<&str> = output.lines().collect();
+    let start = lines.len().saturating_sub(limit);
+    dimmed_output_lines(lines[start..].iter().copied())
+}
+
+fn dim_line(line: &mut Line<'static>) {
+    line.spans.iter_mut().for_each(|span| {
+        span.style = span.style.add_modifier(Modifier::DIM);
+    });
 }
 
 #[derive(Clone)]
@@ -268,82 +542,66 @@ impl ExecCell {
             },
         ]));
 
-        let mut calls = self.calls.as_slice();
         let mut out_indented = Vec::new();
-        while let Some((call, remaining)) = calls.split_first() {
-            let reads_only = call
-                .parsed
-                .iter()
-                .all(|parsed| matches!(parsed, ParsedCommand::Read { .. }));
-            let group_len = if reads_only {
-                1 + remaining
-                    .iter()
-                    .take_while(|next| {
-                        next.parsed
-                            .iter()
-                            .all(|parsed| matches!(parsed, ParsedCommand::Read { .. }))
-                    })
-                    .count()
-            } else {
-                1
-            };
-            let (group, remaining) = calls.split_at(group_len);
-            calls = remaining;
-
-            let call_lines: Vec<(&str, Vec<Span<'static>>)> = if reads_only {
-                let names = group
-                    .iter()
-                    .flat_map(|call| &call.parsed)
-                    .map(|parsed| match parsed {
-                        ParsedCommand::Read { name, .. } => name.clone(),
-                        _ => unreachable!(),
-                    })
-                    .unique();
-                vec![(
-                    "Read",
-                    Itertools::intersperse(names.into_iter().map(Into::into), ", ".dim()).collect(),
-                )]
-            } else {
-                let mut lines = Vec::new();
-                for parsed in &call.parsed {
-                    match parsed {
-                        ParsedCommand::Read { name, .. } => {
-                            lines.push(("Read", vec![name.clone().into()]));
-                        }
-                        ParsedCommand::ListFiles { cmd, path } => {
-                            lines.push(("List", vec![path.clone().unwrap_or(cmd.clone()).into()]));
-                        }
-                        ParsedCommand::Search { cmd, query, path } => {
-                            let spans = match (query, path) {
-                                (Some(q), Some(p)) => {
-                                    vec![q.clone().into(), " in ".dim(), p.clone().into()]
-                                }
-                                (Some(q), None) => vec![q.clone().into()],
-                                _ => vec![cmd.clone().into()],
-                            };
-                            lines.push(("Search", spans));
-                        }
-                        ParsedCommand::Unknown { cmd } => {
-                            lines.push(("Run", vec![cmd.clone().into()]));
-                        }
-                    }
+        let mut pending_reads: Vec<ReadDisplay> = Vec::new();
+        let mut seen_reads: HashSet<String> = HashSet::new();
+        for parsed in self.calls.iter().flat_map(|call| call.parsed.iter()) {
+            match parsed {
+                ParsedCommand::Read { name, path, .. } => {
+                    pending_reads.push(ReadDisplay::new(name, path));
                 }
-                lines
-            };
-
-            for (title, line) in call_lines {
-                let line = Line::from(line);
-                let initial_indent = Line::from(vec![title.cyan(), " ".into()]);
-                let subsequent_indent = " ".repeat(initial_indent.width()).into();
-                let wrapped = adaptive_wrap_line(
-                    &line,
-                    RtOptions::new(width as usize)
-                        .initial_indent(initial_indent)
-                        .subsequent_indent(subsequent_indent),
-                );
-                push_owned_lines(&wrapped, &mut out_indented);
+                ParsedCommand::ListFiles { cmd, path } => {
+                    Self::flush_read_displays(
+                        &mut pending_reads,
+                        &mut seen_reads,
+                        width,
+                        &mut out_indented,
+                    );
+                    Self::push_exploring_action(
+                        "Listed dir",
+                        vec![path.clone().unwrap_or(cmd.clone()).into()],
+                        width,
+                        &mut out_indented,
+                    );
+                }
+                ParsedCommand::Search { cmd, query, path } => {
+                    Self::flush_read_displays(
+                        &mut pending_reads,
+                        &mut seen_reads,
+                        width,
+                        &mut out_indented,
+                    );
+                    let spans = match (query, path) {
+                        (Some(q), Some(p)) => {
+                            vec![q.clone().into(), " in ".dim(), p.clone().into()]
+                        }
+                        (Some(q), None) => vec![q.clone().into()],
+                        _ => vec![cmd.clone().into()],
+                    };
+                    Self::push_exploring_action("Searched query", spans, width, &mut out_indented);
+                }
+                ParsedCommand::Unknown { cmd } => {
+                    Self::flush_read_displays(
+                        &mut pending_reads,
+                        &mut seen_reads,
+                        width,
+                        &mut out_indented,
+                    );
+                    Self::push_exploring_action(
+                        "Ran command",
+                        vec![cmd.clone().into()],
+                        width,
+                        &mut out_indented,
+                    );
+                }
             }
         }
+        Self::flush_read_displays(
+            &mut pending_reads,
+            &mut seen_reads,
+            width,
+            &mut out_indented,
+        );
 
         out.extend(prefix_lines(out_indented, "  └ ".dim(), "    ".into()));
         out
@@ -370,7 +628,7 @@ impl ExecCell {
         } else if call.is_user_shell_command() {
             "You ran"
         } else {
-            "Ran"
+            agent_command_title(&call.command)
         };
 
         let mut header_line = if is_interaction {
@@ -380,10 +638,16 @@ impl ExecCell {
         };
         let header_prefix_width = header_line.width();
 
-        let cmd_display = if call.is_unified_exec_interaction() {
-            format_unified_exec_interaction(&call.command, call.interaction_input.as_deref())
+        let (cmd_display, command_compacted) = if call.is_unified_exec_interaction() {
+            (
+                format_unified_exec_interaction(&call.command, call.interaction_input.as_deref()),
+                false,
+            )
         } else {
-            strip_bash_lc_and_escape(&call.command)
+            let raw = strip_bash_lc_and_escape(&call.command);
+            let compact = compact_command_for_viewport(&raw);
+            let compacted = compact != raw;
+            (compact, compacted)
         };
         let highlighted_lines = highlight_bash_to_lines(&cmd_display);
 
@@ -413,6 +677,9 @@ impl ExecCell {
                 );
             }
         }
+        if command_compacted {
+            continuation_lines.push(TRANSCRIPT_HINT.dim().into());
+        }
 
         let mut lines: Vec<Line<'static>> = vec![header_line];
 
@@ -429,71 +696,157 @@ impl ExecCell {
         }
 
         if let Some(output) = call.output.as_ref() {
-            let line_limit = if call.is_user_shell_command() {
-                USER_SHELL_TOOL_CALL_MAX_LINES
-            } else {
-                TOOL_CALL_MAX_LINES
-            };
-            let raw_output = output_lines(
-                Some(output),
-                OutputLinesParams {
-                    line_limit,
-                    only_err: false,
-                    include_angle_pipe: false,
-                    include_prefix: false,
-                },
-            );
-            let display_limit = if call.is_user_shell_command() {
-                USER_SHELL_TOOL_CALL_MAX_LINES
-            } else {
-                layout.output_max_lines
-            };
-
-            if raw_output.lines.is_empty() {
-                if !call.is_unified_exec_interaction() {
-                    lines.extend(prefix_lines(
-                        vec![Line::from("(no output)".dim())],
-                        Span::from(layout.output_block.initial_prefix).dim(),
-                        Span::from(layout.output_block.subsequent_prefix),
-                    ));
-                }
-            } else {
-                // Wrap first so that truncation is applied to on-screen lines
-                // rather than logical lines. This ensures that a small number
-                // of very long lines cannot flood the viewport.
-                let mut wrapped_output: Vec<Line<'static>> = Vec::new();
-                let output_wrap_width = layout.output_block.wrap_width(width);
-                let output_opts =
-                    RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
-                for line in &raw_output.lines {
-                    push_owned_lines(
-                        &adaptive_wrap_line(line, output_opts.clone()),
-                        &mut wrapped_output,
-                    );
-                }
-
-                let prefixed_output = prefix_lines(
-                    wrapped_output,
-                    Span::from(layout.output_block.initial_prefix).dim(),
-                    Span::from(layout.output_block.subsequent_prefix),
-                );
-                let trimmed_output = Self::truncate_lines_middle(
-                    &prefixed_output,
-                    display_limit,
-                    width,
-                    raw_output.omitted,
-                    Some(Line::from(
-                        Span::from(layout.output_block.subsequent_prefix).dim(),
-                    )),
-                );
-
-                if !trimmed_output.is_empty() {
-                    lines.extend(trimmed_output);
-                }
+            if call.is_user_shell_command() {
+                lines.extend(Self::user_shell_output_display_lines(output, width, layout));
+            } else if !call.is_unified_exec_interaction() {
+                lines.extend(Self::agent_output_display_lines(
+                    call, output, width, layout,
+                ));
             }
         }
 
         lines
+    }
+
+    fn flush_read_displays(
+        pending_reads: &mut Vec<ReadDisplay>,
+        seen_reads: &mut HashSet<String>,
+        width: u16,
+        out_indented: &mut Vec<Line<'static>>,
+    ) {
+        let mut read_spans: Vec<Span<'static>> = Vec::new();
+        for read in pending_reads
+            .drain(..)
+            .filter(|read| seen_reads.insert(read.key.clone()))
+        {
+            if !read_spans.is_empty() {
+                read_spans.push(", ".dim());
+            }
+            read_spans.push(read.label.into());
+        }
+        if !read_spans.is_empty() {
+            Self::push_exploring_action("Read file", read_spans, width, out_indented);
+        }
+    }
+
+    fn push_exploring_action(
+        title: &'static str,
+        spans: Vec<Span<'static>>,
+        width: u16,
+        out_indented: &mut Vec<Line<'static>>,
+    ) {
+        let line = Line::from(spans);
+        let initial_indent = Line::from(vec![title.cyan(), " ".into()]);
+        let subsequent_indent = " ".repeat(initial_indent.width()).into();
+        let wrapped = adaptive_wrap_line(
+            &line,
+            RtOptions::new(width as usize)
+                .initial_indent(initial_indent)
+                .subsequent_indent(subsequent_indent),
+        );
+        push_owned_lines(&wrapped, out_indented);
+    }
+
+    fn user_shell_output_display_lines(
+        output: &CommandOutput,
+        width: u16,
+        layout: ExecDisplayLayout,
+    ) -> Vec<Line<'static>> {
+        let raw_output = output_lines(
+            Some(output),
+            OutputLinesParams {
+                line_limit: USER_SHELL_TOOL_CALL_MAX_LINES,
+                only_err: false,
+                include_angle_pipe: false,
+                include_prefix: false,
+            },
+        );
+
+        if raw_output.lines.is_empty() {
+            return prefix_lines(
+                vec![Line::from("(no output)".dim())],
+                Span::from(layout.output_block.initial_prefix).dim(),
+                Span::from(layout.output_block.subsequent_prefix),
+            );
+        }
+
+        let prefixed_output = Self::wrap_output_block(&raw_output.lines, width, layout);
+        Self::truncate_lines_middle(
+            &prefixed_output,
+            USER_SHELL_TOOL_CALL_MAX_LINES,
+            width,
+            raw_output.omitted,
+            Some(Line::from(
+                Span::from(layout.output_block.subsequent_prefix).dim(),
+            )),
+        )
+    }
+
+    fn agent_output_display_lines(
+        call: &ExecCall,
+        output: &CommandOutput,
+        width: u16,
+        layout: ExecDisplayLayout,
+    ) -> Vec<Line<'static>> {
+        let output_line_count = output.aggregated_output.lines().count();
+        let output_char_count = output.aggregated_output.chars().count();
+        if output.exit_code == 0 {
+            if output_line_count == 0 {
+                return Self::wrap_output_block(
+                    &[completion_summary_line(output, call.duration, None)],
+                    width,
+                    layout,
+                );
+            }
+            if output_line_count <= AGENT_SUCCESS_PREVIEW_MAX_LINES
+                && output_char_count <= AGENT_SUCCESS_PREVIEW_MAX_CHARS
+            {
+                let preview = dimmed_output_lines(output.aggregated_output.lines());
+                return Self::wrap_output_block(&preview, width, layout);
+            }
+            return Self::wrap_output_block(
+                &[completion_summary_line(
+                    output,
+                    call.duration,
+                    Some(output_line_count),
+                )],
+                width,
+                layout,
+            );
+        }
+
+        let preview = tail_output_lines(&output.aggregated_output, AGENT_FAILURE_PREVIEW_MAX_LINES);
+        let hidden = output_line_count.saturating_sub(preview.len());
+        let mut block = preview;
+        block.push(completion_summary_line(
+            output,
+            call.duration,
+            (hidden > 0).then_some(hidden),
+        ));
+        Self::wrap_output_block(&block, width, layout)
+    }
+
+    fn wrap_output_block(
+        block_lines: &[Line<'static>],
+        width: u16,
+        layout: ExecDisplayLayout,
+    ) -> Vec<Line<'static>> {
+        let mut wrapped_output: Vec<Line<'static>> = Vec::new();
+        let output_wrap_width = layout.output_block.wrap_width(width);
+        let output_opts =
+            RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
+        for line in block_lines {
+            push_owned_lines(
+                &adaptive_wrap_line(line, output_opts.clone()),
+                &mut wrapped_output,
+            );
+        }
+
+        prefix_lines(
+            wrapped_output,
+            Span::from(layout.output_block.initial_prefix).dim(),
+            Span::from(layout.output_block.subsequent_prefix),
+        )
     }
 
     fn limit_lines_from_start(lines: &[Line<'static>], keep: usize) -> Vec<Line<'static>> {
@@ -673,7 +1026,6 @@ struct ExecDisplayLayout {
     command_continuation: PrefixedBlock,
     command_continuation_max_lines: usize,
     output_block: PrefixedBlock,
-    output_max_lines: usize,
 }
 
 impl ExecDisplayLayout {
@@ -681,13 +1033,11 @@ impl ExecDisplayLayout {
         command_continuation: PrefixedBlock,
         command_continuation_max_lines: usize,
         output_block: PrefixedBlock,
-        output_max_lines: usize,
     ) -> Self {
         Self {
             command_continuation,
             command_continuation_max_lines,
             output_block,
-            output_max_lines,
         }
     }
 }
@@ -696,13 +1046,13 @@ const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
     PrefixedBlock::new("  │ ", "  │ "),
     /*command_continuation_max_lines*/ 2,
     PrefixedBlock::new("  └ ", "    "),
-    /*output_max_lines*/ 5,
 );
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
+    use itertools::Itertools;
     use pretty_assertions::assert_eq;
 
     fn render_line_text(line: &Line<'static>) -> String {
@@ -710,6 +1060,151 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>()
+    }
+
+    fn render_display(cell: &ExecCell) -> String {
+        cell.command_display_lines(/*width*/ 80)
+            .iter()
+            .map(render_line_text)
+            .join("\n")
+    }
+
+    fn completed_agent_cell(command: &str, aggregated_output: &str, exit_code: i32) -> ExecCell {
+        ExecCell::new(
+            ExecCall {
+                call_id: "call-id".to_string(),
+                command: vec!["bash".into(), "-lc".into(), command.into()],
+                parsed: Vec::new(),
+                output: Some(CommandOutput {
+                    exit_code,
+                    aggregated_output: aggregated_output.to_string(),
+                    formatted_output: aggregated_output.to_string(),
+                }),
+                source: ExecCommandSource::Agent,
+                start_time: None,
+                duration: Some(Duration::from_millis(1500)),
+                interaction_input: None,
+            },
+            /*animations_enabled*/ false,
+        )
+    }
+
+    #[test]
+    fn agent_success_no_output_compact_snapshot() {
+        insta::assert_snapshot!(render_display(&completed_agent_cell(
+            "true", "", /*exit_code*/ 0,
+        )));
+    }
+
+    #[test]
+    fn agent_success_noisy_output_compact_snapshot() {
+        let output = (1..=8).map(|n| format!("line {n}")).join("\n");
+        insta::assert_snapshot!(render_display(&completed_agent_cell(
+            "cargo test -p codex-tui",
+            &output,
+            /*exit_code*/ 0,
+        )));
+    }
+
+    #[test]
+    fn agent_success_long_single_line_output_compact_snapshot() {
+        let output = format!(
+            "{{\"repository\":\"ROCm/rocm-systems\",\"comments\":[{}]}}",
+            (1..=40)
+                .map(|n| format!("{{\"id\":{n},\"body\":\"long github json payload\"}}"))
+                .join(",")
+        );
+        insta::assert_snapshot!(render_display(&completed_agent_cell(
+            "gh pr view 5235 --repo ROCm/rocm-systems --json number,title,state,author,comments,reviews,latestReviews,labels,url",
+            &output,
+            /*exit_code*/ 0,
+        )));
+    }
+
+    #[test]
+    fn agent_failure_prefers_error_tail_snapshot() {
+        let output = [
+            "compiling codex-tui",
+            "warning: unused import",
+            "error: assertion failed",
+            "note: run with RUST_BACKTRACE=1",
+            "caused by snapshot mismatch",
+        ]
+        .join("\n");
+        insta::assert_snapshot!(render_display(&completed_agent_cell(
+            "cargo test -p codex-tui",
+            &output,
+            /*exit_code*/ 101,
+        )));
+    }
+
+    #[test]
+    fn long_ssh_command_compacts_to_host_snapshot() {
+        let command = "ssh -o BatchMode=yes -o ConnectTimeout=8 dev@example.internal 'set -euo pipefail\nTMP=$(mktemp -d /tmp/codex-canary-XXXXXX)\nFINAL=\"$TMP/final.txt\"\nRAW=\"$TMP/raw.log\"\nprintf \"--- final ---\\n\"'";
+        insta::assert_snapshot!(render_display(&completed_agent_cell(
+            command,
+            "bash: line 7: printf: --: invalid option",
+            /*exit_code*/ 2,
+        )));
+    }
+
+    #[test]
+    fn long_gh_command_compacts_to_repo_view_snapshot() {
+        let command = "gh issue view 28129 --repo microsoft/onnxruntime --json number,title,state,author,createdAt,updatedAt,closedAt,comments,labels,url";
+        insta::assert_snapshot!(render_display(&completed_agent_cell(
+            command, "ok", /*exit_code*/ 0,
+        )));
+    }
+
+    #[test]
+    fn unified_exec_wait_display_omits_command() {
+        let cell = ExecCell::new(
+            ExecCall {
+                call_id: "wait-call".to_string(),
+                command: vec![
+                    "bash".into(),
+                    "-lc".into(),
+                    "ssh dev@example.internal 'set -euo pipefail; printf noisy'".into(),
+                ],
+                parsed: Vec::new(),
+                output: Some(CommandOutput {
+                    exit_code: 0,
+                    aggregated_output: String::new(),
+                    formatted_output: String::new(),
+                }),
+                source: ExecCommandSource::UnifiedExecInteraction,
+                start_time: None,
+                duration: Some(Duration::from_millis(1500)),
+                interaction_input: None,
+            },
+            /*animations_enabled*/ false,
+        );
+
+        assert_eq!(render_display(&cell), "• Waited for background terminal");
+    }
+
+    #[test]
+    fn user_shell_output_remains_expanded_snapshot() {
+        let output = (1..=6).map(|n| format!("file{n}")).join("\n");
+        let cell = ExecCell::new(
+            ExecCall {
+                call_id: "call-id".to_string(),
+                command: vec!["bash".into(), "-lc".into(), "ls".into()],
+                parsed: Vec::new(),
+                output: Some(CommandOutput {
+                    exit_code: 0,
+                    aggregated_output: output.clone(),
+                    formatted_output: output,
+                }),
+                source: ExecCommandSource::UserShell,
+                start_time: None,
+                duration: Some(Duration::from_millis(1500)),
+                interaction_input: None,
+            },
+            /*animations_enabled*/ false,
+        );
+
+        insta::assert_snapshot!(render_display(&cell));
     }
 
     #[test]

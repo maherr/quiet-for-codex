@@ -1,5 +1,6 @@
 ---
 source: tui/src/history_cell.rs
+assertion_line: 4273
 expression: rendered
 ---
 • Called
@@ -9,5 +10,4 @@ expression: rendered
         istory","limit":1})
     Line one of the response, which is
         quite long and needs wrapping.
-    Line two continues the response with
-        more detail.
+    ... +1 line (ctrl + t to view transcript)

@@ -1,0 +1,6 @@
+---
+source: tui/src/exec_cell/render.rs
+expression: "render_display(&completed_agent_cell(\"true\", \"\", 0,))"
+---
+• Ran true
+  └ ✓ completed • 1.50s

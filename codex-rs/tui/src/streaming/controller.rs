@@ -1069,7 +1069,7 @@ mod tests {
                 .transcript_lines(u16::MAX),
         );
 
-        assert_eq!(rendered, vec!["• tail without newline".to_string()]);
+        assert_eq!(rendered, vec!["● tail without newline".to_string()]);
     }
 
     #[test]

@@ -394,7 +394,7 @@ async fn exec_end_without_begin_does_not_flush_unrelated_running_exploring_cell(
 
     begin_exec(&mut chat, "call-exploring", "cat /dev/null");
     assert!(drain_insert_history(&mut rx).is_empty());
-    assert!(active_blob(&chat).contains("Read null"));
+    assert!(active_blob(&chat).contains("Read file null"));
 
     let orphan =
         begin_unified_exec_startup(&mut chat, "call-orphan", "proc-1", "echo repro-marker");
@@ -421,7 +421,7 @@ async fn exec_end_without_begin_does_not_flush_unrelated_running_exploring_cell(
         "expected unrelated exploring call to remain active: {active:?}"
     );
     assert!(
-        active.contains("Read null"),
+        active.contains("Read file null"),
         "expected active exploring command to remain visible: {active:?}"
     );
     assert!(
@@ -456,7 +456,7 @@ async fn exec_end_without_begin_flushes_completed_unrelated_exploring_cell() {
         "expected flushed exploring cell: {first:?}"
     );
     assert!(
-        first.contains("List ls -la"),
+        first.contains("Listed dir ls -la"),
         "expected flushed exploring cell: {first:?}"
     );
     assert!(
@@ -486,11 +486,11 @@ async fn overlapping_exploring_exec_end_is_not_misclassified_as_orphan() {
     );
     let active = active_blob(&chat);
     assert!(
-        active.contains("List ls -la"),
+        active.contains("Listed dir ls -la"),
         "expected first command still grouped: {active:?}"
     );
     assert!(
-        active.contains("Read foo.txt"),
+        active.contains("Read file foo.txt"),
         "expected second running command to stay in the same active cell: {active:?}"
     );
     assert!(
@@ -548,7 +548,32 @@ async fn exec_history_shows_unified_exec_tool_calls() {
     end_exec(&mut chat, begin, "", "", /*exit_code*/ 0);
 
     let blob = active_blob(&chat);
-    assert_eq!(blob, "• Explored\n  └ List ls\n");
+    assert_eq!(blob, "• Explored\n  └ Listed dir ls\n");
+}
+
+#[tokio::test]
+async fn unified_exec_interaction_command_execution_is_suppressed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "call-wait-command",
+        "ls",
+        ExecCommandSource::UnifiedExecInteraction,
+    );
+
+    assert!(
+        chat.transcript.active_cell.is_none(),
+        "wait-only command execution should not occupy transcript space"
+    );
+    end_exec(&mut chat, begin, "", "", /*exit_code*/ 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "wait-only command execution should not write history"
+    );
 }
 
 #[tokio::test]
@@ -1013,6 +1038,56 @@ async fn user_shell_command_renders_output_not_exploring() {
     );
     let blob = lines_to_single_string(cells.first().unwrap());
     assert_chatwidget_snapshot!("user_shell_ls_output", blob);
+}
+
+#[tokio::test]
+async fn active_exploring_tail_stays_compact_until_raw_mode() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let command = r#"rg -n "OPENCLAW_FALLBACK_RESULT_SEND_HELPER" tools/launchers/test-cron-launcher-fallback.sh"#;
+    let output = [
+        r#"134:  OPENCLAW_FALLBACK_RESULT_SEND_HELPER="$STUB_DIR/send-helper" \"#,
+        r#"237:  OPENCLAW_FALLBACK_RESULT_SEND_HELPER="$STUB_DIR/send-helper" \"#,
+        r#"273:  OPENCLAW_FALLBACK_RESULT_SEND_HELPER="$STUB_DIR/send-helper" \"#,
+        r#"313:  OPENCLAW_FALLBACK_RESULT_SEND_HELPER="$STUB_DIR/send-helper" \"#,
+        r#"335:  OPENCLAW_FALLBACK_RESULT_SEND_HELPER="$STUB_DIR/send-helper" \"#,
+    ]
+    .join("\n");
+
+    let begin_rg = begin_exec(&mut chat, "call-rg", command);
+    end_exec(&mut chat, begin_rg, &output, "", /*exit_code*/ 0);
+
+    let rich_tail = lines_to_single_string(
+        &chat
+            .active_cell_transcript_lines(/*width*/ 80)
+            .expect("active rich live tail"),
+    );
+    assert!(
+        rich_tail.contains("Explored"),
+        "expected rich active tail to keep compact exploration label: {rich_tail:?}"
+    );
+    assert!(
+        !rich_tail.contains("$ rg -n"),
+        "rich active tail should not show raw shell-prompt command: {rich_tail:?}"
+    );
+    assert!(
+        !rich_tail.contains("134:"),
+        "rich active tail should not show raw search output: {rich_tail:?}"
+    );
+
+    chat.set_raw_output_mode(true);
+    let raw_tail = lines_to_single_string(
+        &chat
+            .active_cell_transcript_lines(/*width*/ 80)
+            .expect("active raw live tail"),
+    );
+    assert!(
+        raw_tail.contains("$ rg -n"),
+        "raw active tail should preserve command transcript: {raw_tail:?}"
+    );
+    assert!(
+        raw_tail.contains("134:"),
+        "raw active tail should preserve command output: {raw_tail:?}"
+    );
 }
 
 #[tokio::test]

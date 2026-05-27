@@ -78,6 +78,134 @@ async fn app_server_model_verification_renders_warning() {
 }
 
 #[tokio::test]
+async fn flushed_active_web_search_commits_only_completed_row() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_web_search_begin("search-1".to_string());
+    let active = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("active web search should render");
+    assert!(lines_to_single_string(&active).contains("Searching the web"));
+
+    chat.flush_active_cell();
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "in-progress web search rows should stay transient"
+    );
+
+    chat.on_web_search_end(
+        "search-1".to_string(),
+        "Montreal free food".to_string(),
+        codex_app_server_protocol::WebSearchAction::Search {
+            query: Some("Montreal free food".to_string()),
+            queries: None,
+        },
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(rendered.contains("Searched Montreal free food"));
+    assert!(!rendered.contains("Searching the web"));
+}
+
+#[tokio::test]
+async fn live_web_search_notifications_replace_active_row_with_completed_row() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: AppServerThreadItem::WebSearch {
+                id: "search-1".to_string(),
+                query: String::new(),
+                action: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let active = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("active web search should render");
+    assert!(lines_to_single_string(&active).contains("Searching the web"));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "search start should render as an active row, not committed history"
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: AppServerThreadItem::WebSearch {
+                id: "search-1".to_string(),
+                query: "Montreal free food".to_string(),
+                action: Some(codex_app_server_protocol::WebSearchAction::Search {
+                    query: Some("Montreal free food".to_string()),
+                    queries: None,
+                }),
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(
+        chat.active_cell_transcript_lines(/*width*/ 80).is_none(),
+        "completed web search should no longer have an active transient row"
+    );
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(rendered.contains("Searched Montreal free food"));
+    assert!(!rendered.contains("Searching the web"));
+}
+
+#[tokio::test]
+async fn interleaved_output_does_not_commit_stale_web_search_start_row() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_web_search_begin("search-1".to_string());
+    chat.handle_streaming_delta("I found ".to_string());
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .flat_map(|lines| lines.iter())
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(
+        !rendered.contains("Searching the web"),
+        "starting assistant output should not commit stale in-progress web search rows"
+    );
+
+    chat.on_web_search_end(
+        "search-1".to_string(),
+        "Montreal free food".to_string(),
+        codex_app_server_protocol::WebSearchAction::Search {
+            query: Some("Montreal free food".to_string()),
+            queries: None,
+        },
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(rendered.contains("Searched Montreal free food"));
+    assert!(!rendered.contains("Searching the web"));
+}
+
+#[tokio::test]
 async fn context_indicator_shows_used_tokens_when_window_unknown() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("unknown-model")).await;
 

@@ -1,0 +1,7 @@
+---
+source: tui/src/exec_cell/render.rs
+expression: "render_display(&completed_agent_cell(command, \"ok\", 0,))"
+---
+• Ran gh issue view 28129 --repo microsoft/onnxruntime
+  │ ctrl + t to view transcript
+  └ ok

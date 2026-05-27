@@ -1,6 +1,7 @@
 ---
 source: tui/src/history_cell.rs
+assertion_line: 5217
 expression: rendered
 ---
 • Ran echo ok
-  └ (no output)
+  └ ✓ completed • 1ms
