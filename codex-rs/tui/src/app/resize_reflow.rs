@@ -19,21 +19,17 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use color_eyre::eyre::Result;
-use ratatui::text::Line;
 
 use super::App;
 use super::InitialHistoryReplayBuffer;
+use crate::app::compact_tool_groups;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::HistoryRenderMode;
 use crate::insert_history::HistoryLineWrapPolicy;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::transcript_reflow::TRANSCRIPT_REFLOW_DEBOUNCE;
 use crate::tui;
-
-struct ReflowCellDisplay {
-    lines: Vec<HyperlinkLine>,
-    is_stream_continuation: bool,
-}
 
 /// Rendered transcript lines ready to be replayed into terminal scrollback.
 ///
@@ -69,6 +65,28 @@ impl App {
     pub(super) fn reset_history_emission_state(&mut self) {
         self.has_emitted_history_lines = false;
         self.deferred_history_lines.clear();
+    }
+
+    pub(super) fn compact_tool_groups_enabled(&self) -> bool {
+        self.chat_widget.history_render_mode() == HistoryRenderMode::Rich
+            && !self.compact_tool_groups_expanded
+    }
+
+    pub(super) fn appended_cell_touches_compact_tool_group(&self, width: u16) -> bool {
+        self.compact_tool_groups_enabled()
+            && compact_tool_groups::appended_cell_touches_compact_group(
+                &self.transcript_cells,
+                width,
+            )
+    }
+
+    pub(super) fn toggle_compact_tool_groups_expanded(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.compact_tool_groups_expanded = !self.compact_tool_groups_expanded;
+        if self.overlay.is_none() {
+            self.reflow_transcript_now(tui)?;
+        }
+        tui.frame_requester().schedule_frame();
+        Ok(())
     }
 
     fn display_lines_for_history_insert(
@@ -148,6 +166,19 @@ impl App {
             // Reflow clears any pre-replay or partially emitted history and applies the reserved
             // history width. It also waits for an active overlay to close before rebuilding.
             self.schedule_immediate_resize_reflow(tui);
+            return;
+        }
+
+        if self.compact_tool_groups_enabled() {
+            let terminal_width = tui.terminal.last_known_screen_size.width;
+            let width = self.chat_widget.history_wrap_width(terminal_width);
+            let reflowed_lines = self.render_transcript_lines_for_reflow(width).lines;
+            if !reflowed_lines.is_empty() {
+                tui.insert_history_hyperlink_lines_with_wrap_policy(
+                    reflowed_lines,
+                    self.history_line_wrap_policy(),
+                );
+            }
             return;
         }
 
@@ -464,71 +495,21 @@ impl App {
 
     /// Render transcript cells for the current resize rebuild.
     ///
-    /// Rendering walks backward from the transcript tail so row-capped sessions avoid formatting the
-    /// full backlog. If the retained suffix begins inside a stream-continuation run, the walk extends
-    /// to include the run's first cell; otherwise separators would be inserted as if the continuation
-    /// were a new top-level history item. The final row trim happens after separators are restored,
+    /// Rendering walks the source cells in order so adjacent completed tool cells can be compacted
+    /// consistently. The final row trim happens after separators and compact groups are restored,
     /// so the returned rows obey the cap exactly.
     pub(super) fn render_transcript_lines_for_reflow(&mut self, width: u16) -> ReflowRenderResult {
-        let row_cap = self.resize_reflow_max_rows();
-        let mut cell_displays = VecDeque::new();
-        let mut rendered_rows = 0usize;
-        let mut start = self.transcript_cells.len();
-
-        while start > 0 {
-            start -= 1;
-            let cell = self.transcript_cells[start].clone();
-            let lines = cell
-                .display_hyperlink_lines_for_mode(width, self.chat_widget.history_render_mode());
-            rendered_rows += lines.len();
-            cell_displays.push_front(ReflowCellDisplay {
-                lines,
-                is_stream_continuation: cell.is_stream_continuation(),
-            });
-
-            if row_cap.is_some_and(|max_rows| rendered_rows > max_rows) {
-                break;
-            }
-        }
-
-        while start > 0
-            && cell_displays
-                .front()
-                .is_some_and(|display| display.is_stream_continuation)
-        {
-            start -= 1;
-            let cell = self.transcript_cells[start].clone();
-            cell_displays.push_front(ReflowCellDisplay {
-                lines: cell.display_hyperlink_lines_for_mode(
-                    width,
-                    self.chat_widget.history_render_mode(),
-                ),
-                is_stream_continuation: cell.is_stream_continuation(),
-            });
-        }
-
-        let mut has_emitted_history_lines = false;
-        let mut reflowed_lines = Vec::new();
-        for display in cell_displays {
-            if !display.lines.is_empty() && !display.is_stream_continuation {
-                if has_emitted_history_lines {
-                    reflowed_lines.push(HyperlinkLine::new(Line::from("")));
-                } else {
-                    has_emitted_history_lines = true;
-                }
-            }
-            reflowed_lines.extend(display.lines);
-        }
-        if let Some(max_rows) = row_cap
-            && reflowed_lines.len() > max_rows
-        {
-            let trimmed_line_count = reflowed_lines.len() - max_rows;
-            reflowed_lines = reflowed_lines.split_off(trimmed_line_count);
-        }
+        let reflowed_lines = compact_tool_groups::render_transcript_lines(
+            &self.transcript_cells,
+            width,
+            self.chat_widget.history_render_mode(),
+            self.compact_tool_groups_enabled(),
+            self.resize_reflow_max_rows(),
+        );
         self.has_emitted_history_lines = !reflowed_lines.is_empty();
 
         ReflowRenderResult {
-            lines: reflowed_lines,
+            lines: crate::terminal_hyperlinks::plain_hyperlink_lines(reflowed_lines),
         }
     }
 

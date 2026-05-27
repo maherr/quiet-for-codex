@@ -15,20 +15,22 @@ impl App {
             tui.frame_requester().schedule_frame();
         }
         self.transcript_cells.push(cell.clone());
+        let width = self
+            .chat_widget
+            .history_wrap_width(tui.terminal.last_known_screen_size.width);
+        let appended_cell_touches_compact_group =
+            self.appended_cell_touches_compact_tool_group(width);
         if self.initial_history_replay_buffer.as_ref().is_some() {
-            self.insert_history_cell_lines_with_initial_replay_buffer(
-                tui,
-                cell.as_ref(),
-                self.chat_widget
-                    .history_wrap_width(tui.terminal.last_known_screen_size.width),
-            );
+            self.insert_history_cell_lines_with_initial_replay_buffer(tui, cell.as_ref(), width);
+        } else if appended_cell_touches_compact_group && self.overlay.is_none() {
+            if let Err(err) = self.reflow_transcript_now(tui) {
+                tracing::warn!(
+                    error = %err,
+                    "failed to reflow transcript after compact tool group append"
+                );
+            }
         } else {
-            self.insert_history_cell_lines(
-                tui,
-                cell.as_ref(),
-                self.chat_widget
-                    .history_wrap_width(tui.terminal.last_known_screen_size.width),
-            );
+            self.insert_history_cell_lines(tui, cell.as_ref(), width);
         }
         // A committed cell can unblock a settled /usage card that was waiting
         // behind a transient active cell or a provisional stream tail.
