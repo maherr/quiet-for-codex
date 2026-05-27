@@ -142,6 +142,10 @@ pub(crate) mod announcement {
 
     /// Fetch the announcement tip, return None if the prewarm is not done yet.
     pub(crate) fn fetch_announcement_tip(plan: Option<PlanType>) -> Option<String> {
+        if CODEX_CLI_VERSION.trim() == "0.0.0" {
+            return None;
+        }
+
         ANNOUNCEMENT_TIP
             .get()
             .cloned()

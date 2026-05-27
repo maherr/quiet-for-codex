@@ -1,10 +1,10 @@
 ---
 source: tui/src/history_cell.rs
+assertion_line: 5333
 expression: rendered
 ---
 • Ran seq 1 10 1>&2 && false
-  └ 1
-    2
-    … +6 lines (ctrl + t to view transcript)
+  └ 8
     9
     10
+    ✗ failed (exit 1) • 1ms • +7 lines in transcript

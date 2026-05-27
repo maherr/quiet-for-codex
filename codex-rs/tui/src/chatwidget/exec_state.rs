@@ -18,20 +18,6 @@ pub(super) struct UnifiedExecProcessSummary {
     pub(super) recent_chunks: Vec<String>,
 }
 
-pub(super) struct UnifiedExecWaitState {
-    command_display: String,
-}
-
-impl UnifiedExecWaitState {
-    pub(super) fn new(command_display: String) -> Self {
-        Self { command_display }
-    }
-
-    pub(super) fn is_duplicate(&self, command_display: &str) -> bool {
-        self.command_display == command_display
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct UnifiedExecWaitStreak {
     pub(super) process_id: String,

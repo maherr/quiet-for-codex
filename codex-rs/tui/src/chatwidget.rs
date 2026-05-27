@@ -77,7 +77,7 @@ use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
-use crate::version::CODEX_CLI_VERSION;
+use crate::version::CODEX_CLI_DISPLAY_VERSION;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppSummary;
@@ -333,7 +333,6 @@ use self::connectors::ConnectorsState;
 mod exec_state;
 use self::exec_state::RunningCommand;
 use self::exec_state::UnifiedExecProcessSummary;
-use self::exec_state::UnifiedExecWaitState;
 use self::exec_state::UnifiedExecWaitStreak;
 use self::exec_state::command_execution_command_and_parsed;
 use self::exec_state::is_standard_tool_call;
@@ -591,7 +590,6 @@ pub(crate) struct ChatWidget {
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<SkillMetadata>,
     skills_initial_state: Option<HashMap<AbsolutePathBuf, bool>>,
-    last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_lifecycle: TurnLifecycleState,
     safety_buffering: SafetyBufferingState,
@@ -1201,6 +1199,13 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.transcript.active_cell.take() {
+            if active
+                .as_any()
+                .downcast_ref::<WebSearchCell>()
+                .is_some_and(|cell| !cell.is_completed())
+            {
+                return;
+            }
             self.transcript.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
             self.request_pending_usage_output_insertion();
@@ -1433,7 +1438,7 @@ impl ChatWidget {
                 /*reasoning_effort*/ None,
                 /*show_fast_status*/ false,
                 config.cwd.to_path_buf(),
-                CODEX_CLI_VERSION,
+                CODEX_CLI_DISPLAY_VERSION,
             )
             .with_yolo_mode(history_cell::is_yolo_mode(config)),
         )
@@ -1873,23 +1878,26 @@ impl ChatWidget {
         })
     }
 
-    /// Returns the active cell's annotated transcript lines for a given terminal width.
+    /// Returns the active cell's visible transcript tail for a given terminal width.
     ///
     /// This is a convenience for the transcript overlay live-tail path, and it intentionally
-    /// filters out empty results so the overlay can treat "nothing to render" as "no tail". Callers
+    /// filters out empty results so the overlay can treat "nothing to render" as "no tail". The
+    /// live tail uses the same rich/raw render mode as committed transcript cells so an in-flight
+    /// exec cell does not briefly expose raw `$ command` output before it is committed. Callers
     /// should pass the same width the overlay uses; using a different width will cause wrapping
-    /// mismatches between the main viewport and the transcript overlay.
+    /// mismatches between the live tail and committed cells.
     pub(crate) fn active_cell_transcript_hyperlink_lines(
         &self,
         width: u16,
     ) -> Option<Vec<HyperlinkLine>> {
+        let render_mode = self.history_render_mode();
         let mut lines = Vec::new();
         if let Some(cell) = self.transcript.active_cell.as_ref() {
-            lines.extend(cell.transcript_hyperlink_lines(width));
+            lines.extend(cell.display_hyperlink_lines_for_mode(width, render_mode));
         }
         if let Some(hook_cell) = self.active_hook_cell.as_ref() {
             // Compute hook lines first so hidden hooks do not add a separator.
-            let hook_lines = hook_cell.transcript_hyperlink_lines(width);
+            let hook_lines = hook_cell.display_hyperlink_lines_for_mode(width, render_mode);
             if !hook_lines.is_empty() && !lines.is_empty() {
                 lines.push(HyperlinkLine::from(""));
             }

@@ -1,8 +1,9 @@
 ---
 source: tui/src/history_cell.rs
+assertion_line: 5194
 expression: rendered
 ---
 • Ran set -o pipefail
   │ cargo test -p codex-tui
   │ --quiet
-  └ (no output)
+  └ ✓ completed • 1ms

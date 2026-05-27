@@ -1,5 +1,6 @@
 ---
 source: tui/src/history_cell.rs
+assertion_line: 5383
 expression: rendered
 ---
 • Ran echo
@@ -10,3 +11,4 @@ expression: rendered
     stderr
     error: second line on
     stderr
+    ✗ failed (exit 1) • 5ms
