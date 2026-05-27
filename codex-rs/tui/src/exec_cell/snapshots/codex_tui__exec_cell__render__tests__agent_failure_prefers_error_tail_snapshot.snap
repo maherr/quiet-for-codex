@@ -1,0 +1,9 @@
+---
+source: tui/src/exec_cell/render.rs
+expression: "render_display(&completed_agent_cell(\"cargo test -p codex-tui\", &output,\n101,))"
+---
+• Ran tests cargo test -p codex-tui
+  └ error: assertion failed
+    note: run with RUST_BACKTRACE=1
+    caused by snapshot mismatch
+    ✗ failed (exit 101) • 1.50s • +2 lines in transcript

@@ -1,0 +1,11 @@
+---
+source: tui/src/exec_cell/render.rs
+expression: render_display(&cell)
+---
+• You ran ls
+  └ file1
+    file2
+    file3
+    file4
+    file5
+    file6

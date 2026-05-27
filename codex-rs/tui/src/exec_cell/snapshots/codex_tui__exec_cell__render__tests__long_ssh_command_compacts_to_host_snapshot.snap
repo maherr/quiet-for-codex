@@ -1,0 +1,9 @@
+---
+source: tui/src/exec_cell/render.rs
+assertion_line: 1068
+expression: "render_display(&completed_agent_cell(command,\n\"bash: line 7: printf: --: invalid option\", 2,))"
+---
+• Ran ssh dev@example.internal
+  │ ctrl + t to view transcript
+  └ bash: line 7: printf: --: invalid option
+    ✗ failed (exit 2) • 1.50s
