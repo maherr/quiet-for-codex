@@ -83,6 +83,10 @@ impl McpToolCallCell {
         }
     }
 
+    pub(crate) fn completed_invocation(&self) -> Option<(&McpInvocation, bool)> {
+        self.success().map(|success| (&self.invocation, success))
+    }
+
     pub(crate) fn mark_failed(&mut self) {
         let elapsed = self.start_time.elapsed();
         self.duration = Some(elapsed);

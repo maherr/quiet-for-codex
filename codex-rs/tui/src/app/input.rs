@@ -157,6 +157,18 @@ impl App {
             return;
         }
 
+        if app_keymap_shortcuts_available
+            && compact_tool_group_toggle_shortcut_matches(key_event)
+            && self.chat_widget.composer_text_with_pending().is_empty()
+        {
+            if let Err(err) = self.toggle_compact_tool_groups_expanded(tui) {
+                tracing::warn!(error = %err, "failed to reflow transcript after tool group toggle");
+                self.chat_widget
+                    .add_error_message(format!("Failed to redraw transcript: {err}"));
+            }
+            return;
+        }
+
         if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)
         {
             let enabled = !self.chat_widget.raw_output_mode();
@@ -282,6 +294,13 @@ impl App {
     pub(super) fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
     }
+}
+
+fn compact_tool_group_toggle_shortcut_matches(key_event: KeyEvent) -> bool {
+    matches!(
+        (key_event.code, key_event.modifiers),
+        (KeyCode::Char('o') | KeyCode::Char('O'), KeyModifiers::ALT)
+    )
 }
 
 #[cfg(test)]
