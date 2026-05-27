@@ -30,7 +30,8 @@ impl HistoryCell for UnifiedExecInteractionCell {
         } else {
             vec!["↳ ".dim(), "Interacted with background terminal".bold()]
         };
-        if let Some(command) = &self.command_display
+        if !waited_only
+            && let Some(command) = &self.command_display
             && !command.is_empty()
         {
             header_spans.push(" · ".dim());
@@ -65,17 +66,7 @@ impl HistoryCell for UnifiedExecInteractionCell {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let mut out = Vec::new();
         if self.stdin.is_empty() {
-            if let Some(command) = self
-                .command_display
-                .as_ref()
-                .filter(|command| !command.is_empty())
-            {
-                out.push(Line::from(format!(
-                    "Waited for background terminal: {command}"
-                )));
-            } else {
-                out.push(Line::from("Waited for background terminal"));
-            }
+            out.push(Line::from("Waited for background terminal"));
             return out;
         }
 

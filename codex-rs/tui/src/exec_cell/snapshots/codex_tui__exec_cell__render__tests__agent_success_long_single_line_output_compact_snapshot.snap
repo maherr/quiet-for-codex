@@ -1,0 +1,7 @@
+---
+source: tui/src/exec_cell/render.rs
+expression: "render_display(&completed_agent_cell(\"gh pr view 5235 --repo ROCm/rocm-systems --json number,title,state,author,comments,reviews,latestReviews,labels,url\",\n&output, 0,))"
+---
+• Ran gh pr view 5235 --repo ROCm/rocm-systems
+  │ ctrl + t to view transcript
+  └ ✓ completed • 1.50s • +1 lines in transcript

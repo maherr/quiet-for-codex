@@ -1,5 +1,6 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 571
 expression: snapshot
 ---
 History:
@@ -8,4 +9,4 @@ History:
 
 Active:
 • Exploring
-  └ Read null
+  └ Read file null

@@ -294,6 +294,14 @@ pub(crate) struct AgentMessageCell {
     is_first_line: bool,
 }
 
+fn agent_message_prefix() -> Span<'static> {
+    "● ".cyan().bold()
+}
+
+fn agent_message_continuation_prefix() -> Span<'static> {
+    "  ".into()
+}
+
 impl AgentMessageCell {
     #[cfg(test)]
     pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
@@ -320,9 +328,9 @@ impl HistoryCell for AgentMessageCell {
         let mut wrapped = Vec::new();
         for (index, line) in self.lines.iter().enumerate() {
             let initial_indent = if index == 0 && self.is_first_line {
-                "• ".dim().into()
+                agent_message_prefix().into()
             } else {
-                "  ".into()
+                agent_message_continuation_prefix().into()
             };
             let mut subsequent_indent = Line::from("  ");
             subsequent_indent
@@ -434,12 +442,12 @@ impl HistoryCell for AgentMarkdownCell {
             else {
                 return prefix_hyperlink_lines(
                     vec![HyperlinkLine::new(Line::default())],
-                    "• ".dim(),
-                    "  ".into(),
+                    agent_message_prefix(),
+                    agent_message_continuation_prefix(),
                 );
             };
 
-            // Re-render markdown from source at the current width. Reserve 2 columns for the "• " /
+            // Re-render markdown from source at the current width. Reserve 2 columns for the "● " /
             // " " prefix prepended below.
             let lines = crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations(
                 &self.markdown_source,
@@ -449,8 +457,8 @@ impl HistoryCell for AgentMarkdownCell {
             );
             normalize_whitespace_only_hyperlink_lines(prefix_hyperlink_lines(
                 lines,
-                "• ".dim(),
-                "  ".into(),
+                agent_message_prefix(),
+                agent_message_continuation_prefix(),
             ))
         };
 
@@ -509,11 +517,11 @@ impl HistoryCell for StreamingAgentTailCell {
         normalize_whitespace_only_hyperlink_lines(prefix_hyperlink_lines(
             self.lines.clone(),
             if self.is_first_line {
-                "• ".dim()
+                agent_message_prefix()
             } else {
-                "  ".into()
+                agent_message_continuation_prefix()
             },
-            "  ".into(),
+            agent_message_continuation_prefix(),
         ))
     }
 

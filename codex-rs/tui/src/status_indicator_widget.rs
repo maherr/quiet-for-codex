@@ -18,6 +18,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use unicode_width::UnicodeWidthStr;
 
+use crate::activity_verbs::spinner_verb_for_elapsed;
+use crate::activity_verbs::spinner_verbs_enabled;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -259,7 +261,12 @@ impl Renderable for StatusIndicatorWidget {
             spans.push(indicator);
             spans.push(" ".into());
         }
-        spans.extend(shimmer_text(&self.header, motion_mode));
+        let header = if self.header == "Working" && spinner_verbs_enabled() {
+            spinner_verb_for_elapsed(elapsed_duration)
+        } else {
+            self.header.as_str()
+        };
+        spans.extend(shimmer_text(header, motion_mode));
         if !spans.is_empty() {
             spans.push(" ".into());
         }
