@@ -1,3 +1,27 @@
+## codex-quiet
+
+This is an unofficial fork of OpenAI Codex CLI. It is not an official OpenAI
+release and is not endorsed by OpenAI.
+
+The current fork branch is based on upstream `rust-v0.134.0` and changes TUI
+presentation only:
+
+- display completed tool calls in compact groups;
+- reduce noisy successful agent command output, with transcript access kept;
+- condense hook and session-start rows that otherwise dominate the viewport;
+- show the user-facing display version as `codex-quiet 0.134`.
+
+Build from source:
+
+```shell
+cd codex-rs
+cargo build --release --bin codex
+```
+
+The upstream OpenAI README follows.
+
+---
+
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
