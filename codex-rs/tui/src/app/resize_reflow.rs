@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use color_eyre::eyre::Result;
+use ratatui::text::Line;
 
 use super::App;
 use super::InitialHistoryReplayBuffer;
