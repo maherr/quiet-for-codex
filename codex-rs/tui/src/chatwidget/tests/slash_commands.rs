@@ -1538,7 +1538,8 @@ async fn completed_token_activity_refresh_waits_for_active_hook() {
         ),
     );
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    // The quiet fork hides context-only routine PostToolUse hooks, so completing this hook
+    // commits the pending usage output without inserting a (hidden) hook history cell.
     assert_matches!(rx.try_recv(), Ok(AppEvent::CommitPendingUsageOutput));
 }
 
