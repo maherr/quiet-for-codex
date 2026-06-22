@@ -3,13 +3,13 @@
 This is an unofficial fork of OpenAI Codex CLI. It is not an official OpenAI
 release and is not endorsed by OpenAI.
 
-The current fork branch is based on upstream `rust-v0.135.0` and changes TUI
+The current fork branch is based on upstream `rust-v0.142.0` and changes TUI
 presentation only:
 
 - display completed tool calls in compact groups;
 - reduce noisy successful agent command output, with transcript access kept;
 - condense hook and session-start rows that otherwise dominate the viewport;
-- show the user-facing display version as `codex-quiet 0.135`.
+- show the user-facing display version as `codex-quiet 0.142`.
 
 Build from source:
 
