@@ -107,7 +107,7 @@ async fn flushed_active_web_search_commits_only_completed_row() {
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert!(rendered.contains("Searched Montreal free food"));
+    assert!(rendered.contains("Searched the web for Montreal free food"));
     assert!(!rendered.contains("Searching the web"));
 }
 
@@ -164,7 +164,7 @@ async fn live_web_search_notifications_replace_active_row_with_completed_row() {
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert!(rendered.contains("Searched Montreal free food"));
+    assert!(rendered.contains("Searched the web for Montreal free food"));
     assert!(!rendered.contains("Searching the web"));
 }
 
@@ -201,7 +201,7 @@ async fn interleaved_output_does_not_commit_stale_web_search_start_row() {
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert!(rendered.contains("Searched Montreal free food"));
+    assert!(rendered.contains("Searched the web for Montreal free food"));
     assert!(!rendered.contains("Searching the web"));
 }
 

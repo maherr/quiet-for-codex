@@ -1049,16 +1049,26 @@ mod tests {
                     .to_string(),
             }],
         );
-        let expected = vec![
-            "• SessionStart hook (completed)".to_string(),
-            "  hook context: ## Working Memory Recall".to_string(),
-            "".to_string(),
-            "    Source: Codex compaction".to_string(),
-            "    Scope: Durable workspace memory".to_string(),
-        ];
-
-        assert_eq!(line_texts(&cell.display_lines(/*width*/ 80)), expected);
-        assert_eq!(line_texts(&cell.raw_lines()), expected);
+        // The quiet fork compacts SessionStart hooks in the viewport to a one-line
+        // summary plus a transcript hint; the full multi-line context is preserved in
+        // raw_lines (and the transcript overlay).
+        assert_eq!(
+            line_texts(&cell.display_lines(/*width*/ 80)),
+            vec![
+                "• SessionStart hook completed".to_string(),
+                "  └ ctrl + t to view transcript".to_string(),
+            ]
+        );
+        assert_eq!(
+            line_texts(&cell.raw_lines()),
+            vec![
+                "• SessionStart hook (completed)".to_string(),
+                "  hook context: ## Working Memory Recall".to_string(),
+                "".to_string(),
+                "    Source: Codex compaction".to_string(),
+                "    Scope: Durable workspace memory".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -1072,12 +1082,13 @@ mod tests {
             }],
         );
 
+        // The quiet fork renders completed hook output as a compact, whitespace-collapsed
+        // single-line preview in the viewport (full multi-line output stays in the transcript).
         assert_eq!(
             line_texts(&cell.display_lines(/*width*/ 80)),
             vec![
                 "• PostToolUse hook (completed)".to_string(),
-                "  warning: Heads up".to_string(),
-                "    Review generated files".to_string(),
+                "  warning: Heads up Review generated files".to_string(),
             ]
         );
     }
