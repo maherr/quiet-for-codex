@@ -442,6 +442,10 @@ impl App {
                     tracing::error!(error = ?err, "failed to start turn through app server");
                 }
             }
+            AppEvent::ConversationOp { target, op } => {
+                self.submit_thread_op(app_server, target.thread_id, op)
+                    .await?;
+            }
             AppEvent::RetrySafetyBufferedTurn {
                 thread_id,
                 turn_id,
