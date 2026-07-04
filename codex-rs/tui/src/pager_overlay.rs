@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use crate::chatwidget::ActiveCellRenderKey;
 use crate::history_cell::HistoryCell;
-use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
@@ -28,7 +27,6 @@ use crate::keymap::PagerKeymap;
 use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
 use crate::terminal_hyperlinks::visible_lines_ref;
@@ -538,14 +536,10 @@ struct CellRenderable {
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let hyperlink_lines = self.cell.transcript_hyperlink_lines(area.width);
-        let style = if self.cell.as_any().is::<UserHistoryCell>() {
-            if self.highlighted {
-                user_message_style().reversed()
-            } else {
-                user_message_style()
-            }
-        } else {
-            Style::default()
+        let style = match self.cell.rich_block_style() {
+            Some(style) if self.highlighted => style.reversed(),
+            Some(style) => style,
+            None => Style::default(),
         };
         let p = Paragraph::new(Text::from(visible_lines_ref(&hyperlink_lines)))
             .style(style)
