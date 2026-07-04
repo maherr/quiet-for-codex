@@ -19,6 +19,7 @@ use crate::app_event::HistoryBatchEntryResponse;
 
 use crate::chatwidget::ChatWidgetInit;
 use crate::chatwidget::create_initial_user_message;
+use crate::chatwidget::tests::constructor::make_chatwidget_for_pane_with_sender;
 use crate::chatwidget::tests::helpers::render_bottom_popup;
 use crate::chatwidget::tests::helpers::set_active_cell;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
@@ -188,6 +189,49 @@ fn conversation_event_payload(event: AppEvent) -> AppEvent {
         AppEvent::FromConversation { event, .. } => *event,
         event => event,
     }
+}
+
+async fn install_test_side_pane(
+    app: &mut App,
+    parent_thread_id: ThreadId,
+    side_thread_id: ThreadId,
+) {
+    app.chat_widget
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane")
+        .attach_thread(parent_thread_id, /*receiver*/ None);
+    let side_widget =
+        make_chatwidget_for_pane_with_sender(PaneSlot::Side, app.app_event_tx.clone()).await;
+    let file_search = FileSearchManager::new(
+        side_widget.config_ref().cwd.to_path_buf(),
+        side_widget.conversation_event_sender(),
+    );
+    let installed = app.chat_widget.install_side(ConversationPaneInit {
+        chat_widget: side_widget,
+        file_search,
+        owned_screen: None,
+    });
+    assert!(installed.is_ok(), "side pane should install");
+    app.chat_widget
+        .by_slot_mut(PaneSlot::Side)
+        .expect("side pane")
+        .attach_thread(side_thread_id, /*receiver*/ None);
+    app.side_threads
+        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+    assert!(app.chat_widget.focus(PaneSlot::Side));
+    app.sync_side_thread_ui();
+}
+
+async fn attach_test_pane_channel(app: &mut App, slot: PaneSlot, thread_id: ThreadId) {
+    app.set_thread_active(thread_id, /*active*/ true).await;
+    let receiver = app
+        .thread_event_channels
+        .get_mut(&thread_id)
+        .and_then(|channel| channel.receiver.take());
+    app.chat_widget
+        .by_slot_mut(slot)
+        .expect("installed pane")
+        .attach_thread(thread_id, receiver);
 }
 
 async fn next_thread_settings_updated(
@@ -2859,7 +2903,7 @@ async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
 }
 
 #[tokio::test]
-async fn side_defers_parent_approval_overlay_until_parent_replay() -> Result<()> {
+async fn side_keeps_parent_approval_live_without_stealing_focus() -> Result<()> {
     let mut app = make_test_app().await;
     let parent_thread_id =
         ThreadId::from_string("00000000-0000-0000-0000-000000000011").expect("valid thread");
@@ -2867,9 +2911,6 @@ async fn side_defers_parent_approval_overlay_until_parent_replay() -> Result<()>
         ThreadId::from_string("00000000-0000-0000-0000-000000000022").expect("valid thread");
 
     app.primary_thread_id = Some(parent_thread_id);
-    app.chat_widget.active_thread_id = Some(side_thread_id);
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
     app.thread_event_channels.insert(
         parent_thread_id,
         ThreadEventChannel::new_with_session(
@@ -2878,6 +2919,8 @@ async fn side_defers_parent_approval_overlay_until_parent_replay() -> Result<()>
             Vec::new(),
         ),
     );
+    install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
+    attach_test_pane_channel(&mut app, PaneSlot::Parent, parent_thread_id).await;
 
     app.enqueue_thread_request(
         parent_thread_id,
@@ -2898,20 +2941,20 @@ async fn side_defers_parent_approval_overlay_until_parent_replay() -> Result<()>
             .and_then(|state| state.parent_status),
         Some(SideParentStatus::NeedsApproval)
     );
+    let (slot, event) = app.chat_widget.recv_thread_event().await;
+    assert_eq!(slot, PaneSlot::Parent);
+    assert!(app.chat_widget.focus(PaneSlot::Parent));
+    app.handle_thread_event_replay(event.expect("parent approval event"));
+    assert!(app.chat_widget.focus(PaneSlot::Side));
 
-    let snapshot = {
-        let channel = app
-            .thread_event_channels
-            .get(&parent_thread_id)
-            .expect("parent thread channel");
-        let store = channel.store.lock().await;
-        store.snapshot()
-    };
-    app.side_threads.remove(&side_thread_id);
-    app.chat_widget.active_thread_id = Some(parent_thread_id);
-    app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
-
-    assert_eq!(app.chat_widget.has_active_view(), true);
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+    assert!(!app.chat_widget.has_active_view());
+    assert!(
+        app.chat_widget
+            .by_slot(PaneSlot::Parent)
+            .expect("parent pane")
+            .has_active_view()
+    );
 
     Ok(())
 }
@@ -2974,9 +3017,7 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
         ThreadId::from_string("00000000-0000-0000-0000-000000000033").expect("valid thread");
 
     app.primary_thread_id = Some(main_thread_id);
-    app.chat_widget.active_thread_id = Some(side_thread_id);
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(main_thread_id));
+    install_test_side_pane(&mut app, main_thread_id, side_thread_id).await;
     app.thread_event_channels.insert(
         agent_thread_id,
         ThreadEventChannel::new_with_session(
@@ -3014,8 +3055,7 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
         &["Robie [explorer]".to_string()]
     );
 
-    app.side_threads.remove(&side_thread_id);
-    app.chat_widget.active_thread_id = Some(main_thread_id);
+    app.discard_closed_side_thread(side_thread_id).await;
     app.surface_pending_inactive_thread_interactive_requests()
         .await?;
 
@@ -4180,10 +4220,9 @@ async fn active_side_thread_renders_live_mcp_startup_notifications() {
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
     app.primary_thread_id = Some(parent_thread_id);
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
     app.ensure_thread_channel(side_thread_id);
-    app.activate_thread_channel(side_thread_id).await;
+    install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
+    attach_test_pane_channel(&mut app, PaneSlot::Side, side_thread_id).await;
     app.replay_thread_snapshot(
         ThreadEventSnapshot {
             session: Some(test_thread_session(
@@ -4232,7 +4271,7 @@ async fn active_side_thread_renders_live_mcp_startup_notifications() {
 
     let mut rendered_cells = Vec::new();
     while let Ok(event) = app_event_rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
+        if let AppEvent::InsertHistoryCell(cell) = conversation_event_payload(event) {
             rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
         }
     }
@@ -4261,13 +4300,110 @@ async fn side_restore_user_message_puts_inline_question_back_in_composer() {
 }
 
 #[tokio::test]
+async fn start_side_installs_live_child_without_replacing_parent() -> Result<()> {
+    Box::pin(async {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
+        let parent_thread_id = started.session.thread_id;
+        app_server
+            .thread_inject_items(parent_thread_id, vec![App::side_boundary_prompt_item()])
+            .await?;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await?;
+        app.chat_widget
+            .set_composer_text("parent draft".to_string(), Vec::new(), Vec::new());
+        while app_event_rx.try_recv().is_ok() {}
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+
+        let control = app
+            .handle_start_side(
+                &mut tui,
+                &mut app_server,
+                parent_thread_id,
+                Some(crate::chatwidget::UserMessage::from("side question")),
+            )
+            .await?;
+
+        assert!(matches!(control, AppRunControl::Continue));
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+        let parent = app
+            .chat_widget
+            .by_slot(PaneSlot::Parent)
+            .expect("parent pane");
+        assert_eq!(parent.active_thread_id, Some(parent_thread_id));
+        assert!(parent.active_thread_rx.is_some());
+        assert_eq!(parent.composer_text_with_pending(), "parent draft");
+        let side = app.chat_widget.by_slot(PaneSlot::Side).expect("side pane");
+        let side_thread_id = side.active_thread_id.expect("side thread id");
+        assert_ne!(side_thread_id, parent_thread_id);
+        assert!(side.active_thread_rx.is_some());
+        assert!(side.side_conversation_active());
+        let side_origin = side.conversation_origin().expect("side origin");
+        assert_eq!(side_origin.pane, PaneSlot::Side);
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .map(|state| state.parent_thread_id),
+            Some(parent_thread_id)
+        );
+        for thread_id in [parent_thread_id, side_thread_id] {
+            let store = &app
+                .thread_event_channels
+                .get(&thread_id)
+                .expect("live thread channel")
+                .store;
+            assert!(store.lock().await.active);
+        }
+
+        let mut submitted_to_side = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::ConversationOp {
+                target,
+                op: Op::UserTurn { items, .. },
+            } = event
+            {
+                assert_eq!(target.thread_id, side_thread_id);
+                assert_eq!(
+                    items,
+                    vec![UserInput::Text {
+                        text: "side question".to_string(),
+                        text_elements: Vec::new(),
+                    }]
+                );
+                submitted_to_side = true;
+            }
+        }
+        assert!(submitted_to_side);
+
+        let control = app
+            .handle_event(
+                &mut tui,
+                &mut app_server,
+                AppEvent::FromConversation {
+                    target: side_origin,
+                    event: Box::new(AppEvent::Exit(ExitMode::ShutdownFirst)),
+                },
+            )
+            .await?;
+        assert!(matches!(control, AppRunControl::Continue));
+        assert!(!app.chat_widget.has_side());
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
+        assert_eq!(app.chat_widget.active_thread_id, Some(parent_thread_id));
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
 async fn side_discard_selection_keeps_current_side_thread() {
     let mut app = make_test_app().await;
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
-    app.chat_widget.active_thread_id = Some(side_thread_id);
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+    install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
 
     assert_eq!(
         app.side_thread_to_discard_after_switch(side_thread_id),
@@ -4289,8 +4425,8 @@ async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
         side_config.ephemeral = true;
         let started = app_server.start_thread(&side_config).await?;
         let side_thread_id = started.session.thread_id;
-        app.side_threads
-            .insert(side_thread_id, SideThreadState::new(ThreadId::new()));
+        let parent_thread_id = ThreadId::new();
+        install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
         app.agent_navigation.upsert(
             side_thread_id,
             Some("Side".to_string()),
@@ -4305,6 +4441,8 @@ async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
 
         assert_eq!(app.agent_navigation.get(&side_thread_id), None);
         assert!(!app.side_threads.contains_key(&side_thread_id));
+        assert!(!app.chat_widget.has_side());
+        assert_eq!(app.chat_widget.active_thread_id, Some(parent_thread_id));
         Ok(())
     })
     .await
@@ -4318,9 +4456,7 @@ async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Resu
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
         let parent_thread_id = ThreadId::new();
         let side_thread_id = ThreadId::new();
-        app.chat_widget.active_thread_id = Some(side_thread_id);
-        app.side_threads
-            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+        install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
         app.agent_navigation.upsert(
             side_thread_id,
             Some("Side".to_string()),
@@ -4333,7 +4469,15 @@ async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Resu
                 .await
         );
 
+        assert!(app.chat_widget.has_side());
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
         assert_eq!(app.chat_widget.active_thread_id, Some(side_thread_id));
+        assert_eq!(
+            app.chat_widget
+                .by_slot(PaneSlot::Parent)
+                .and_then(|pane| pane.active_thread_id),
+            Some(parent_thread_id)
+        );
         assert_eq!(
             app.side_threads
                 .get(&side_thread_id)
@@ -4351,9 +4495,7 @@ async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
     let mut app = make_test_app().await;
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
-    app.chat_widget.active_thread_id = Some(side_thread_id);
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+    install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
     app.thread_event_channels
         .insert(side_thread_id, ThreadEventChannel::new(/*capacity*/ 4));
     app.agent_navigation.upsert(
@@ -4365,10 +4507,41 @@ async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
 
     app.discard_closed_side_thread(side_thread_id).await;
 
-    assert_eq!(app.chat_widget.active_thread_id, None);
+    assert!(!app.chat_widget.has_side());
+    assert_eq!(app.chat_widget.active_thread_id, Some(parent_thread_id));
     assert!(!app.side_threads.contains_key(&side_thread_id));
     assert!(!app.thread_event_channels.contains_key(&side_thread_id));
     assert_eq!(app.agent_navigation.get(&side_thread_id), None);
+}
+
+#[tokio::test]
+async fn side_thread_closed_removes_only_side_and_keeps_parent_live() -> Result<()> {
+    let mut app = make_test_app().await;
+    let parent_thread_id = ThreadId::new();
+    let side_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(parent_thread_id);
+    install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
+    app.chat_widget
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane")
+        .set_composer_text("parent draft".to_string(), Vec::new(), Vec::new());
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+
+    app.handle_active_thread_event(
+        &mut tui,
+        &mut app_server,
+        ThreadBufferedEvent::Notification(thread_closed_notification(side_thread_id)),
+    )
+    .await?;
+
+    assert!(!app.chat_widget.has_side());
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
+    assert_eq!(app.chat_widget.active_thread_id, Some(parent_thread_id));
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "parent draft");
+    assert!(!app.side_threads.contains_key(&side_thread_id));
+    Ok(())
 }
 
 #[tokio::test]
