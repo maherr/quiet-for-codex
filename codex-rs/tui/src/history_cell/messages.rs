@@ -197,6 +197,10 @@ impl HistoryCell for UserHistoryCell {
         lines
     }
 
+    fn rich_block_style(&self) -> Option<Style> {
+        Some(user_message_style())
+    }
+
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let message = sanitize_user_text(&self.message);
         let mut lines = raw_lines_from_source(message.trim_end_matches(['\r', '\n']));
