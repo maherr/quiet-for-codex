@@ -2008,14 +2008,25 @@ impl App {
                 self.windows_sandbox.skip_world_writable_scan_once = true;
             }
             AppEvent::UpdateWorldWritableWarningAcknowledged(ack) => {
-                self.chat_widget
-                    .set_world_writable_warning_acknowledged(ack);
+                self.chat_widget.for_each_installed_mut(|pane| {
+                    pane.chat_widget
+                        .set_world_writable_warning_acknowledged(ack);
+                });
             }
             AppEvent::UpdateRateLimitSwitchPromptHidden(hidden) => {
-                self.chat_widget.set_rate_limit_switch_prompt_hidden(hidden);
+                self.chat_widget.for_each_installed_mut(|pane| {
+                    pane.chat_widget.set_rate_limit_switch_prompt_hidden(hidden);
+                });
             }
             AppEvent::UpdatePlanModeReasoningEffort(effort) => {
-                self.on_update_plan_mode_reasoning_effort(effort);
+                let selected_origin = self.chat_widget.origin();
+                self.on_update_plan_mode_reasoning_effort(effort.clone());
+                self.chat_widget.for_each_installed_mut(|pane| {
+                    if pane.origin() != selected_origin {
+                        pane.chat_widget
+                            .sync_plan_mode_reasoning_effort_config(effort.clone());
+                    }
+                });
                 self.sync_active_thread_plan_mode_reasoning_setting(app_server)
                     .await;
             }
@@ -2125,7 +2136,9 @@ impl App {
                 .await
                 {
                     Ok(()) => {
-                        self.chat_widget.update_skill_enabled(path, enabled);
+                        self.chat_widget.for_each_installed_mut(|pane| {
+                            pane.chat_widget.update_skill_enabled(path.clone(), enabled);
+                        });
                     }
                     Err(err) => {
                         let path_display = path.display();
@@ -2161,7 +2174,9 @@ impl App {
                     .await
                 {
                     Ok(_) => {
-                        self.chat_widget.update_connector_enabled(&id, enabled);
+                        self.chat_widget.for_each_installed_mut(|pane| {
+                            pane.chat_widget.update_connector_enabled(&id, enabled);
+                        });
                     }
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(
@@ -2309,7 +2324,10 @@ impl App {
                     Ok(()) => {
                         self.config.tui_status_line = Some(ids.clone());
                         self.config.tui_status_line_use_colors = use_theme_colors;
-                        self.chat_widget.setup_status_line(items, use_theme_colors);
+                        self.chat_widget.for_each_installed_mut(|pane| {
+                            pane.chat_widget
+                                .setup_status_line(items.clone(), use_theme_colors);
+                        });
                     }
                     Err(err) => {
                         let error = format_config_error(&err);
@@ -2385,12 +2403,16 @@ impl App {
                             crate::render::highlight::set_syntax_theme(theme);
                         }
                         self.sync_tui_theme_selection(name);
-                        self.refresh_status_line();
+                        self.chat_widget.for_each_installed_mut(|pane| {
+                            pane.chat_widget.refresh_status_line();
+                        });
                         tui.frame_requester().schedule_frame();
                     }
                     Err(err) => {
                         self.restore_runtime_theme_from_config();
-                        self.refresh_status_line();
+                        self.chat_widget.for_each_installed_mut(|pane| {
+                            pane.chat_widget.refresh_status_line();
+                        });
                         tracing::error!(error = %err, "failed to persist theme selection");
                         self.chat_widget
                             .add_error_message(format!("Failed to save theme: {err}"));
@@ -2398,7 +2420,9 @@ impl App {
                 }
             }
             AppEvent::SyntaxThemePreviewed => {
-                self.refresh_status_line();
+                self.chat_widget.for_each_installed_mut(|pane| {
+                    pane.chat_widget.refresh_status_line();
+                });
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenKeymapActionMenu { context, action } => {
@@ -2506,7 +2530,9 @@ impl App {
     }
 
     fn refresh_plugin_mentions_after_config_write(&mut self) {
-        self.chat_widget.refresh_plugin_mentions();
+        self.chat_widget.for_each_installed_mut(|pane| {
+            pane.chat_widget.refresh_plugin_mentions();
+        });
         self.chat_widget.submit_op(AppCommand::reload_user_config());
     }
 
