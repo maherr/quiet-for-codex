@@ -210,6 +210,7 @@ mod background_requests;
 mod compact_tool_groups;
 mod config_persistence;
 mod conversation_events;
+mod conversation_lifecycle;
 mod conversation_panes;
 mod conversation_retirement;
 mod event_dispatch;
