@@ -3,6 +3,7 @@
 //! This module owns the `App` struct, shared imports, and the high-level run loop that coordinates
 //! the focused app submodules.
 
+use self::owned_screen::OwnedScreen;
 use crate::AppServerTarget;
 use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
@@ -37,6 +38,7 @@ use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ReplayKind;
 use crate::chatwidget::ThreadInputState;
+use crate::conversation_viewport::ConversationViewport;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::split_command_string;
@@ -215,6 +217,7 @@ mod history_pagination;
 mod history_ui;
 mod input;
 mod loaded_threads;
+mod owned_screen;
 mod pending_interactive_replay;
 mod pets;
 mod platform_actions;
@@ -529,6 +532,7 @@ pub(crate) struct App {
     pub(crate) file_search: FileSearchManager,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    owned_screen: Option<OwnedScreen>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -536,11 +540,8 @@ pub(crate) struct App {
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
     initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
-<<<<<<< HEAD
     pub(crate) scrollback_has_older_history: bool,
-=======
     compact_tool_groups_expanded: bool,
->>>>>>> d6a1c425be (Restore compact tool grouping without sticky transcript)
 
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) keymap: RuntimeKeymap,
@@ -777,6 +778,7 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
+        alt_screen_behavior: crate::AltScreenBehavior,
         mut app_server: AppServerSession,
         mut config: Config,
         launch_cwd: PathBuf,
@@ -1038,6 +1040,11 @@ See the Codex keymap documentation for supported actions and examples."
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
+        let owned_screen = Self::owned_screen_for_behavior(
+            alt_screen_behavior,
+            &chat_widget,
+            runtime_keymap.pager.clone(),
+        );
         let mut app = Self {
             model_catalog,
             session_telemetry: session_telemetry.clone(),
@@ -1058,16 +1065,14 @@ See the Codex keymap documentation for supported actions and examples."
             keymap: runtime_keymap,
             key_chord_matcher: KeyChordMatcher::default(),
             transcript_cells: Vec::new(),
+            owned_screen,
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
             initial_history_replay_buffer: None,
-<<<<<<< HEAD
             scrollback_has_older_history: false,
-=======
             compact_tool_groups_expanded: false,
->>>>>>> d6a1c425be (Restore compact tool grouping without sticky transcript)
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
@@ -1398,6 +1403,9 @@ See the Codex keymap documentation for supported actions and examples."
     }
 
     fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui, screen_size: Size) -> Result<Rect> {
+        if let Some(rendered_area) = self.render_owned_screen_frame(tui)? {
+            return Ok(rendered_area);
+        }
         self.with_chat_widget_frame(screen_size.width, |desired_height, chat_widget| {
             let mut rendered_area = Rect::default();
             tui.draw_with_resize_reflow(desired_height, screen_size, |frame| {

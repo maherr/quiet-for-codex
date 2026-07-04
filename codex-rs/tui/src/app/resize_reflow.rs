@@ -126,6 +126,9 @@ impl App {
         cell: &dyn HistoryCell,
         width: u16,
     ) {
+        if self.has_owned_screen() {
+            return;
+        }
         let display = self.display_lines_for_history_insert(cell, width);
         if display.is_empty() {
             return;
@@ -147,6 +150,9 @@ impl App {
     /// Starting this buffer while an overlay owns rendering would split transcript ownership, so
     /// overlay replay continues through the normal deferred-history path.
     pub(super) fn begin_initial_history_replay_buffer(&mut self) {
+        if self.has_owned_screen() {
+            return;
+        }
         if self.overlay.is_none() {
             self.initial_history_replay_buffer = Some(Default::default());
         }
@@ -158,6 +164,9 @@ impl App {
     /// defer terminal writes until the replay is complete and reuse the resize-reflow tail renderer
     /// so only the rows the terminal would retain are formatted and inserted.
     pub(super) fn begin_thread_switch_history_replay_buffer(&mut self) {
+        if self.has_owned_screen() {
+            return;
+        }
         if self.resize_reflow_max_rows().is_some() && self.overlay.is_none() {
             self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
                 retained_lines: VecDeque::new(),
@@ -173,6 +182,10 @@ impl App {
     /// This mirrors terminal scrollback behavior and avoids making startup replay cheaper or more
     /// expensive than a later resize rebuild of the same transcript.
     pub(super) fn finish_initial_history_replay_buffer(&mut self, tui: &mut tui::Tui) {
+        if self.has_owned_screen() {
+            self.initial_history_replay_buffer = None;
+            return;
+        }
         let Some(buffer) = self.initial_history_replay_buffer.take() else {
             return;
         };
@@ -221,6 +234,9 @@ impl App {
         cell: &dyn HistoryCell,
         width: u16,
     ) {
+        if self.has_owned_screen() {
+            return;
+        }
         if self
             .initial_history_replay_buffer
             .as_ref()
@@ -319,6 +335,11 @@ impl App {
     /// source-backed reflow so terminal scrollback reflects the finalized cell instead of the
     /// transient stream rows.
     pub(super) fn maybe_finish_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if self.has_owned_screen() {
+            self.transcript_reflow.clear();
+            tui.frame_requester().schedule_frame();
+            return Ok(());
+        }
         if self.transcript_reflow.take_stream_finish_reflow_needed() {
             self.schedule_immediate_resize_reflow(tui);
             let screen_size = tui.terminal.last_known_screen_size;
@@ -340,6 +361,12 @@ impl App {
     /// replaced as one styled source-backed cell. If this reflow is skipped after a stream-time
     /// resize, the visible scrollback can keep the pre-consolidation wrapping.
     pub(super) fn finish_required_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if self.has_owned_screen() {
+            self.transcript_reflow.clear();
+            tui.frame_requester().schedule_frame();
+            return Ok(());
+        }
+
         // Capped initial replay normally buffers per-cell display rows. A live stream tail is
         // consolidated directly into `transcript_cells`, so any retained rows no longer describe
         // the canonical transcript. Let the replay-end event render the capped transcript tail
@@ -421,6 +448,9 @@ impl App {
         tui: &mut tui::Tui,
         size: ratatui::layout::Size,
     ) -> Result<()> {
+        if self.handle_owned_draw_pre_render(tui)? {
+            return Ok(());
+        }
         let should_rebuild_transcript = self.handle_draw_size_change(
             size,
             tui.terminal.last_known_screen_size,
@@ -447,6 +477,10 @@ impl App {
         tui: &mut tui::Tui,
         screen_size: ratatui::layout::Size,
     ) -> Result<()> {
+        if self.has_owned_screen() {
+            self.transcript_reflow.clear();
+            return Ok(());
+        }
         let Some(deadline) = self.transcript_reflow.pending_until() else {
             return Ok(());
         };
@@ -490,6 +524,11 @@ impl App {
         tui: &mut tui::Tui,
         terminal_width: TerminalWidth,
     ) -> Result<TerminalWidth> {
+        if self.has_owned_screen() {
+            self.transcript_reflow.clear();
+            tui.clear_pending_history_lines();
+            return Ok(terminal_width);
+        }
         let width = self.chat_widget.history_wrap_width(terminal_width.0);
         if self.transcript_cells.is_empty() {
             // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
@@ -552,6 +591,12 @@ impl App {
         tui: &mut tui::Tui,
         terminal_width: TerminalWidth,
     ) -> Result<()> {
+        if self.has_owned_screen() {
+            self.sync_owned_screen_cells();
+            self.transcript_reflow.clear();
+            tui.clear_pending_history_lines();
+            return Ok(());
+        }
         let width = self.chat_widget.history_wrap_width(terminal_width.0);
         let reflowed_lines = if self.transcript_cells.is_empty() {
             self.reset_history_emission_state();
