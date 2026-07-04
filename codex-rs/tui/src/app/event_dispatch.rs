@@ -432,15 +432,16 @@ impl App {
                 self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
             AppEvent::ConsolidateProposedPlan(source) => {
-                let end = self.transcript_cells.len();
+                let end = self.chat_widget.transcript_cells.len();
                 let start = trailing_run_start::<history_cell::ProposedPlanStreamCell>(
-                    &self.transcript_cells,
+                    &self.chat_widget.transcript_cells,
                 );
                 let consolidated: Arc<dyn HistoryCell> =
                     Arc::new(history_cell::new_proposed_plan(source, &self.config.cwd));
 
                 if start < end {
-                    self.transcript_cells
+                    self.chat_widget
+                        .transcript_cells
                         .splice(start..end, std::iter::once(consolidated.clone()));
                     self.sync_owned_screen_cells();
 
@@ -451,7 +452,7 @@ impl App {
 
                     self.finish_required_stream_reflow(tui)?;
                 } else {
-                    self.transcript_cells.push(consolidated.clone());
+                    self.chat_widget.transcript_cells.push(consolidated.clone());
                     self.owned_screen_push_cell(consolidated.clone());
                     if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                         t.insert_cell(consolidated.clone());
@@ -471,12 +472,13 @@ impl App {
             }
             AppEvent::StartCommitAnimation => {
                 if self
+                    .chat_widget
                     .commit_anim_running
                     .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
                 {
                     let tx = self.app_event_tx.clone();
-                    let running = self.commit_anim_running.clone();
+                    let running = self.chat_widget.commit_anim_running.clone();
                     thread::spawn(move || {
                         while running.load(Ordering::Relaxed) {
                             thread::sleep(COMMIT_ANIMATION_TICK);
@@ -486,7 +488,9 @@ impl App {
                 }
             }
             AppEvent::StopCommitAnimation => {
-                self.commit_anim_running.store(false, Ordering::Release);
+                self.chat_widget
+                    .commit_anim_running
+                    .store(false, Ordering::Release);
             }
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
@@ -518,8 +522,8 @@ impl App {
                 if is_user_turn {
                     let screen_size = tui.terminal.last_known_screen_size;
                     self.handle_draw_pre_render(tui, screen_size)?;
-                    if self.transcript_reflow.has_pending_reflow() {
-                        self.transcript_reflow.schedule_immediate();
+                    if self.chat_widget.transcript_reflow.has_pending_reflow() {
+                        self.chat_widget.transcript_reflow.schedule_immediate();
                         self.maybe_run_resize_reflow(tui, screen_size)?;
                     }
                     self.chat_widget.pre_draw_tick();
@@ -942,7 +946,8 @@ impl App {
                 );
             }
             AppEvent::StartFileSearch(query) => {
-                self.file_search
+                self.chat_widget
+                    .file_search
                     .on_user_query(query, self.app_event_tx.clone());
             }
             AppEvent::FileSearchResult { query, matches } => {
@@ -2615,8 +2620,10 @@ impl App {
             ExitMode::ShutdownFirst => {
                 // Mark the thread we are explicitly shutting down for exit so
                 // its shutdown completion does not trigger agent failover.
-                self.pending_shutdown_exit_thread_id =
-                    self.active_thread_id.or(self.chat_widget.thread_id());
+                self.pending_shutdown_exit_thread_id = self
+                    .chat_widget
+                    .active_thread_id
+                    .or(self.chat_widget.thread_id());
                 if self.pending_shutdown_exit_thread_id.is_some() {
                     // This is a UI escape-hatch budget, not a protocol
                     // deadline. A healthy local thread/unsubscribe round trip
@@ -2647,7 +2654,11 @@ impl App {
         &mut self,
         app_server: &mut AppServerSession,
     ) -> AppRunControl {
-        let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) else {
+        let Some(thread_id) = self
+            .chat_widget
+            .active_thread_id
+            .or(self.chat_widget.thread_id())
+        else {
             self.chat_widget
                 .add_error_message("A thread must start before it can be archived.".to_string());
             return AppRunControl::Continue;
@@ -2674,7 +2685,11 @@ impl App {
         &mut self,
         app_server: &mut AppServerSession,
     ) -> AppRunControl {
-        let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) else {
+        let Some(thread_id) = self
+            .chat_widget
+            .active_thread_id
+            .or(self.chat_widget.thread_id())
+        else {
             self.chat_widget
                 .add_error_message("A thread must start before it can be deleted.".to_string());
             return AppRunControl::Continue;

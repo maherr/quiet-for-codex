@@ -220,7 +220,7 @@ async fn next_thread_settings_updated(
 #[tokio::test]
 async fn handle_mcp_inventory_result_respects_origin_thread() {
     let mut app = make_test_app().await;
-    app.transcript_cells
+    app.chat_widget.transcript_cells
         .push(Arc::new(history_cell::new_mcp_inventory_loading(
             /*animations_enabled*/ false,
         )));
@@ -238,10 +238,10 @@ async fn handle_mcp_inventory_result_respects_origin_thread() {
         /*thread_id*/ None,
     );
 
-    assert_eq!(app.transcript_cells.len(), 0);
+    assert_eq!(app.chat_widget.transcript_cells.len(), 0);
 
-    app.active_thread_id = Some(ThreadId::new());
-    app.transcript_cells
+    app.chat_widget.active_thread_id = Some(ThreadId::new());
+    app.chat_widget.transcript_cells
         .push(Arc::new(history_cell::new_mcp_inventory_loading(
             /*animations_enabled*/ false,
         )));
@@ -252,7 +252,7 @@ async fn handle_mcp_inventory_result_respects_origin_thread() {
         Some(ThreadId::new()),
     );
 
-    assert_eq!(app.transcript_cells.len(), 1);
+    assert_eq!(app.chat_widget.transcript_cells.len(), 1);
 }
 
 #[test]
@@ -416,7 +416,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     let initial_prompt = "follow-up after replay".to_string();
     let config = app.config.clone();
     let model = get_model_offline_for_tests(config.model.as_deref());
-    app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
+    app.chat_widget.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
         config,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
@@ -723,7 +723,7 @@ async fn replay_thread_snapshot_restores_draft_and_queued_input() {
 
     let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
         make_chatwidget_manual_with_sender().await;
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
 
     app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ true);
 
@@ -783,7 +783,7 @@ async fn replay_thread_snapshot_restores_the_matching_safety_buffer_prompt() {
         test_path_buf("/tmp/other-project"),
     ));
     chat_widget.submit_user_message_with_mode("buffered prompt B".to_string(), default_mode);
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
     app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
 
     assert_eq!(
@@ -837,7 +837,7 @@ async fn replayed_turn_complete_submits_restored_queued_follow_up() {
 
     let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
         make_chatwidget_manual_with_sender().await;
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
     app.chat_widget.handle_thread_session(session.clone());
     while new_op_rx.try_recv().is_ok() {}
     app.replay_thread_snapshot(
@@ -889,7 +889,7 @@ async fn replay_only_thread_keeps_restored_queue_visible() {
 
     let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
         make_chatwidget_manual_with_sender().await;
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
     app.chat_widget.handle_thread_session(session.clone());
     while new_op_rx.try_recv().is_ok() {}
 
@@ -940,7 +940,7 @@ async fn replay_thread_snapshot_keeps_queue_when_running_state_only_comes_from_s
 
     let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
         make_chatwidget_manual_with_sender().await;
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
     app.chat_widget.handle_thread_session(session.clone());
     while new_op_rx.try_recv().is_ok() {}
 
@@ -989,7 +989,7 @@ async fn replay_thread_snapshot_in_progress_turn_restores_running_queue_state() 
 
     let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
         make_chatwidget_manual_with_sender().await;
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
     app.chat_widget.handle_thread_session(session.clone());
     while new_op_rx.try_recv().is_ok() {}
 
@@ -1019,7 +1019,7 @@ async fn replay_thread_snapshot_in_progress_turn_restores_running_state_without_
     let thread_id = ThreadId::new();
     let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
     let (chat_widget, _app_event_tx, _rx, _new_op_rx) = make_chatwidget_manual_with_sender().await;
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
     app.chat_widget.handle_thread_session(session);
 
     app.replay_thread_snapshot(
@@ -1060,7 +1060,7 @@ async fn replay_thread_snapshot_does_not_submit_queue_before_replay_catches_up()
 
     let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
         make_chatwidget_manual_with_sender().await;
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
     app.chat_widget.handle_thread_session(session.clone());
     while new_op_rx.try_recv().is_ok() {}
 
@@ -1146,7 +1146,7 @@ async fn replay_thread_snapshot_restores_pending_pastes_for_submit() {
 
     let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
         make_chatwidget_manual_with_sender().await;
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
     app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ true);
 
     assert_eq!(app.chat_widget.composer_text_with_pending(), large);
@@ -1191,7 +1191,7 @@ async fn replay_thread_snapshot_restores_collaboration_mode_for_draft_submit() {
 
     let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
         make_chatwidget_manual_with_sender().await;
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
     app.chat_widget.handle_thread_session(session.clone());
     app.chat_widget
         .set_reasoning_effort(Some(ReasoningEffortConfig::Low));
@@ -1272,7 +1272,7 @@ async fn replay_thread_snapshot_restores_collaboration_mode_without_input() {
         .expect("expected collaboration-only input state");
 
     let (chat_widget, _app_event_tx, _rx, _new_op_rx) = make_chatwidget_manual_with_sender().await;
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
     app.chat_widget.handle_thread_session(session.clone());
     app.chat_widget
         .set_reasoning_effort(Some(ReasoningEffortConfig::Low));
@@ -1331,7 +1331,7 @@ async fn replayed_interrupted_turn_restores_queued_input_to_composer() {
 
     let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
         make_chatwidget_manual_with_sender().await;
-    app.chat_widget = chat_widget;
+    app.chat_widget.chat_widget = chat_widget;
     app.chat_widget.handle_thread_session(session.clone());
     while new_op_rx.try_recv().is_ok() {}
 
@@ -2196,7 +2196,7 @@ async fn select_uncached_agent_thread_still_refreshes_liveness() -> Result<()> {
 
     Box::pin(app.select_agent_thread(&mut tui, &mut app_server, thread_id)).await?;
 
-    assert_eq!(app.active_thread_id, None);
+    assert_eq!(app.chat_widget.active_thread_id, None);
     assert_eq!(app.agent_navigation.get(&thread_id), None);
     app_server.shutdown().await?;
     Ok(())
@@ -2300,7 +2300,7 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
             Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
         let started = app_server.start_thread(&app.config).await?;
         let thread_id = started.session.thread_id;
-        app.active_thread_id = Some(thread_id);
+        app.chat_widget.active_thread_id = Some(thread_id);
 
         Box::pin(app.update_memory_settings_with_app_server(
             &mut app_server,
@@ -2803,7 +2803,7 @@ async fn refresh_pending_thread_approvals_only_lists_inactive_threads() {
         ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread");
 
     app.primary_thread_id = Some(main_thread_id);
-    app.active_thread_id = Some(main_thread_id);
+    app.chat_widget.active_thread_id = Some(main_thread_id);
     app.thread_event_channels
         .insert(main_thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
@@ -2832,7 +2832,7 @@ async fn refresh_pending_thread_approvals_only_lists_inactive_threads() {
         &["Robie [explorer]".to_string()]
     );
 
-    app.active_thread_id = Some(agent_thread_id);
+    app.chat_widget.active_thread_id = Some(agent_thread_id);
     app.refresh_pending_thread_approvals().await;
     assert!(app.chat_widget.pending_thread_approvals().is_empty());
 }
@@ -2846,7 +2846,7 @@ async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
         ThreadId::from_string("00000000-0000-0000-0000-000000000022").expect("valid thread");
 
     app.primary_thread_id = Some(main_thread_id);
-    app.active_thread_id = Some(main_thread_id);
+    app.chat_widget.active_thread_id = Some(main_thread_id);
     app.thread_event_channels
         .insert(main_thread_id, ThreadEventChannel::new(/*capacity*/ 1));
     app.thread_event_channels.insert(
@@ -2898,7 +2898,7 @@ async fn side_defers_parent_approval_overlay_until_parent_replay() -> Result<()>
         ThreadId::from_string("00000000-0000-0000-0000-000000000022").expect("valid thread");
 
     app.primary_thread_id = Some(parent_thread_id);
-    app.active_thread_id = Some(side_thread_id);
+    app.chat_widget.active_thread_id = Some(side_thread_id);
     app.side_threads
         .insert(side_thread_id, SideThreadState::new(parent_thread_id));
     app.thread_event_channels.insert(
@@ -2939,7 +2939,7 @@ async fn side_defers_parent_approval_overlay_until_parent_replay() -> Result<()>
         store.snapshot()
     };
     app.side_threads.remove(&side_thread_id);
-    app.active_thread_id = Some(parent_thread_id);
+    app.chat_widget.active_thread_id = Some(parent_thread_id);
     app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
 
     assert_eq!(app.chat_widget.has_active_view(), true);
@@ -3007,7 +3007,7 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
         ThreadId::from_string("00000000-0000-0000-0000-000000000044").expect("valid thread");
 
     app.primary_thread_id = Some(main_thread_id);
-    app.active_thread_id = Some(side_thread_id);
+    app.chat_widget.active_thread_id = Some(side_thread_id);
     app.side_threads
         .insert(side_thread_id, SideThreadState::new(main_thread_id));
     app.thread_event_channels.insert(
@@ -3061,7 +3061,7 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
     );
 
     app.side_threads.remove(&side_thread_id);
-    app.active_thread_id = Some(main_thread_id);
+    app.chat_widget.active_thread_id = Some(main_thread_id);
     assert_eq!(
         app.pending_inactive_thread_requests().await,
         vec![(agent_thread_id, pending_approval)]
@@ -3396,7 +3396,7 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
         ThreadId::from_string("00000000-0000-0000-0000-000000000202").expect("valid thread");
 
     app.primary_thread_id = Some(main_thread_id);
-    app.active_thread_id = Some(main_thread_id);
+    app.chat_widget.active_thread_id = Some(main_thread_id);
     app.thread_event_channels
         .insert(main_thread_id, ThreadEventChannel::new(/*capacity*/ 1));
     app.thread_event_channels.insert(
@@ -3466,7 +3466,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     };
 
     app.primary_thread_id = Some(main_thread_id);
-    app.active_thread_id = Some(main_thread_id);
+    app.chat_widget.active_thread_id = Some(main_thread_id);
     app.primary_session_configured = Some(primary_session.clone());
     app.thread_event_channels.insert(
         main_thread_id,
@@ -3577,7 +3577,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     };
 
     app.primary_thread_id = Some(main_thread_id);
-    app.active_thread_id = Some(main_thread_id);
+    app.chat_widget.active_thread_id = Some(main_thread_id);
     app.primary_session_configured = Some(primary_session.clone());
     app.thread_event_channels.insert(
         main_thread_id,
@@ -3803,7 +3803,7 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
     assert!(developer_instructions.contains("non-mutating inspection"));
     assert!(developer_instructions.contains("Do not modify files"));
     assert!(developer_instructions.contains("Do not request escalated permissions"));
-    assert!(app.transcript_cells.is_empty());
+    assert!(app.chat_widget.transcript_cells.is_empty());
 }
 
 #[tokio::test]
@@ -3867,10 +3867,10 @@ async fn side_start_block_message_allows_replacing_open_side_conversation() {
     app.side_threads
         .insert(side_thread_id, SideThreadState::new(parent_thread_id));
 
-    app.active_thread_id = Some(parent_thread_id);
+    app.chat_widget.active_thread_id = Some(parent_thread_id);
     assert_eq!(app.side_start_block_message(), None);
 
-    app.active_thread_id = Some(side_thread_id);
+    app.chat_widget.active_thread_id = Some(side_thread_id);
     assert_eq!(
         app.side_start_block_message(),
         Some(
@@ -3888,7 +3888,7 @@ async fn side_parent_status_tracks_parent_turn_lifecycle() -> Result<()> {
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
     app.primary_thread_id = Some(parent_thread_id);
-    app.active_thread_id = Some(side_thread_id);
+    app.chat_widget.active_thread_id = Some(side_thread_id);
     app.side_threads
         .insert(side_thread_id, SideThreadState::new(parent_thread_id));
 
@@ -3937,7 +3937,7 @@ async fn side_parent_status_prioritizes_input_over_approval() -> Result<()> {
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
     app.primary_thread_id = Some(parent_thread_id);
-    app.active_thread_id = Some(side_thread_id);
+    app.chat_widget.active_thread_id = Some(side_thread_id);
     app.side_threads
         .insert(side_thread_id, SideThreadState::new(parent_thread_id));
 
@@ -4123,7 +4123,7 @@ async fn primary_thread_ignores_child_mcp_startup_notifications() {
     let parent_thread_id = ThreadId::new();
     let child_thread_id = ThreadId::new();
     app.primary_thread_id = Some(parent_thread_id);
-    app.active_thread_id = Some(parent_thread_id);
+    app.chat_widget.active_thread_id = Some(parent_thread_id);
 
     app.handle_app_server_event(
         &app_server,
@@ -4198,7 +4198,7 @@ async fn app_scoped_mcp_startup_notifications_do_not_render_in_active_thread() {
         .expect("embedded app server");
     let thread_id = ThreadId::new();
     app.primary_thread_id = Some(thread_id);
-    app.active_thread_id = Some(thread_id);
+    app.chat_widget.active_thread_id = Some(thread_id);
 
     app.handle_app_server_event(
         &app_server,
@@ -4327,7 +4327,7 @@ async fn side_discard_selection_keeps_current_side_thread() {
     let mut app = make_test_app().await;
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
-    app.active_thread_id = Some(side_thread_id);
+    app.chat_widget.active_thread_id = Some(side_thread_id);
     app.side_threads
         .insert(side_thread_id, SideThreadState::new(parent_thread_id));
 
@@ -4340,7 +4340,7 @@ async fn side_discard_selection_keeps_current_side_thread() {
         Some(side_thread_id)
     );
 
-    app.active_thread_id = Some(parent_thread_id);
+    app.chat_widget.active_thread_id = Some(parent_thread_id);
     assert_eq!(
         app.side_thread_to_discard_after_switch(ThreadId::new()),
         Some(side_thread_id)
@@ -4390,7 +4390,7 @@ async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Resu
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
         let parent_thread_id = ThreadId::new();
         let side_thread_id = ThreadId::new();
-        app.active_thread_id = Some(side_thread_id);
+        app.chat_widget.active_thread_id = Some(side_thread_id);
         app.side_threads
             .insert(side_thread_id, SideThreadState::new(parent_thread_id));
         app.agent_navigation.upsert(
@@ -4405,7 +4405,7 @@ async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Resu
                 .await
         );
 
-        assert_eq!(app.active_thread_id, Some(side_thread_id));
+        assert_eq!(app.chat_widget.active_thread_id, Some(side_thread_id));
         assert_eq!(
             app.side_threads
                 .get(&side_thread_id)
@@ -4479,7 +4479,7 @@ async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
     let mut app = make_test_app().await;
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
-    app.active_thread_id = Some(side_thread_id);
+    app.chat_widget.active_thread_id = Some(side_thread_id);
     app.side_threads
         .insert(side_thread_id, SideThreadState::new(parent_thread_id));
     app.thread_event_channels
@@ -4493,7 +4493,7 @@ async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
 
     app.discard_closed_side_thread(side_thread_id).await;
 
-    assert_eq!(app.active_thread_id, None);
+    assert_eq!(app.chat_widget.active_thread_id, None);
     assert!(!app.side_threads.contains_key(&side_thread_id));
     assert!(!app.thread_event_channels.contains_key(&side_thread_id));
     assert_eq!(app.agent_navigation.get(&side_thread_id), None);
@@ -4502,7 +4502,7 @@ async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
 #[tokio::test]
 async fn active_non_primary_shutdown_target_returns_none_for_non_shutdown_event() -> Result<()> {
     let mut app = make_test_app().await;
-    app.active_thread_id = Some(ThreadId::new());
+    app.chat_widget.active_thread_id = Some(ThreadId::new());
     app.primary_thread_id = Some(ThreadId::new());
 
     assert_eq!(
@@ -4519,7 +4519,7 @@ async fn active_non_primary_shutdown_target_returns_none_for_primary_thread_shut
 {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
-    app.active_thread_id = Some(thread_id);
+    app.chat_widget.active_thread_id = Some(thread_id);
     app.primary_thread_id = Some(thread_id);
 
     assert_eq!(
@@ -4534,7 +4534,7 @@ async fn active_non_primary_shutdown_target_returns_ids_for_non_primary_shutdown
     let mut app = make_test_app().await;
     let active_thread_id = ThreadId::new();
     let primary_thread_id = ThreadId::new();
-    app.active_thread_id = Some(active_thread_id);
+    app.chat_widget.active_thread_id = Some(active_thread_id);
     app.primary_thread_id = Some(primary_thread_id);
 
     assert_eq!(
@@ -4550,7 +4550,7 @@ async fn active_non_primary_shutdown_target_returns_none_when_shutdown_exit_is_p
     let mut app = make_test_app().await;
     let active_thread_id = ThreadId::new();
     let primary_thread_id = ThreadId::new();
-    app.active_thread_id = Some(active_thread_id);
+    app.chat_widget.active_thread_id = Some(active_thread_id);
     app.primary_thread_id = Some(primary_thread_id);
     app.pending_shutdown_exit_thread_id = Some(active_thread_id);
 
@@ -4567,7 +4567,7 @@ async fn active_non_primary_shutdown_target_still_switches_for_other_pending_exi
     let mut app = make_test_app().await;
     let active_thread_id = ThreadId::new();
     let primary_thread_id = ThreadId::new();
-    app.active_thread_id = Some(active_thread_id);
+    app.chat_widget.active_thread_id = Some(active_thread_id);
     app.primary_thread_id = Some(primary_thread_id);
     app.pending_shutdown_exit_thread_id = Some(ThreadId::new());
 
@@ -4656,7 +4656,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
         )) as Arc<dyn HistoryCell>
     };
 
-    app.transcript_cells = vec![
+    app.chat_widget.transcript_cells = vec![
         make_header(true),
         Arc::new(crate::history_cell::new_info_event(
             "startup tip that used to replay".to_string(),
@@ -4755,6 +4755,13 @@ async fn make_test_app() -> App {
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let Ok(chat_widget) = ConversationPanes::new_parent(ConversationPaneInit {
+        chat_widget,
+        file_search,
+        owned_screen: None,
+    }) else {
+        unreachable!("test chat widget must use the parent pane scope");
+    };
 
     App {
         model_catalog: chat_widget.model_catalog(),
@@ -4771,20 +4778,13 @@ async fn make_test_app() -> App {
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         runtime_approval_policy_override: None,
         runtime_permission_profile_override: None,
-        file_search,
-        transcript_cells: Vec::new(),
-        owned_screen: None,
         overlay: None,
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,
-        transcript_reflow: TranscriptReflowState::default(),
-        initial_history_replay_buffer: None,
         scrollback_has_older_history: false,
-        compact_tool_groups_expanded: false,
         enhanced_keys_supported: false,
         keymap: crate::keymap::RuntimeKeymap::defaults(),
         key_chord_matcher: crate::keymap::KeyChordMatcher::default(),
-        commit_anim_running: Arc::new(AtomicBool::new(false)),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         skill_load_warnings: SkillLoadWarningState::default(),
@@ -4802,8 +4802,6 @@ async fn make_test_app() -> App {
         agent_navigation: AgentNavigationState::default(),
         side_threads: HashMap::new(),
         abandoned_side_threads: HashSet::new(),
-        active_thread_id: None,
-        active_thread_rx: None,
         primary_thread_id: None,
         last_subagent_backfill_attempt: None,
         primary_session_configured: None,
@@ -4826,6 +4824,13 @@ async fn make_test_app_with_channels() -> (
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let Ok(chat_widget) = ConversationPanes::new_parent(ConversationPaneInit {
+        chat_widget,
+        file_search,
+        owned_screen: None,
+    }) else {
+        unreachable!("test chat widget must use the parent pane scope");
+    };
 
     (
         App {
@@ -4843,20 +4848,13 @@ async fn make_test_app_with_channels() -> (
             cloud_config_bundle: CloudConfigBundleLoader::default(),
             runtime_approval_policy_override: None,
             runtime_permission_profile_override: None,
-            file_search,
-            transcript_cells: Vec::new(),
-            owned_screen: None,
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
-            transcript_reflow: TranscriptReflowState::default(),
-            initial_history_replay_buffer: None,
             scrollback_has_older_history: false,
-            compact_tool_groups_expanded: false,
             enhanced_keys_supported: false,
             keymap: crate::keymap::RuntimeKeymap::defaults(),
             key_chord_matcher: crate::keymap::KeyChordMatcher::default(),
-            commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             skill_load_warnings: SkillLoadWarningState::default(),
@@ -4874,8 +4872,6 @@ async fn make_test_app_with_channels() -> (
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
             abandoned_side_threads: HashSet::new(),
-            active_thread_id: None,
-            active_thread_rx: None,
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
@@ -5152,7 +5148,7 @@ fn rendered_line_text(line: &crate::terminal_hyperlinks::HyperlinkLine) -> Strin
 async fn capped_resize_reflow_renders_recent_suffix_only() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(5);
-    app.transcript_cells = (0..20)
+    app.chat_widget.transcript_cells = (0..20)
         .map(|i| plain_line_cell(format!("cell {i}")))
         .collect();
 
@@ -5180,7 +5176,7 @@ async fn capped_resize_reflow_renders_recent_suffix_only() {
 async fn uncapped_resize_reflow_renders_all_cells_when_row_cap_absent() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
-    app.transcript_cells = (0..20)
+    app.chat_widget.transcript_cells = (0..20)
         .map(|i| plain_line_cell(format!("cell {i}")))
         .collect();
 
@@ -5195,7 +5191,7 @@ async fn uncapped_resize_reflow_renders_all_cells_when_row_cap_absent() {
 async fn resize_reflow_wraps_transcript_early_when_pet_is_enabled() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
-    app.transcript_cells = vec![Arc::new(AgentMarkdownCell::new(
+    app.chat_widget.transcript_cells = vec![Arc::new(AgentMarkdownCell::new(
         "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda".to_string(),
         Path::new("/tmp"),
     ))];
@@ -5221,7 +5217,7 @@ async fn resize_reflow_wraps_transcript_early_when_pet_is_enabled() {
 async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(100);
-    app.transcript_cells = (0..3)
+    app.chat_widget.transcript_cells = (0..3)
         .map(|i| plain_line_cell(format!("cell {i}")))
         .collect();
 
@@ -5251,7 +5247,7 @@ async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
     app.begin_initial_history_replay_buffer();
     for index in 0..5 {
         App::buffer_initial_history_replay_display_lines(
-            app.initial_history_replay_buffer
+            app.chat_widget.initial_history_replay_buffer
                 .as_mut()
                 .expect("initial replay buffer active"),
             vec![Line::from(format!("line {index}")).into()],
@@ -5281,7 +5277,7 @@ async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
 async fn required_stream_reflow_during_capped_initial_replay_uses_transcript_tail() -> Result<()> {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(20);
-    app.transcript_cells = vec![
+    app.chat_widget.transcript_cells = vec![
         plain_line_cell("latest user question"),
         Arc::new(AgentMarkdownCell::new(
             "Final answer:\n\n| Pattern | Outcome |\n| --- | --- |\n| Table tail | Preserved |"
@@ -5292,7 +5288,7 @@ async fn required_stream_reflow_during_capped_initial_replay_uses_transcript_tai
 
     app.begin_initial_history_replay_buffer();
     App::buffer_initial_history_replay_display_lines(
-        app.initial_history_replay_buffer
+        app.chat_widget.initial_history_replay_buffer
             .as_mut()
             .expect("initial replay buffer active"),
         vec![Line::from("latest user question").into()],
@@ -5326,8 +5322,8 @@ async fn required_stream_reflow_during_capped_initial_replay_uses_transcript_tai
     );
 
     app.finish_initial_history_replay_buffer(&mut tui);
-    assert!(app.initial_history_replay_buffer.is_none());
-    assert!(app.transcript_reflow.has_pending_reflow());
+    assert!(app.chat_widget.initial_history_replay_buffer.is_none());
+    assert!(app.chat_widget.transcript_reflow.has_pending_reflow());
     Ok(())
 }
 
@@ -5336,7 +5332,7 @@ async fn directive_only_completion_removes_streamed_directive() -> Result<()> {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(20);
     app.begin_initial_history_replay_buffer();
-    app.transcript_cells = vec![
+    app.chat_widget.transcript_cells = vec![
         plain_line_cell("before directive"),
         Arc::new(AgentMessageCell::new(
             vec![Line::from(r#"::git-stage{cwd="/tmp"}"#)],
@@ -5372,7 +5368,7 @@ async fn required_stream_reflow_during_capped_initial_replay_survives_transcript
 -> Result<()> {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(7);
-    app.transcript_cells = vec![
+    app.chat_widget.transcript_cells = vec![
         plain_line_cell("latest user question"),
         Arc::new(AgentMessageCell::new(
             vec![Line::from("stale streamed table tail")],
@@ -5382,7 +5378,7 @@ async fn required_stream_reflow_during_capped_initial_replay_survives_transcript
 
     app.begin_initial_history_replay_buffer();
     App::buffer_initial_history_replay_display_lines(
-        app.initial_history_replay_buffer
+        app.chat_widget.initial_history_replay_buffer
             .as_mut()
             .expect("initial replay buffer active"),
         vec![Line::from("stale streamed table tail").into()],
@@ -5403,16 +5399,16 @@ async fn required_stream_reflow_during_capped_initial_replay_survives_transcript
     assert!(tui.is_alt_screen_active());
 
     app.finish_initial_history_replay_buffer(&mut tui);
-    assert!(app.initial_history_replay_buffer.is_none());
-    assert!(app.transcript_reflow.has_pending_reflow());
+    assert!(app.chat_widget.initial_history_replay_buffer.is_none());
+    assert!(app.chat_widget.transcript_reflow.has_pending_reflow());
 
     let screen_size = tui.terminal.last_known_screen_size;
     app.maybe_run_resize_reflow(&mut tui, screen_size)?;
-    assert!(app.transcript_reflow.has_pending_reflow());
+    assert!(app.chat_widget.transcript_reflow.has_pending_reflow());
 
     app.close_transcript_overlay(&mut tui);
     assert!(!tui.is_alt_screen_active());
-    assert!(app.transcript_reflow.has_pending_reflow());
+    assert!(app.chat_widget.transcript_reflow.has_pending_reflow());
 
     let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
     assert_eq!(rendered.lines.len(), 7);
@@ -5450,7 +5446,7 @@ async fn thread_switch_replay_buffer_is_disabled_without_row_cap() {
 
     app.begin_thread_switch_history_replay_buffer();
 
-    assert!(app.initial_history_replay_buffer.is_none());
+    assert!(app.chat_widget.initial_history_replay_buffer.is_none());
 }
 
 #[tokio::test]
@@ -5469,7 +5465,7 @@ async fn height_shrink_schedules_resize_reflow() {
         ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
         &frame_requester,
     ));
-    assert!(app.transcript_reflow.has_pending_reflow());
+    assert!(app.chat_widget.transcript_reflow.has_pending_reflow());
 }
 
 #[tokio::test]
@@ -5946,7 +5942,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
 
     // Simulate a transcript with duplicated history (e.g., from prior backtracks)
     // and an edited turn appended after a session header boundary.
-    app.transcript_cells = vec![
+    app.chat_widget.transcript_cells = vec![
         make_header(true),
         user_cell("first question", Vec::new(), Vec::new(), Vec::new()),
         agent_cell("answer first"),
@@ -5964,7 +5960,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
         agent_cell("answer edited"),
     ];
 
-    assert_eq!(user_count(&app.transcript_cells), 2);
+    assert_eq!(user_count(&app.chat_widget.transcript_cells), 2);
     let transcript_before: Vec<String> = app
         .transcript_cells
         .iter()
@@ -5998,7 +5994,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
 
     app.backtrack.base_id = Some(base_id);
     app.backtrack.primed = true;
-    app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
+    app.backtrack.nth_user_message = user_count(&app.chat_widget.transcript_cells).saturating_sub(1);
 
     let selection = app
         .confirm_backtrack_from_main()
@@ -6785,7 +6781,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
     while let Ok(event) = app_event_rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event {
             let cell: Arc<dyn HistoryCell> = cell.into();
-            app.transcript_cells.push(cell);
+            app.chat_widget.transcript_cells.push(cell);
         }
     }
 
@@ -6840,13 +6836,13 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         terminal_title_invalid_items_warned: app.terminal_title_invalid_items_warned.clone(),
         session_telemetry: app.session_telemetry.clone(),
     });
-    let retired_commit_anim_running = app.commit_anim_running.clone();
+    let retired_commit_anim_running = app.chat_widget.commit_anim_running.clone();
     retired_commit_anim_running.store(/*val*/ true, Ordering::Release);
     app.replace_chat_widget(replacement);
-    assert!(!app.commit_anim_running.load(Ordering::Acquire));
+    assert!(!app.chat_widget.commit_anim_running.load(Ordering::Acquire));
     assert!(!retired_commit_anim_running.load(Ordering::Acquire));
     assert!(!Arc::ptr_eq(
-        &app.commit_anim_running,
+        &app.chat_widget.commit_anim_running,
         &retired_commit_anim_running
     ));
 
@@ -6972,7 +6968,7 @@ async fn late_usage_result_can_follow_finalized_plan() {
     };
 
     app.chat_widget.note_stream_consolidation_queued();
-    app.transcript_cells
+    app.chat_widget.transcript_cells
         .push(Arc::new(history_cell::new_proposed_plan_stream(
             vec![Line::from("finalized plan")],
             /*is_stream_continuation*/ false,
@@ -7046,7 +7042,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
 async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
-    app.active_thread_id = Some(thread_id);
+    app.chat_widget.active_thread_id = Some(thread_id);
 
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
@@ -7066,7 +7062,7 @@ async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails()
 async fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() {
     let (mut app, _app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
     let thread_id = ThreadId::new();
-    app.active_thread_id = Some(thread_id);
+    app.chat_widget.active_thread_id = Some(thread_id);
 
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
@@ -7546,7 +7542,7 @@ async fn selecting_cyber_model_respects_auto_review_requirements() {
 async fn thread_setting_update_params_sync_model_and_default_reasoning() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
-    app.active_thread_id = Some(thread_id);
+    app.chat_widget.active_thread_id = Some(thread_id);
 
     app.chat_widget.set_model("gpt-5.4");
     let params = app
@@ -7610,7 +7606,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
     };
 
     app.primary_thread_id = Some(primary_thread_id);
-    app.active_thread_id = Some(primary_thread_id);
+    app.chat_widget.active_thread_id = Some(primary_thread_id);
     app.primary_session_configured = Some(primary_session.clone());
     app.thread_event_channels.insert(
         primary_thread_id,
@@ -7724,14 +7720,14 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
         });
     app.chat_widget
         .apply_external_edit("draft prompt".to_string());
-    app.transcript_cells = vec![Arc::new(UserHistoryCell {
+    app.chat_widget.transcript_cells = vec![Arc::new(UserHistoryCell {
         message: "old message".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
         remote_image_urls: Vec::new(),
     }) as Arc<dyn HistoryCell>];
     app.overlay = Some(Overlay::new_transcript(
-        app.transcript_cells.clone(),
+        app.chat_widget.transcript_cells.clone(),
         crate::keymap::RuntimeKeymap::defaults().pager,
     ));
     app.deferred_history_lines = vec![Line::from("stale buffered line").into()];
@@ -7744,7 +7740,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     app.reset_transcript_state_after_clear();
 
     assert!(app.overlay.is_none());
-    assert!(app.transcript_cells.is_empty());
+    assert!(app.chat_widget.transcript_cells.is_empty());
     assert!(app.deferred_history_lines.is_empty());
     assert!(!app.has_emitted_history_lines);
     assert!(!app.backtrack.primed);
@@ -7860,7 +7856,7 @@ async fn chat_widget_op_keeps_its_origin_thread_after_focus_moves() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let config = app.config.clone();
     let model = get_model_offline_for_tests(config.model.as_deref());
-    app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
+    app.chat_widget.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
         config,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
@@ -7890,7 +7886,7 @@ async fn chat_widget_op_keeps_its_origin_thread_after_focus_moves() {
     while app_event_rx.try_recv().is_ok() {}
 
     app.chat_widget.submit_op(Op::compact());
-    app.active_thread_id = Some(ThreadId::new());
+    app.chat_widget.active_thread_id = Some(ThreadId::new());
 
     let event = app_event_rx
         .try_recv()

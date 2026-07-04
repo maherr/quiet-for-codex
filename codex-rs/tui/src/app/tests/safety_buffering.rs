@@ -567,7 +567,10 @@ goals = true
     .await;
 
     assert_eq!(app.primary_thread_id, Some(primary_thread_id));
-    assert_eq!(app.active_thread_id, Some(source_thread_id));
+    assert_eq!(
+        app.chat_widget.active_thread_id,
+        Some(source_thread_id)
+    );
     assert_eq!(app.chat_widget.thread_id(), Some(source_thread_id));
     app.primary_thread_id = Some(source_thread_id);
     while app_event_rx.try_recv().is_ok() {}
