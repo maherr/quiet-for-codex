@@ -441,6 +441,10 @@ impl App {
         thread_id: ThreadId,
         op: AppCommand,
     ) -> Result<()> {
+        if self.is_thread_retired(&thread_id) {
+            tracing::debug!(%thread_id, "ignoring operation for retired conversation");
+            return Ok(());
+        }
         crate::session_log::log_outbound_op(&op);
 
         if self
@@ -955,7 +959,8 @@ impl App {
         thread_id: ThreadId,
         notification: ServerNotification,
     ) -> Result<()> {
-        if self.abandoned_side_threads.contains(&thread_id) {
+        if self.is_thread_retired(&thread_id) {
+            tracing::debug!(%thread_id, "ignoring notification for retired conversation");
             return Ok(());
         }
         if matches!(notification, ServerNotification::ThreadSettingsUpdated(_))
@@ -1119,6 +1124,10 @@ impl App {
         thread_id: ThreadId,
         request: ServerRequest,
     ) -> Result<()> {
+        if self.is_thread_retired(&thread_id) {
+            tracing::debug!(%thread_id, "ignoring request for retired conversation");
+            return Ok(());
+        }
         let inactive_interactive_request = if !self.chat_widget.contains_thread(thread_id) {
             self.interactive_request_for_thread_request(thread_id, &request)
                 .await?
@@ -1233,6 +1242,7 @@ impl App {
         presentation: ThreadAttachPresentation,
     ) -> Result<()> {
         let thread_id = session.thread_id;
+        self.restore_thread(thread_id);
         self.primary_thread_id = Some(thread_id);
         self.primary_session_configured = Some(session.clone());
         self.upsert_agent_picker_thread(
