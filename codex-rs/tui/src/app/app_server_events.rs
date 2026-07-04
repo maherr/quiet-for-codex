@@ -26,8 +26,9 @@ impl App {
             .iter()
             .filter_map(|(name, server)| server.enabled.then_some(name.clone()))
             .collect();
-        self.chat_widget
-            .set_mcp_startup_expected_servers(enabled_config_mcp_servers);
+        self.chat_widget.for_each_installed_mut(|pane| {
+            pane.set_mcp_startup_expected_servers(enabled_config_mcp_servers.iter().cloned());
+        });
     }
 
     pub(super) async fn handle_app_server_event(
@@ -42,7 +43,8 @@ impl App {
                     "app-server event consumer lagged; dropping ignored events"
                 );
                 self.refresh_mcp_startup_expected_servers_from_config();
-                self.chat_widget.finish_mcp_startup_after_lag();
+                self.chat_widget
+                    .for_each_installed_mut(|pane| pane.finish_mcp_startup_after_lag());
             }
             AppServerEvent::ServerNotification(notification) => {
                 self.handle_server_notification_event(app_server_client, notification)
@@ -102,8 +104,9 @@ impl App {
                     self.rate_limit_hard_stop_generation =
                         self.rate_limit_hard_stop_generation.wrapping_add(1);
                 }
-                self.chat_widget
-                    .on_rolling_rate_limit_snapshot(notification.rate_limits.clone());
+                self.chat_widget.for_each_installed_mut(|pane| {
+                    pane.on_rolling_rate_limit_snapshot(notification.rate_limits.clone());
+                });
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
@@ -116,17 +119,21 @@ impl App {
                             | AuthMode::PersonalAccessToken
                     )
                 );
-                self.chat_widget.update_account_state(
-                    status_account_display_from_auth_mode(
-                        notification.auth_mode,
-                        notification.plan_type,
-                    ),
+                let status_account_display = status_account_display_from_auth_mode(
+                    notification.auth_mode,
                     notification.plan_type,
-                    notification
-                        .auth_mode
-                        .is_some_and(AuthMode::has_chatgpt_account),
-                    has_codex_backend_auth,
                 );
+                let has_chatgpt_account = notification
+                    .auth_mode
+                    .is_some_and(AuthMode::has_chatgpt_account);
+                self.chat_widget.for_each_installed_mut(|pane| {
+                    pane.update_account_state(
+                        status_account_display.clone(),
+                        notification.plan_type,
+                        has_chatgpt_account,
+                        has_codex_backend_auth,
+                    );
+                });
                 return;
             }
             ServerNotification::ExternalAgentConfigImportCompleted(notification) => {
@@ -139,7 +146,9 @@ impl App {
                     );
                 }
                 let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
-                self.chat_widget.refresh_plugin_mentions();
+                self.chat_widget.for_each_installed_mut(|pane| {
+                    pane.refresh_plugin_mentions();
+                });
                 self.chat_widget.submit_op(AppCommand::reload_user_config());
                 self.fetch_plugins_list(app_server_client, cwd);
                 if should_report_completion {
@@ -150,17 +159,17 @@ impl App {
                 return;
             }
             ServerNotification::AppListUpdated(notification) => {
-                self.chat_widget.on_connectors_loaded(
-                    Ok(ConnectorsSnapshot {
-                        connectors: notification
-                            .data
-                            .iter()
-                            .cloned()
-                            .map(app_info_from_api)
-                            .collect(),
-                    }),
-                    /*is_final*/ false,
-                );
+                let snapshot = ConnectorsSnapshot {
+                    connectors: notification
+                        .data
+                        .iter()
+                        .cloned()
+                        .map(app_info_from_api)
+                        .collect(),
+                };
+                self.chat_widget.for_each_installed_mut(|pane| {
+                    pane.on_connectors_loaded(Ok(snapshot.clone()), /*is_final*/ false);
+                });
                 return;
             }
             _ => {}
@@ -202,8 +211,9 @@ impl App {
             ServerNotificationThreadTarget::Global => {}
         }
 
-        self.chat_widget
-            .handle_server_notification(notification, /*replay_kind*/ None);
+        self.chat_widget.for_each_installed_mut(|pane| {
+            pane.handle_server_notification(notification.clone(), /*replay_kind*/ None);
+        });
     }
 
     async fn handle_server_request_event(
@@ -269,3 +279,7 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "app_server_events_tests.rs"]
+mod tests;
