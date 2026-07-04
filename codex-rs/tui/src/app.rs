@@ -3,6 +3,7 @@
 //! This module owns the `App` struct, shared imports, and the high-level run loop that coordinates
 //! the focused app submodules.
 
+use self::owned_screen::OwnedScreen;
 use crate::AppServerTarget;
 use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
@@ -37,6 +38,7 @@ use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ReplayKind;
 use crate::chatwidget::ThreadInputState;
+use crate::conversation_viewport::ConversationViewport;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::split_command_string;
@@ -211,6 +213,7 @@ mod event_dispatch;
 mod history_ui;
 mod input;
 mod loaded_threads;
+mod owned_screen;
 mod pending_interactive_replay;
 mod pets;
 mod platform_actions;
@@ -524,6 +527,7 @@ pub(crate) struct App {
     pub(crate) file_search: FileSearchManager,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    owned_screen: Option<OwnedScreen>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -766,6 +770,7 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
+        alt_screen_behavior: crate::AltScreenBehavior,
         mut app_server: AppServerSession,
         mut config: Config,
         launch_cwd: PathBuf,
@@ -1027,6 +1032,11 @@ See the Codex keymap documentation for supported actions and examples."
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
+        let owned_screen = Self::owned_screen_for_behavior(
+            alt_screen_behavior,
+            &chat_widget,
+            runtime_keymap.pager.clone(),
+        );
         let mut app = Self {
             model_catalog,
             session_telemetry: session_telemetry.clone(),
@@ -1046,6 +1056,7 @@ See the Codex keymap documentation for supported actions and examples."
             enhanced_keys_supported,
             keymap: runtime_keymap,
             transcript_cells: Vec::new(),
+            owned_screen,
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -1366,6 +1377,9 @@ See the Codex keymap documentation for supported actions and examples."
     }
 
     fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui) -> Result<Rect> {
+        if let Some(rendered_area) = self.render_owned_screen_frame(tui)? {
+            return Ok(rendered_area);
+        }
         let width = tui.terminal.size()?.width;
         self.with_chat_widget_frame(width, |desired_height, chat_widget| {
             let mut rendered_area = Rect::default();
