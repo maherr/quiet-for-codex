@@ -183,6 +183,13 @@ async fn chat_widget_frame_reuses_active_cell_height_across_frame_passes() {
     assert_eq!(desired_height_calls.load(Ordering::Relaxed), 1);
 }
 
+fn conversation_event_payload(event: AppEvent) -> AppEvent {
+    match event {
+        AppEvent::FromConversation { event, .. } => *event,
+        event => event,
+    }
+}
+
 async fn next_thread_settings_updated(
     app_server: &mut AppServerSession,
     thread_id: ThreadId,
@@ -424,7 +431,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     let mut saw_optimistic_prompt = false;
     let mut submitted_items = None;
     while let Ok(event) = app_event_rx.try_recv() {
-        match event {
+        match conversation_event_payload(event) {
             AppEvent::InsertHistoryCell(cell) => {
                 let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
                 saw_replayed_answer |= transcript.contains("earlier prompt");
@@ -442,6 +449,13 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
                     saw_optimistic_prompt,
                     "expected optimistic prompt before turn submission"
                 );
+                submitted_items = Some(items);
+            }
+            AppEvent::ConversationOp {
+                target,
+                op: Op::UserTurn { items, .. },
+            } => {
+                assert_eq!(target.thread_id, thread_id);
                 submitted_items = Some(items);
             }
             _ => {}
@@ -6629,7 +6643,15 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         terminal_title_invalid_items_warned: app.terminal_title_invalid_items_warned.clone(),
         session_telemetry: app.session_telemetry.clone(),
     });
+    let retired_commit_anim_running = app.commit_anim_running.clone();
+    retired_commit_anim_running.store(/*val*/ true, Ordering::Release);
     app.replace_chat_widget(replacement);
+    assert!(!app.commit_anim_running.load(Ordering::Acquire));
+    assert!(!retired_commit_anim_running.load(Ordering::Acquire));
+    assert!(!Arc::ptr_eq(
+        &app.commit_anim_running,
+        &retired_commit_anim_running
+    ));
 
     app.replay_thread_snapshot(
         ThreadEventSnapshot {
@@ -6663,6 +6685,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
 
     let mut saw_named_wait = false;
     while let Ok(event) = app_event_rx.try_recv() {
+        let event = conversation_event_payload(event);
         if let AppEvent::InsertHistoryCell(cell) = event {
             let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
             saw_named_wait |= transcript.contains("Robie [explorer]");
