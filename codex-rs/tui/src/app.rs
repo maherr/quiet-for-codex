@@ -201,6 +201,7 @@ use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_message_consolidation;
 mod agent_navigation;
+mod agent_selection;
 mod agent_status_feed;
 mod app_server_event_targets;
 mod app_server_events;
@@ -210,6 +211,7 @@ mod compact_tool_groups;
 mod config_persistence;
 mod conversation_events;
 mod conversation_panes;
+mod conversation_retirement;
 mod event_dispatch;
 mod history_ui;
 mod input;
@@ -233,6 +235,7 @@ mod thread_settings;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
+use self::agent_selection::PreparedAgentSelection;
 use self::app_server_requests::PendingAppServerRequests;
 use self::conversation_panes::ConversationPaneInit;
 use self::conversation_panes::ConversationPanes;
@@ -571,6 +574,7 @@ pub(crate) struct App {
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
     side_threads: HashMap<ThreadId, SideThreadState>,
+    retired_thread_ids: VecDeque<ThreadId>,
     primary_thread_id: Option<ThreadId>,
     last_subagent_backfill_attempt: Option<ThreadId>,
     primary_session_configured: Option<ThreadSessionState>,
@@ -1070,6 +1074,7 @@ See the Codex keymap documentation for supported actions and examples."
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
+            retired_thread_ids: VecDeque::new(),
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
