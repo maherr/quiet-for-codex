@@ -7,8 +7,12 @@
 //! material only and steer the agent away from mutations unless the side conversation explicitly asks
 //! for them.
 
+use super::conversation_panes::ConversationPaneInit;
 use super::*;
+use crate::app_event::PaneSlot;
+use crate::chatwidget::ChatWidget;
 use crate::chatwidget::InterruptedTurnNoticeMode;
+use crate::file_search::FileSearchManager;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -222,74 +226,145 @@ impl SideThreadState {
     }
 }
 
+fn clear_side_thread_ui(chat_widget: &mut ChatWidget) {
+    chat_widget.set_side_conversation_context_label(/*label*/ None);
+    chat_widget.set_side_conversation_active(/*active*/ false);
+    chat_widget.clear_thread_rename_block();
+    chat_widget.set_interrupted_turn_notice_mode(InterruptedTurnNoticeMode::Default);
+}
+
+fn configure_side_thread_ui(
+    chat_widget: &mut ChatWidget,
+    parent_is_main: bool,
+    parent_label: Option<&str>,
+    parent_status: Option<SideParentStatus>,
+    toggle_binding_label: Option<&str>,
+) {
+    chat_widget.set_thread_rename_block_message(SIDE_RENAME_BLOCK_MESSAGE);
+    chat_widget.set_side_conversation_active(/*active*/ true);
+    chat_widget.set_interrupted_turn_notice_mode(InterruptedTurnNoticeMode::Suppress);
+    let mut label_parts = if parent_is_main {
+        vec!["from main thread".to_string()]
+    } else {
+        vec![format!(
+            "from parent thread ({})",
+            parent_label.unwrap_or("unknown")
+        )]
+    };
+    if let Some(parent_status) = parent_status {
+        label_parts.push(parent_status.label(parent_is_main).to_string());
+    }
+    if let Some(toggle_binding_label) = toggle_binding_label {
+        label_parts.push(format!("{toggle_binding_label} to switch"));
+    }
+    label_parts.push("ctrl + c to close".to_string());
+    chat_widget
+        .set_side_conversation_context_label(Some(format!("Side {}", label_parts.join(" · "))));
+}
+
 impl App {
+    fn installed_side_thread_id(&self) -> Option<ThreadId> {
+        let pane = self.chat_widget.by_slot(PaneSlot::Side)?;
+        pane.active_thread_id.or(pane.thread_id())
+    }
+
+    fn focused_side_thread_id(&self) -> Option<ThreadId> {
+        if self.chat_widget.focused_slot() != PaneSlot::Side {
+            return None;
+        }
+        self.installed_side_thread_id()
+    }
+
     pub(super) fn sync_side_thread_ui(&mut self) {
-        let clear_side_ui = |chat_widget: &mut crate::chatwidget::ChatWidget| {
-            chat_widget.set_side_conversation_context_label(/*label*/ None);
-            chat_widget.set_side_conversation_active(/*active*/ false);
-            chat_widget.clear_thread_rename_block();
-            chat_widget.set_interrupted_turn_notice_mode(InterruptedTurnNoticeMode::Default);
-        };
-        let Some(active_thread_id) = self.current_displayed_thread_id() else {
-            clear_side_ui(&mut self.chat_widget);
-            return;
-        };
-        let Some((parent_thread_id, parent_status)) = self
-            .side_threads
-            .get(&active_thread_id)
-            .map(|state| (state.parent_thread_id, state.parent_status))
-        else {
-            clear_side_ui(&mut self.chat_widget);
-            if self
-                .side_threads
-                .values()
-                .any(|state| state.parent_thread_id == active_thread_id)
-                && let Some(binding) = self.keymap.primary_hint(
-                    crate::keymap::KeymapContext::Global,
-                    "toggle_side_conversation",
-                )
+        let installed_side_thread_id = self.installed_side_thread_id();
+        let toggle_binding_label = self
+            .keymap
+            .primary_hint(
+                crate::keymap::KeymapContext::Global,
+                "toggle_side_conversation",
+            )
+            .map(|binding| binding.display_label().to_string());
+
+        if let Some(parent) = self.chat_widget.by_slot_mut(PaneSlot::Parent) {
+            clear_side_thread_ui(&mut parent.chat_widget);
+            if installed_side_thread_id.is_some()
+                && let Some(toggle_binding_label) = toggle_binding_label.as_deref()
             {
-                self.chat_widget
-                    .set_side_conversation_context_label(Some(format!(
-                        "{} for side",
-                        binding.display_label()
-                    )));
+                parent.set_side_conversation_context_label(Some(format!(
+                    "{toggle_binding_label} for side"
+                )));
+            }
+        }
+
+        let side_state = installed_side_thread_id
+            .and_then(|thread_id| self.side_threads.get(&thread_id))
+            .cloned();
+        let Some((parent_thread_id, parent_status)) =
+            side_state.map(|state| (state.parent_thread_id, state.parent_status))
+        else {
+            if let Some(side) = self.chat_widget.by_slot_mut(PaneSlot::Side) {
+                clear_side_thread_ui(&mut side.chat_widget);
             }
             return;
         };
 
-        self.chat_widget
-            .set_thread_rename_block_message(SIDE_RENAME_BLOCK_MESSAGE);
-        self.chat_widget
-            .set_side_conversation_active(/*active*/ true);
-        self.chat_widget
-            .set_interrupted_turn_notice_mode(InterruptedTurnNoticeMode::Suppress);
-        let mut label_parts = Vec::new();
         let parent_is_main = self.primary_thread_id == Some(parent_thread_id);
-        if parent_is_main {
-            label_parts.push("from main thread".to_string());
-        } else {
-            let parent_label = self.thread_label(parent_thread_id);
-            label_parts.push(format!("from parent thread ({parent_label})"));
-        }
-        if let Some(parent_status) = parent_status {
-            label_parts.push(parent_status.label(parent_is_main).to_string());
-        }
-        if let Some(binding) = self.keymap.primary_hint(
-            crate::keymap::KeymapContext::Global,
-            "toggle_side_conversation",
-        ) {
-            label_parts.push(format!("{} to switch", binding.display_label()));
-        }
-        label_parts.push("ctrl + c to close".to_string());
-        self.chat_widget
-            .set_side_conversation_context_label(Some(format!("Side {}", label_parts.join(" · "))));
+        let parent_label = (!parent_is_main).then(|| self.thread_label(parent_thread_id));
+        let Some(side) = self.chat_widget.by_slot_mut(PaneSlot::Side) else {
+            return;
+        };
+        configure_side_thread_ui(
+            &mut side.chat_widget,
+            parent_is_main,
+            parent_label.as_deref(),
+            parent_status,
+            toggle_binding_label.as_deref(),
+        );
     }
 
     pub(super) fn active_side_parent_thread_id(&self) -> Option<ThreadId> {
-        self.current_displayed_thread_id()
+        self.installed_side_thread_id()
             .and_then(|thread_id| self.side_threads.get(&thread_id))
             .map(|state| state.parent_thread_id)
+    }
+
+    fn add_side_thread_error(&mut self, thread_id: ThreadId, message: String) {
+        if self.installed_side_thread_id() == Some(thread_id)
+            && let Some(side) = self.chat_widget.by_slot_mut(PaneSlot::Side)
+        {
+            side.add_error_message(message);
+        } else {
+            self.chat_widget.add_error_message(message);
+        }
+    }
+
+    fn replay_side_thread_snapshot(&mut self, snapshot: ThreadEventSnapshot) -> bool {
+        let Some(side_origin) = self
+            .chat_widget
+            .by_slot(PaneSlot::Side)
+            .and_then(|pane| pane.origin())
+        else {
+            return false;
+        };
+        let previous_origin = self
+            .app_event_tx
+            .conversation_origin()
+            .filter(|origin| self.chat_widget.by_origin(*origin).is_some());
+        if !self.chat_widget.dispatch_to(side_origin) {
+            return false;
+        }
+        let sender = self.chat_widget.conversation_event_sender();
+        let previous_sender = std::mem::replace(&mut self.app_event_tx, sender);
+        self.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+        self.app_event_tx = previous_sender;
+        if let Some(previous_origin) = previous_origin {
+            let restored = self.chat_widget.dispatch_to(previous_origin);
+            debug_assert!(restored);
+        } else {
+            let cleared = self.chat_widget.clear_dispatch();
+            debug_assert_eq!(cleared, Some(PaneSlot::Side));
+        }
+        true
     }
 
     pub(super) fn set_side_parent_status(
@@ -356,59 +431,62 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
     ) -> bool {
-        if self.overlay.is_none()
-            && self.chat_widget.no_modal_or_popup_active()
-            && self.chat_widget.composer_is_empty()
-            && let Some(parent_thread_id) = self.active_side_parent_thread_id()
-        {
-            if self
-                .select_agent_thread_and_discard_side(tui, app_server, parent_thread_id)
-                .await
-                .is_err()
-            {
-                return false;
-            }
-            self.active_side_parent_thread_id().is_none()
-        } else {
-            false
+        let Some(side_thread_id) = self.focused_side_thread_id() else {
+            return false;
+        };
+        let can_return = self.overlay.is_none()
+            && self
+                .chat_widget
+                .by_slot(PaneSlot::Side)
+                .is_some_and(|side| side.no_modal_or_popup_active() && side.composer_is_empty());
+        if !can_return {
+            return false;
         }
+
+        if self.discard_side_thread(app_server, side_thread_id).await {
+            if let Err(err) = self
+                .surface_pending_inactive_thread_interactive_requests()
+                .await
+            {
+                tracing::warn!(%err, "failed to surface pending requests after closing side pane");
+            }
+        } else {
+            self.keep_side_thread_visible_after_cleanup_failure(tui, side_thread_id);
+        }
+        tui.frame_requester().schedule_frame();
+        true
     }
 
     pub(super) fn side_thread_to_discard_after_switch(
         &self,
         target_thread_id: ThreadId,
     ) -> Option<ThreadId> {
-        let active_thread_id = self.current_displayed_thread_id()?;
-        let (&side_thread_id, state) = self.side_threads.iter().next()?;
-        if target_thread_id == side_thread_id || target_thread_id == active_thread_id {
+        let side_thread_id = self.installed_side_thread_id()?;
+        if target_thread_id == side_thread_id {
             return None;
         }
 
-        (active_thread_id == side_thread_id || active_thread_id == state.parent_thread_id)
-            .then_some(side_thread_id)
+        Some(side_thread_id)
     }
 
     pub(super) async fn toggle_side_conversation(
         &mut self,
         tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
+        _app_server: &mut AppServerSession,
     ) -> Result<()> {
-        let Some(active_thread_id) = self.current_displayed_thread_id() else {
+        if !self.chat_widget.has_side() {
             return Ok(());
-        };
-        let Some((&side_thread_id, state)) = self.side_threads.iter().next() else {
-            return Ok(());
-        };
-        let target_thread_id = if active_thread_id == side_thread_id {
-            state.parent_thread_id
-        } else if active_thread_id == state.parent_thread_id {
-            side_thread_id
-        } else {
-            return Ok(());
-        };
+        }
 
-        self.select_agent_thread(tui, app_server, target_thread_id)
-            .await
+        let target = match self.chat_widget.focused_slot() {
+            PaneSlot::Parent => PaneSlot::Side,
+            PaneSlot::Side => PaneSlot::Parent,
+        };
+        if self.chat_widget.focus(target) {
+            self.sync_side_thread_ui();
+            tui.frame_requester().schedule_frame();
+        }
+        Ok(())
     }
 
     pub(super) async fn discard_side_thread(
@@ -418,14 +496,14 @@ impl App {
     ) -> bool {
         if let Err(message) = self.interrupt_side_thread(app_server, thread_id).await {
             tracing::warn!("{message}");
-            self.chat_widget.add_error_message(message);
+            self.add_side_thread_error(thread_id, message);
             return false;
         }
         if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
             let message =
                 format!("Failed to close side conversation {thread_id}; it is still open: {err}");
             tracing::warn!("{message}");
-            self.chat_widget.add_error_message(message);
+            self.add_side_thread_error(thread_id, message);
             return false;
         }
         self.abandoned_side_threads.insert(thread_id);
@@ -497,11 +575,15 @@ impl App {
     }
 
     pub(super) async fn discard_thread_local_state(&mut self, thread_id: ThreadId) {
+        let remove_side_pane = self.installed_side_thread_id() == Some(thread_id);
         self.abort_thread_event_listener(thread_id);
         self.thread_event_channels.remove(&thread_id);
         self.side_threads.remove(&thread_id);
         self.agent_navigation.remove(thread_id);
-        if self.chat_widget.active_thread_id == Some(thread_id) {
+        if remove_side_pane {
+            self.chat_widget.take_side();
+            self.refresh_pending_thread_approvals().await;
+        } else if self.chat_widget.active_thread_id == Some(thread_id) {
             self.clear_active_thread().await;
         } else {
             self.refresh_pending_thread_approvals().await;
@@ -525,18 +607,14 @@ impl App {
         })
     }
 
-    async fn keep_side_thread_visible_after_cleanup_failure(
+    fn keep_side_thread_visible_after_cleanup_failure(
         &mut self,
         tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) {
-        if self.chat_widget.active_thread_id != Some(thread_id)
-            && let Err(err) = self.select_agent_thread(tui, app_server, thread_id).await
-        {
-            tracing::warn!(
-                "failed to restore side conversation after cleanup failure for {thread_id}: {err}"
-            );
+        if self.installed_side_thread_id() == Some(thread_id) {
+            self.chat_widget.focus(PaneSlot::Side);
+            tui.frame_requester().schedule_frame();
         }
     }
 
@@ -549,10 +627,23 @@ impl App {
         if self.discard_side_thread(app_server, thread_id).await {
             true
         } else {
-            self.keep_side_thread_visible_after_cleanup_failure(tui, app_server, thread_id)
-                .await;
+            self.keep_side_thread_visible_after_cleanup_failure(tui, thread_id);
             false
         }
+    }
+
+    async fn fail_side_start(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+        user_message: Option<crate::chatwidget::UserMessage>,
+        message: String,
+    ) {
+        self.discard_side_thread_or_keep_visible(tui, app_server, thread_id)
+            .await;
+        self.restore_side_user_message(user_message);
+        self.add_side_thread_error(thread_id, message);
     }
 
     fn side_developer_instructions(existing_instructions: Option<&str>) -> String {
@@ -594,7 +685,7 @@ impl App {
     pub(super) fn side_start_block_message(&self) -> Option<&'static str> {
         if self.primary_thread_id.is_none() {
             Some(SIDE_MAIN_THREAD_UNAVAILABLE_MESSAGE)
-        } else if self.active_side_parent_thread_id().is_some() {
+        } else if self.chat_widget.has_side() {
             Some(SIDE_ALREADY_OPEN_MESSAGE)
         } else {
             None
@@ -618,8 +709,10 @@ impl App {
         user_message: Option<crate::chatwidget::UserMessage>,
     ) {
         if let Some(user_message) = user_message {
-            self.chat_widget
-                .restore_user_message_to_composer(user_message);
+            let slot = self.chat_widget.focused_slot();
+            if let Some(pane) = self.chat_widget.by_slot_mut(slot) {
+                pane.restore_user_message_to_composer(user_message);
+            }
         }
     }
 
@@ -640,16 +733,20 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<()> {
-        let side_thread_to_discard = self.side_thread_to_discard_after_switch(thread_id);
-        self.select_agent_thread(tui, app_server, thread_id).await?;
-        if self.chat_widget.active_thread_id == Some(thread_id)
-            && let Some(side_thread_id) = side_thread_to_discard
-        {
+        if self.installed_side_thread_id() == Some(thread_id) {
+            self.chat_widget.focus(PaneSlot::Side);
+            tui.frame_requester().schedule_frame();
+            return Ok(());
+        }
+
+        if let Some(side_thread_id) = self.side_thread_to_discard_after_switch(thread_id) {
             self.discard_side_thread_in_background(app_server, side_thread_id)
                 .await;
-            self.surface_pending_inactive_thread_interactive_requests()
-                .await?;
         }
+        self.chat_widget.focus(PaneSlot::Parent);
+        self.select_agent_thread(tui, app_server, thread_id).await?;
+        self.surface_pending_inactive_thread_interactive_requests()
+            .await?;
         Ok(())
     }
 
@@ -686,7 +783,7 @@ impl App {
 
         let fork_config = self.side_fork_config();
         match app_server
-            .fork_side_thread(fork_config, parent_thread_id)
+            .fork_side_thread(fork_config.clone(), parent_thread_id)
             .await
         {
             Ok(forked) => {
@@ -706,55 +803,98 @@ impl App {
                     /*agent_role*/ None,
                     /*is_closed*/ false,
                 );
+
+                let init = self.chatwidget_init_for_forked_or_resumed_thread(
+                    tui,
+                    fork_config,
+                    /*initial_user_message*/ None,
+                );
+                let side_widget = ChatWidget::new_with_app_event_for_pane(init, PaneSlot::Side);
+                let file_search = FileSearchManager::new(
+                    side_widget.config_ref().cwd.to_path_buf(),
+                    side_widget.conversation_event_sender(),
+                );
+                let owned_screen = if self.has_owned_screen() {
+                    Self::owned_screen_for_behavior(
+                        crate::AltScreenBehavior::Owned,
+                        &side_widget,
+                        self.keymap.pager.clone(),
+                    )
+                } else {
+                    None
+                };
+                if self
+                    .chat_widget
+                    .install_side(ConversationPaneInit {
+                        chat_widget: side_widget,
+                        file_search,
+                        owned_screen,
+                    })
+                    .is_err()
+                {
+                    self.fail_side_start(
+                        tui,
+                        app_server,
+                        child_thread_id,
+                        user_message.take(),
+                        format!("Failed to install side conversation {child_thread_id}."),
+                    )
+                    .await;
+                    return Ok(AppRunControl::Continue);
+                }
+
+                let Some((receiver, snapshot)) =
+                    self.activate_thread_for_replay(child_thread_id).await
+                else {
+                    self.fail_side_start(
+                        tui,
+                        app_server,
+                        child_thread_id,
+                        user_message.take(),
+                        format!("Failed to attach side conversation {child_thread_id}."),
+                    )
+                    .await;
+                    return Ok(AppRunControl::Continue);
+                };
+                let Some(side) = self.chat_widget.by_slot_mut(PaneSlot::Side) else {
+                    unreachable!("side pane was installed above");
+                };
+                side.attach_thread(child_thread_id, Some(receiver));
+                if !self.replay_side_thread_snapshot(snapshot) {
+                    self.fail_side_start(
+                        tui,
+                        app_server,
+                        child_thread_id,
+                        user_message.take(),
+                        format!("Failed to initialize side conversation {child_thread_id}."),
+                    )
+                    .await;
+                    return Ok(AppRunControl::Continue);
+                }
+                self.chat_widget.focus(PaneSlot::Side);
+                self.sync_side_thread_ui();
+
                 if let Err(err) = app_server
                     .thread_inject_items(child_thread_id, vec![Self::side_boundary_prompt_item()])
                     .await
                 {
-                    self.discard_side_thread_or_keep_visible(tui, app_server, child_thread_id)
-                        .await;
-                    self.restore_side_user_message(user_message.take());
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to prepare side conversation {child_thread_id}: {err}"
-                    ));
+                    self.fail_side_start(
+                        tui,
+                        app_server,
+                        child_thread_id,
+                        user_message.take(),
+                        format!("Failed to prepare side conversation {child_thread_id}: {err}"),
+                    )
+                    .await;
                     return Ok(AppRunControl::Continue);
                 }
-                if let Err(err) = self
-                    .select_agent_thread_and_discard_side(tui, app_server, child_thread_id)
-                    .await
+
+                if let Some(user_message) = user_message.take()
+                    && let Some(side) = self.chat_widget.by_slot_mut(PaneSlot::Side)
                 {
-                    let discarded = self
-                        .discard_side_thread_or_keep_visible(tui, app_server, child_thread_id)
-                        .await;
-                    if discarded
-                        && self.chat_widget.active_thread_id != Some(parent_thread_id)
-                        && let Err(restore_err) = self
-                            .select_agent_thread(tui, app_server, parent_thread_id)
-                            .await
-                    {
-                        tracing::warn!(
-                            "failed to restore parent thread after side conversation switch failure: {restore_err}"
-                        );
-                    }
-                    self.restore_side_user_message(user_message.take());
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to switch into side conversation {child_thread_id}: {err}"
-                    ));
-                    return Ok(AppRunControl::Continue);
+                    let _ = side.submit_user_message_as_plain_user_turn(user_message);
                 }
-                if self.chat_widget.active_thread_id == Some(child_thread_id) {
-                    if let Some(user_message) = user_message.take() {
-                        let _ = self
-                            .chat_widget
-                            .submit_user_message_as_plain_user_turn(user_message);
-                    }
-                } else {
-                    self.discard_side_thread_or_keep_visible(tui, app_server, child_thread_id)
-                        .await;
-                    self.restore_side_user_message(user_message.take());
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to switch into side conversation {child_thread_id}."
-                    ));
-                }
+                tui.frame_requester().schedule_frame();
             }
             Err(err) => {
                 self.restore_side_user_message(user_message.take());
