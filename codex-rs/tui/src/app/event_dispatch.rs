@@ -2497,8 +2497,11 @@ impl App {
             Ok(()) => {
                 self.config.tui_keymap = keymap_config.clone();
                 self.keymap = runtime_keymap.clone();
-                self.chat_widget
-                    .apply_keymap_update(keymap_config, &runtime_keymap);
+                self.sync_owned_screen_keymap();
+                self.chat_widget.for_each_installed_mut(|pane| {
+                    pane.chat_widget
+                        .apply_keymap_update(keymap_config.clone(), &runtime_keymap);
+                });
                 self.sync_side_thread_ui();
                 self.chat_widget
                     .return_to_keymap_picker(&context, &action, &runtime_keymap);
@@ -2550,8 +2553,11 @@ impl App {
             Ok(()) => {
                 self.config.tui_keymap = keymap_config.clone();
                 self.keymap = runtime_keymap.clone();
-                self.chat_widget
-                    .apply_keymap_update(keymap_config, &runtime_keymap);
+                self.sync_owned_screen_keymap();
+                self.chat_widget.for_each_installed_mut(|pane| {
+                    pane.chat_widget
+                        .apply_keymap_update(keymap_config.clone(), &runtime_keymap);
+                });
                 self.sync_side_thread_ui();
                 self.chat_widget
                     .return_to_keymap_picker(&context, &action, &runtime_keymap);
