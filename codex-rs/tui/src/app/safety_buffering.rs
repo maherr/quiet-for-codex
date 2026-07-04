@@ -30,7 +30,7 @@ impl App {
             mut turn,
             prompt,
         } = retry;
-        if self.active_thread_id != Some(thread_id)
+        if self.chat_widget.active_thread_id != Some(thread_id)
             || self.chat_widget.thread_id() != Some(thread_id)
             || self.primary_thread_id != Some(thread_id)
         {

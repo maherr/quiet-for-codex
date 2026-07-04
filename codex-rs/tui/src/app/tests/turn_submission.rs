@@ -7,7 +7,7 @@ async fn turn_start_failure_is_shown_without_exiting() -> Result<()> {
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let thread_id = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000")?;
-    app.active_thread_id = Some(thread_id);
+    app.chat_widget.active_thread_id = Some(thread_id);
     app.chat_widget
         .handle_thread_session(test_thread_session(thread_id, app.config.cwd.to_path_buf()));
     while app_event_rx.try_recv().is_ok() {}
