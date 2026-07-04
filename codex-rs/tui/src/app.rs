@@ -212,6 +212,7 @@ pub(crate) mod app_server_requests;
 mod background_requests;
 mod compact_tool_groups;
 mod config_persistence;
+mod conversation_events;
 mod event_dispatch;
 mod history_pagination;
 mod history_ui;
