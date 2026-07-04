@@ -49,7 +49,7 @@ impl App {
     }
 
     pub(super) async fn activate_thread_channel(&mut self, thread_id: ThreadId) {
-        if self.active_thread_id.is_some() {
+        if self.chat_widget.active_thread_id.is_some() {
             return;
         }
         self.set_thread_active(thread_id, /*active*/ true).await;
@@ -58,18 +58,18 @@ impl App {
         } else {
             None
         };
-        self.active_thread_id = Some(thread_id);
-        self.active_thread_rx = receiver;
+        self.chat_widget.active_thread_id = Some(thread_id);
+        self.chat_widget.active_thread_rx = receiver;
         self.refresh_pending_thread_approvals().await;
     }
 
     pub(super) async fn store_active_thread_receiver(&mut self) {
-        let Some(active_id) = self.active_thread_id else {
+        let Some(active_id) = self.chat_widget.active_thread_id else {
             return;
         };
         let input_state = self.chat_widget.capture_thread_input_state();
         if let Some(channel) = self.thread_event_channels.get_mut(&active_id) {
-            let receiver = self.active_thread_rx.take();
+            let receiver = self.chat_widget.active_thread_rx.take();
             let mut store = channel.store.lock().await;
             store.active = false;
             store.input_state = input_state;
@@ -92,10 +92,10 @@ impl App {
     }
 
     pub(super) async fn clear_active_thread(&mut self) {
-        if let Some(active_id) = self.active_thread_id.take() {
+        if let Some(active_id) = self.chat_widget.active_thread_id.take() {
             self.set_thread_active(active_id, /*active*/ false).await;
         }
-        self.active_thread_rx = None;
+        self.chat_widget.active_thread_rx = None;
         self.refresh_pending_thread_approvals().await;
     }
 
@@ -111,7 +111,7 @@ impl App {
         if !ThreadEventStore::op_can_change_pending_replay_state(op) {
             return;
         }
-        let Some(thread_id) = self.active_thread_id else {
+        let Some(thread_id) = self.chat_widget.active_thread_id else {
             return;
         };
         self.note_thread_outbound_op(thread_id, op).await;
@@ -157,14 +157,14 @@ impl App {
     /// navigation both follow what the user is actually looking at, not whichever thread most
     /// recently began switching.
     pub(super) fn current_displayed_thread_id(&self) -> Option<ThreadId> {
-        self.active_thread_id.or(self.chat_widget.thread_id())
+        self.chat_widget.active_thread_id.or(self.chat_widget.thread_id())
     }
 
     pub(super) fn ignore_same_thread_resume(
         &mut self,
         target_session: &crate::resume_picker::SessionTarget,
     ) -> bool {
-        if self.active_thread_id != Some(target_session.thread_id) {
+        if self.chat_widget.active_thread_id != Some(target_session.thread_id) {
             return false;
         };
 
@@ -377,7 +377,7 @@ impl App {
 
         let mut requests = Vec::new();
         for (thread_id, store) in channels {
-            if Some(thread_id) == self.active_thread_id {
+            if Some(thread_id) == self.chat_widget.active_thread_id {
                 continue;
             }
 
@@ -416,7 +416,7 @@ impl App {
         app_server: &mut AppServerSession,
         op: AppCommand,
     ) -> Result<()> {
-        let Some(thread_id) = self.active_thread_id else {
+        let Some(thread_id) = self.chat_widget.active_thread_id else {
             self.chat_widget
                 .add_error_message("No active thread is available.".to_string());
             return Ok(());
@@ -712,7 +712,7 @@ impl App {
                             final_output_json_schema.clone(),
                         )
                         .await?;
-                    if self.active_thread_id == Some(thread_id)
+                    if self.chat_widget.active_thread_id == Some(thread_id)
                         && self.chat_widget.thread_id() == Some(thread_id)
                     {
                         self.chat_widget
@@ -871,7 +871,7 @@ impl App {
 
         let mut pending_thread_ids = Vec::new();
         for (thread_id, store) in channels {
-            if Some(thread_id) == self.active_thread_id || Some(thread_id) == side_parent_thread_id
+            if Some(thread_id) == self.chat_widget.active_thread_id || Some(thread_id) == side_parent_thread_id
             {
                 continue;
             }
@@ -1073,7 +1073,7 @@ impl App {
         thread_id: ThreadId,
         request: ServerRequest,
     ) -> Result<()> {
-        let inactive_interactive_request = if self.active_thread_id != Some(thread_id) {
+        let inactive_interactive_request = if self.chat_widget.active_thread_id != Some(thread_id) {
             self.interactive_request_for_thread_request(thread_id, &request)
                 .await?
         } else {
@@ -1345,7 +1345,7 @@ impl App {
     /// historical id now" and converted into closed picker entries instead of deleting them, so
     /// the stable traversal order remains intact for review and keyboard navigation.
     pub(super) async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        let Some(mut rx) = self.active_thread_rx.take() else {
+        let Some(mut rx) = self.chat_widget.active_thread_rx.take() else {
             return Ok(());
         };
 
@@ -1362,7 +1362,7 @@ impl App {
         }
 
         if !disconnected {
-            self.active_thread_rx = Some(rx);
+            self.chat_widget.active_thread_rx = Some(rx);
         } else {
             self.clear_active_thread().await;
         }
@@ -1391,7 +1391,7 @@ impl App {
         if !matches!(notification, ServerNotification::ThreadClosed(_)) {
             return None;
         }
-        let active_thread_id = self.active_thread_id?;
+        let active_thread_id = self.chat_widget.active_thread_id?;
         let primary_thread_id = self.primary_thread_id?;
         if self.pending_shutdown_exit_thread_id == Some(active_thread_id) {
             return None;
@@ -1565,7 +1565,7 @@ impl App {
             &event,
             ThreadBufferedEvent::Notification(ServerNotification::ThreadClosed(_))
         ) && self.pending_shutdown_exit_thread_id
-            == self.active_thread_id;
+            == self.chat_widget.active_thread_id;
 
         // Processing order matters:
         //
@@ -1588,7 +1588,7 @@ impl App {
                 self.select_agent_thread_and_discard_side(tui, app_server, primary_thread_id)
                     .await?;
             }
-            if self.active_thread_id == Some(primary_thread_id) {
+            if self.chat_widget.active_thread_id == Some(primary_thread_id) {
                 self.chat_widget.add_info_message(
                     format!(
                         "Agent thread {closed_thread_id} closed. Switched back to main thread."

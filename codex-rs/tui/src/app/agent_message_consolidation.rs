@@ -39,18 +39,20 @@ impl App {
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.insert_cell(cell.clone());
             }
-            self.transcript_cells.push(cell.clone());
+            self.chat_widget.transcript_cells.push(cell.clone());
             self.owned_screen_push_cell(cell);
         }
 
         // Walk backward to find the contiguous run of streaming AgentMessageCells that
         // belong to the just-finalized stream.
-        let end = self.transcript_cells.len();
+        let end = self.chat_widget.transcript_cells.len();
         tracing::debug!(
             "ConsolidateAgentMessage: transcript_cells.len()={end}, source_len={}",
             source.len()
         );
-        let start = trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
+        let start = trailing_run_start::<history_cell::AgentMessageCell>(
+            &self.chat_widget.transcript_cells,
+        );
         if start < end {
             tracing::debug!(
                 "ConsolidateAgentMessage: replacing cells [{start}..{end}] with AgentMarkdownCell"
@@ -62,7 +64,8 @@ impl App {
                     inline_visualization_context,
                 ),
             );
-            self.transcript_cells
+            self.chat_widget
+                .transcript_cells
                 .splice(start..end, std::iter::once(consolidated.clone()));
             self.sync_owned_screen_cells();
 

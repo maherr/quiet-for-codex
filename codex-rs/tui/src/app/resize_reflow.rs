@@ -70,19 +70,20 @@ impl App {
 
     pub(super) fn compact_tool_groups_enabled(&self) -> bool {
         self.chat_widget.history_render_mode() == HistoryRenderMode::Rich
-            && !self.compact_tool_groups_expanded
+            && !self.chat_widget.compact_tool_groups_expanded
     }
 
     pub(super) fn appended_cell_touches_compact_tool_group(&self, width: u16) -> bool {
         self.compact_tool_groups_enabled()
             && compact_tool_groups::appended_cell_touches_compact_group(
-                &self.transcript_cells,
+                &self.chat_widget.transcript_cells,
                 width,
             )
     }
 
     pub(super) fn toggle_compact_tool_groups_expanded(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        self.compact_tool_groups_expanded = !self.compact_tool_groups_expanded;
+        self.chat_widget.compact_tool_groups_expanded =
+            !self.chat_widget.compact_tool_groups_expanded;
         if self.overlay.is_none() {
             self.reflow_transcript_now(tui)?;
         }
@@ -142,7 +143,7 @@ impl App {
             return;
         }
         if self.overlay.is_none() {
-            self.initial_history_replay_buffer = Some(Default::default());
+            self.chat_widget.initial_history_replay_buffer = Some(Default::default());
         }
     }
 
@@ -157,7 +158,7 @@ impl App {
             return;
         }
         if self.resize_reflow_max_rows().is_some() && self.overlay.is_none() {
-            self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
+            self.chat_widget.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
                 retained_lines: VecDeque::new(),
                 render_from_transcript_tail: true,
             });
@@ -175,7 +176,7 @@ impl App {
             tui.frame_requester().schedule_frame();
             return;
         }
-        let Some(buffer) = self.initial_history_replay_buffer.take() else {
+        let Some(buffer) = self.chat_widget.initial_history_replay_buffer.take() else {
             return;
         };
 
@@ -220,6 +221,7 @@ impl App {
             return;
         }
         if self
+            .chat_widget
             .initial_history_replay_buffer
             .as_ref()
             .is_some_and(|buffer| buffer.render_from_transcript_tail)
@@ -234,7 +236,7 @@ impl App {
         }
 
         let max_rows = self.resize_reflow_max_rows();
-        if let Some(buffer) = &mut self.initial_history_replay_buffer {
+        if let Some(buffer) = &mut self.chat_widget.initial_history_replay_buffer {
             if let Some(max_rows) = max_rows {
                 Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
             } else if self.overlay.is_some() {
@@ -273,7 +275,9 @@ impl App {
     }
 
     fn schedule_resize_reflow(&mut self, target_width: Option<u16>) -> bool {
-        self.transcript_reflow.schedule_debounced(target_width)
+        self.chat_widget
+            .transcript_reflow
+            .schedule_debounced(target_width)
     }
 
     fn resize_reflow_max_rows(&self) -> Option<usize> {
@@ -303,21 +307,29 @@ impl App {
     /// transient stream rows.
     pub(super) fn maybe_finish_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
         if self.has_owned_screen() {
-            self.transcript_reflow.clear();
+            self.chat_widget.transcript_reflow.clear();
             tui.frame_requester().schedule_frame();
             return Ok(());
         }
-        if self.transcript_reflow.take_stream_finish_reflow_needed() {
+        if self
+            .chat_widget
+            .transcript_reflow
+            .take_stream_finish_reflow_needed()
+        {
             self.schedule_immediate_resize_reflow(tui);
             self.maybe_run_resize_reflow(tui)?;
-        } else if self.transcript_reflow.pending_is_due(Instant::now()) {
+        } else if self
+            .chat_widget
+            .transcript_reflow
+            .pending_is_due(Instant::now())
+        {
             tui.frame_requester().schedule_frame();
         }
         Ok(())
     }
 
     fn schedule_immediate_resize_reflow(&mut self, tui: &mut tui::Tui) {
-        self.transcript_reflow.schedule_immediate();
+        self.chat_widget.transcript_reflow.schedule_immediate();
         tui.frame_requester().schedule_frame();
     }
 
@@ -328,7 +340,7 @@ impl App {
     /// resize, the visible scrollback can keep the pre-consolidation wrapping.
     pub(super) fn finish_required_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
         if self.has_owned_screen() {
-            self.transcript_reflow.clear();
+            self.chat_widget.transcript_reflow.clear();
             tui.frame_requester().schedule_frame();
             return Ok(());
         }
@@ -338,18 +350,18 @@ impl App {
         // the canonical transcript. Let the replay-end event render the capped transcript tail
         // once all consolidation events have been processed.
         if self.resize_reflow_max_rows().is_some()
-            && let Some(buffer) = self.initial_history_replay_buffer.as_mut()
+            && let Some(buffer) = self.chat_widget.initial_history_replay_buffer.as_mut()
         {
             buffer.retained_lines.clear();
             buffer.render_from_transcript_tail = true;
-            self.transcript_reflow.clear_stream_flags();
+            self.chat_widget.transcript_reflow.clear_stream_flags();
             return Ok(());
         }
 
         self.schedule_immediate_resize_reflow(tui);
         self.maybe_run_resize_reflow(tui)?;
-        if !self.transcript_reflow.has_pending_reflow() {
-            self.transcript_reflow.clear_stream_flags();
+        if !self.chat_widget.transcript_reflow.has_pending_reflow() {
+            self.chat_widget.transcript_reflow.clear_stream_flags();
         }
         Ok(())
     }
@@ -366,8 +378,11 @@ impl App {
         last_known_screen_size: ratatui::layout::Size,
         frame_requester: &tui::FrameRequester,
     ) -> bool {
-        let width = self.transcript_reflow.note_width(size.width);
-        let reflow_needed = self.transcript_reflow.reflow_needed_for_width(size.width);
+        let width = self.chat_widget.transcript_reflow.note_width(size.width);
+        let reflow_needed = self
+            .chat_widget
+            .transcript_reflow
+            .reflow_needed_for_width(size.width);
         let height_changed = size.height != last_known_screen_size.height;
         let should_rebuild_transcript = reflow_needed || height_changed;
         if width.changed || width.initialized {
@@ -375,7 +390,9 @@ impl App {
         }
         if should_rebuild_transcript {
             if reflow_needed && self.should_mark_reflow_as_stream_time() {
-                self.transcript_reflow.mark_resize_requested_during_stream();
+                self.chat_widget
+                    .transcript_reflow
+                    .mark_resize_requested_during_stream();
             }
             let target_width = reflow_needed.then_some(size.width);
             if self.schedule_resize_reflow(target_width) {
@@ -392,15 +409,17 @@ impl App {
     }
 
     fn maybe_clear_resize_reflow_without_terminal(&mut self) {
-        let Some(deadline) = self.transcript_reflow.pending_until() else {
+        let Some(deadline) = self.chat_widget.transcript_reflow.pending_until() else {
             return;
         };
-        if Instant::now() < deadline || self.overlay.is_some() || !self.transcript_cells.is_empty()
+        if Instant::now() < deadline
+            || self.overlay.is_some()
+            || !self.chat_widget.transcript_cells.is_empty()
         {
             return;
         }
 
-        self.transcript_reflow.clear_pending_reflow();
+        self.chat_widget.transcript_reflow.clear_pending_reflow();
         self.reset_history_emission_state();
     }
 
@@ -432,10 +451,10 @@ impl App {
     /// meant to remove.
     pub(super) fn maybe_run_resize_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
         if self.has_owned_screen() {
-            self.transcript_reflow.clear();
+            self.chat_widget.transcript_reflow.clear();
             return Ok(());
         }
-        let Some(deadline) = self.transcript_reflow.pending_until() else {
+        let Some(deadline) = self.chat_widget.transcript_reflow.pending_until() else {
             return Ok(());
         };
         let now = Instant::now();
@@ -451,19 +470,21 @@ impl App {
             return Ok(());
         }
 
-        self.transcript_reflow.clear_pending_reflow();
+        self.chat_widget.transcript_reflow.clear_pending_reflow();
 
         // Track that a reflow happened during an active stream or while trailing
         // unconsolidated AgentMessageCells are still pending consolidation so
         // ConsolidateAgentMessage can schedule a follow-up reflow.
-        let reflow_ran_during_stream =
-            !self.transcript_cells.is_empty() && self.should_mark_reflow_as_stream_time();
+        let reflow_ran_during_stream = !self.chat_widget.transcript_cells.is_empty()
+            && self.should_mark_reflow_as_stream_time();
 
         let width = self.reflow_transcript_now(tui)?;
-        self.transcript_reflow.mark_reflowed_width(width);
+        self.chat_widget
+            .transcript_reflow
+            .mark_reflowed_width(width);
 
         if reflow_ran_during_stream {
-            self.transcript_reflow.mark_ran_during_stream();
+            self.chat_widget.transcript_reflow.mark_ran_during_stream();
         }
         // Some terminals settle their final reported width after the repaint that handled the
         // last resize event. Request one cheap follow-up draw so `handle_draw_pre_render` can
@@ -477,12 +498,12 @@ impl App {
     pub(super) fn reflow_transcript_now(&mut self, tui: &mut tui::Tui) -> Result<u16> {
         let terminal_width = tui.terminal.size()?.width;
         if self.has_owned_screen() {
-            self.transcript_reflow.clear();
+            self.chat_widget.transcript_reflow.clear();
             tui.clear_pending_history_lines();
             return Ok(terminal_width);
         }
         let width = self.chat_widget.history_wrap_width(terminal_width);
-        if self.transcript_cells.is_empty() {
+        if self.chat_widget.transcript_cells.is_empty() {
             // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
             tui.clear_pending_history_lines();
             self.reset_history_emission_state();
@@ -515,13 +536,13 @@ impl App {
     pub(super) fn rebuild_transcript_after_backtrack(&mut self, tui: &mut tui::Tui) -> Result<()> {
         if self.has_owned_screen() {
             self.sync_owned_screen_cells();
-            self.transcript_reflow.clear();
+            self.chat_widget.transcript_reflow.clear();
             tui.clear_pending_history_lines();
             return Ok(());
         }
         let terminal_width = tui.terminal.size()?.width;
         let width = self.chat_widget.history_wrap_width(terminal_width);
-        let reflowed_lines = if self.transcript_cells.is_empty() {
+        let reflowed_lines = if self.chat_widget.transcript_cells.is_empty() {
             self.reset_history_emission_state();
             Vec::new()
         } else {
@@ -549,7 +570,7 @@ impl App {
     /// so the returned rows obey the cap exactly.
     pub(super) fn render_transcript_lines_for_reflow(&mut self, width: u16) -> ReflowRenderResult {
         let reflowed_lines = compact_tool_groups::render_transcript_lines(
-            &self.transcript_cells,
+            &self.chat_widget.transcript_cells,
             width,
             self.chat_widget.history_render_mode(),
             self.compact_tool_groups_enabled(),
@@ -570,9 +591,11 @@ impl App {
     pub(super) fn should_mark_reflow_as_stream_time(&self) -> bool {
         self.chat_widget.has_active_agent_stream()
             || self.chat_widget.has_active_plan_stream()
-            || trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells)
-                < self.transcript_cells.len()
-            || trailing_run_start::<history_cell::ProposedPlanStreamCell>(&self.transcript_cells)
-                < self.transcript_cells.len()
+            || trailing_run_start::<history_cell::AgentMessageCell>(
+                &self.chat_widget.transcript_cells,
+            ) < self.chat_widget.transcript_cells.len()
+            || trailing_run_start::<history_cell::ProposedPlanStreamCell>(
+                &self.chat_widget.transcript_cells,
+            ) < self.chat_widget.transcript_cells.len()
     }
 }
