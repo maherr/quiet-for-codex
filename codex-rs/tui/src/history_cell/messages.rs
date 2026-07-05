@@ -217,6 +217,45 @@ impl HistoryCell for UserHistoryCell {
         }
         lines
     }
+
+    fn selection_projection(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> Option<crate::conversation_selection::CellSelectionProjection> {
+        match mode {
+            HistoryRenderMode::Raw => {
+                let lines = self.raw_lines();
+                selection_projection_from_lines(
+                    selection_text_from_lines(&lines),
+                    lines,
+                    width,
+                    /*first_row_prefix_columns*/ 0,
+                )
+            }
+            HistoryRenderMode::Rich => {
+                let mut sections = self
+                    .remote_image_urls
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| local_image_label_text(index.saturating_add(1)))
+                    .collect::<Vec<_>>();
+                let message = self.message.trim_end_matches(['\r', '\n']);
+                if !message.is_empty() {
+                    if !sections.is_empty() {
+                        sections.push(String::new());
+                    }
+                    sections.push(message.to_string());
+                }
+                selection_projection_from_lines(
+                    sections.join("\n"),
+                    self.display_lines(width),
+                    width,
+                    /*first_row_prefix_columns*/ 2,
+                )
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -290,6 +329,41 @@ impl HistoryCell for ReasoningSummaryCell {
             raw_lines_from_source(self.content.trim())
         }
     }
+
+    fn selection_projection(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> Option<crate::conversation_selection::CellSelectionProjection> {
+        if self.transcript_only {
+            return None;
+        }
+        match mode {
+            HistoryRenderMode::Raw => {
+                let lines = self.raw_lines();
+                selection_projection_from_lines(
+                    selection_text_from_lines(&lines),
+                    lines,
+                    width,
+                    /*first_row_prefix_columns*/ 0,
+                )
+            }
+            HistoryRenderMode::Rich => {
+                if crate::markdown_render::selection_text_contains_table(&self.content) {
+                    return None;
+                }
+                selection_projection_from_lines(
+                    crate::markdown_render::render_markdown_selection_text(
+                        &self.content,
+                        Some(self.cwd.as_path()),
+                    ),
+                    self.display_lines(width),
+                    width,
+                    /*first_row_prefix_columns*/ 2,
+                )
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -356,6 +430,25 @@ impl HistoryCell for AgentMessageCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(visible_lines(self.lines.clone()))
+    }
+
+    fn selection_projection(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> Option<crate::conversation_selection::CellSelectionProjection> {
+        match mode {
+            HistoryRenderMode::Rich => None,
+            HistoryRenderMode::Raw => {
+                let lines = self.raw_lines();
+                selection_projection_from_lines(
+                    selection_text_from_lines(&lines),
+                    lines,
+                    width,
+                    /*first_row_prefix_columns*/ 0,
+                )
+            }
+        }
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -468,6 +561,39 @@ impl HistoryCell for AgentMarkdownCell {
 
     fn has_stable_transcript_height(&self) -> bool {
         self.rendered_lines.is_some()
+    }
+
+    fn selection_projection(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> Option<crate::conversation_selection::CellSelectionProjection> {
+        match mode {
+            HistoryRenderMode::Raw => {
+                let lines = self.raw_lines();
+                selection_projection_from_lines(
+                    selection_text_from_lines(&lines),
+                    lines,
+                    width,
+                    /*first_row_prefix_columns*/ 0,
+                )
+            }
+            HistoryRenderMode::Rich => {
+                let normalized = crate::markdown::unwrap_markdown_fences(&self.markdown_source);
+                if crate::markdown_render::selection_text_contains_table(&normalized) {
+                    return None;
+                }
+                selection_projection_from_lines(
+                    crate::markdown_render::render_markdown_selection_text(
+                        &normalized,
+                        Some(self.cwd.as_path()),
+                    ),
+                    self.display_lines(width),
+                    width,
+                    /*first_row_prefix_columns*/ 2,
+                )
+            }
+        }
     }
 }
 
