@@ -22,20 +22,40 @@ impl ChatWidget {
     pub(super) fn flush_answer_stream_with_separator(&mut self) {
         let had_stream_controller = self.stream_controller.is_some();
         if let Some(mut controller) = self.stream_controller.take() {
-            let scrollback_reflow = if controller.has_live_tail() {
-                crate::app_event::ConsolidationScrollbackReflow::Required
-            } else {
-                crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
-            };
+            let retained_stream = self.stream_surface == StreamSurface::Retained;
+            let had_live_tail = controller.has_live_tail();
             self.clear_active_stream_tail();
             let (cell, source) = controller.finalize();
-            // Match newline-committed streaming behavior: once assistant output is ready to be
-            // committed into history, hide the inline status row so transcript content replaces it.
-            if cell.is_some() {
-                self.bottom_pane.hide_status_indicator();
-            }
-            let deferred_history_cell =
-                if scrollback_reflow == crate::app_event::ConsolidationScrollbackReflow::Required {
+            if retained_stream {
+                if let Some(source) = source {
+                    let source = parse_assistant_markdown(&source, self.config.cwd.as_path())
+                        .visible_markdown;
+                    let inline_visualization_context = self.thread_id.and_then(|thread_id| {
+                        crate::inline_visualization::InlineVisualizationContext::from_config(
+                            &self.config,
+                            thread_id,
+                        )
+                    });
+                    self.queue_retained_stream_cell(
+                        history_cell::AgentMarkdownCell::new_with_inline_visualizations(
+                            source,
+                            &self.config.cwd,
+                            inline_visualization_context,
+                        ),
+                    );
+                }
+            } else {
+                let scrollback_reflow = if had_live_tail {
+                    crate::app_event::ConsolidationScrollbackReflow::Required
+                } else {
+                    crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
+                };
+                if cell.is_some() {
+                    self.bottom_pane.hide_status_indicator();
+                }
+                let deferred_history_cell = if scrollback_reflow
+                    == crate::app_event::ConsolidationScrollbackReflow::Required
+                {
                     cell
                 } else {
                     if let Some(cell) = cell {
@@ -43,25 +63,26 @@ impl ChatWidget {
                     }
                     None
                 };
-            // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
-            // that can re-render from source on resize.
-            if let Some(source) = source {
-                let source =
-                    parse_assistant_markdown(&source, self.config.cwd.as_path()).visible_markdown;
-                let inline_visualization_context = self.thread_id.and_then(|thread_id| {
-                    crate::inline_visualization::InlineVisualizationContext::from_config(
-                        &self.config,
-                        thread_id,
-                    )
-                });
-                self.note_stream_consolidation_queued();
-                self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
-                    source,
-                    cwd: self.config.cwd.to_path_buf(),
-                    inline_visualization_context,
-                    scrollback_reflow,
-                    deferred_history_cell,
-                });
+                // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
+                // that can re-render from source on resize.
+                if let Some(source) = source {
+                    let source = parse_assistant_markdown(&source, self.config.cwd.as_path())
+                        .visible_markdown;
+                    let inline_visualization_context = self.thread_id.and_then(|thread_id| {
+                        crate::inline_visualization::InlineVisualizationContext::from_config(
+                            &self.config,
+                            thread_id,
+                        )
+                    });
+                    self.note_stream_commit_queued();
+                    self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
+                        source,
+                        cwd: self.config.cwd.to_path_buf(),
+                        inline_visualization_context,
+                        scrollback_reflow,
+                        deferred_history_cell,
+                    });
+                }
             }
         }
         self.adaptive_chunking.reset();
@@ -144,6 +165,7 @@ impl ChatWidget {
                 self.current_stream_width(/*reserved_cols*/ 4),
                 &self.config.cwd,
                 self.history_render_mode(),
+                self.stream_surface,
             ));
         }
         if let Some(controller) = self.plan_stream_controller.as_mut()
@@ -188,19 +210,31 @@ impl ChatWidget {
             } else {
                 (None, None)
             };
-        if let Some(cell) = finalized_streamed_cell {
+        let retained_stream =
+            should_restore_after_stream && self.stream_surface == StreamSurface::Retained;
+        if retained_stream {
+            let source = if plan_text.is_empty() {
+                consolidated_plan_source.unwrap_or_default()
+            } else {
+                plan_text
+            };
+            if !source.is_empty() {
+                let cwd = self.config.cwd.to_path_buf();
+                self.queue_retained_stream_cell(history_cell::new_proposed_plan(source, &cwd));
+            }
+        } else if let Some(cell) = finalized_streamed_cell {
             self.add_boxed_history(cell);
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
             if let Some(source) = consolidated_plan_source {
-                self.note_stream_consolidation_queued();
+                self.note_stream_commit_queued();
                 self.app_event_tx
                     .send(AppEvent::ConsolidateProposedPlan(source));
             }
         } else if !plan_text.is_empty() {
             self.add_to_history(history_cell::new_proposed_plan(plan_text, &self.config.cwd));
         } else if let Some(source) = consolidated_plan_source {
-            self.note_stream_consolidation_queued();
+            self.note_stream_commit_queued();
             self.app_event_tx
                 .send(AppEvent::ConsolidateProposedPlan(source));
         }
@@ -454,6 +488,7 @@ impl ChatWidget {
                 &self.config.cwd,
                 self.history_render_mode(),
                 inline_visualization_context,
+                self.stream_surface,
             ));
         }
         if let Some(controller) = self.stream_controller.as_mut()
@@ -469,10 +504,19 @@ impl ChatWidget {
     }
 
     pub(super) fn active_cell_is_stream_tail(&self) -> bool {
-        self.transcript.active_cell.as_ref().is_some_and(|cell| {
-            cell.as_any().is::<history_cell::StreamingAgentTailCell>()
-                || cell.as_any().is::<history_cell::StreamingPlanTailCell>()
-        })
+        self.transcript
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| match self.stream_surface {
+                StreamSurface::Inline => {
+                    cell.as_any().is::<history_cell::StreamingAgentTailCell>()
+                        || cell.as_any().is::<history_cell::StreamingPlanTailCell>()
+                }
+                StreamSurface::Retained => {
+                    cell.as_any().is::<history_cell::AgentMarkdownCell>()
+                        || cell.as_any().is::<history_cell::ProposedPlanCell>()
+                }
+            })
     }
 
     pub(super) fn has_active_stream_tail(&self) -> bool {
@@ -482,6 +526,41 @@ impl ChatWidget {
 
     pub(super) fn sync_active_stream_tail(&mut self) -> bool {
         if let Some(controller) = self.stream_controller.as_ref() {
+            if self.stream_surface == StreamSurface::Retained {
+                let Some(source_revision) = controller.retained_source_revision() else {
+                    return self.clear_active_stream_tail();
+                };
+                let active_cell_matches = self
+                    .transcript
+                    .active_cell
+                    .as_ref()
+                    .is_some_and(|cell| cell.as_any().is::<history_cell::AgentMarkdownCell>());
+                if self.transcript.retained_stream_source_revision == Some(source_revision)
+                    && active_cell_matches
+                {
+                    return false;
+                }
+                let Some(source) = controller.retained_live_source().map(str::to_owned) else {
+                    return self.clear_active_stream_tail();
+                };
+                self.bottom_pane.hide_status_indicator();
+                let inline_visualization_context = self.thread_id.and_then(|thread_id| {
+                    crate::inline_visualization::InlineVisualizationContext::from_config(
+                        &self.config,
+                        thread_id,
+                    )
+                });
+                self.transcript.active_cell = Some(Box::new(
+                    history_cell::AgentMarkdownCell::new_with_inline_visualizations(
+                        source,
+                        &self.config.cwd,
+                        inline_visualization_context,
+                    ),
+                ));
+                self.transcript.retained_stream_source_revision = Some(source_revision);
+                self.bump_active_cell_revision();
+                return true;
+            }
             let tail_lines = controller.current_tail_lines();
             if tail_lines.is_empty() {
                 return self.clear_active_stream_tail();
@@ -512,6 +591,32 @@ impl ChatWidget {
         }
 
         if let Some(controller) = self.plan_stream_controller.as_ref() {
+            if self.stream_surface == StreamSurface::Retained {
+                let Some(source_revision) = controller.retained_source_revision() else {
+                    return self.clear_active_stream_tail();
+                };
+                let active_cell_matches = self
+                    .transcript
+                    .active_cell
+                    .as_ref()
+                    .is_some_and(|cell| cell.as_any().is::<history_cell::ProposedPlanCell>());
+                if self.transcript.retained_stream_source_revision == Some(source_revision)
+                    && active_cell_matches
+                {
+                    return false;
+                }
+                let Some(source) = controller.retained_live_source().map(str::to_owned) else {
+                    return self.clear_active_stream_tail();
+                };
+                self.bottom_pane.hide_status_indicator();
+                self.transcript.active_cell = Some(Box::new(history_cell::new_proposed_plan(
+                    source,
+                    &self.config.cwd,
+                )));
+                self.transcript.retained_stream_source_revision = Some(source_revision);
+                self.bump_active_cell_revision();
+                return true;
+            }
             let Some(tail) = controller.current_tail_display() else {
                 return self.clear_active_stream_tail();
             };
@@ -545,11 +650,19 @@ impl ChatWidget {
     }
 
     pub(super) fn clear_active_stream_tail(&mut self) -> bool {
+        self.transcript.retained_stream_source_revision = None;
         if self.active_cell_is_stream_tail() {
             self.transcript.active_cell = None;
             self.bump_active_cell_revision();
             return true;
         }
         false
+    }
+
+    pub(super) fn queue_retained_stream_cell(&mut self, cell: impl HistoryCell + 'static) {
+        self.transcript.needs_final_message_separator = true;
+        self.note_stream_commit_queued();
+        self.app_event_tx
+            .send(AppEvent::CommitRetainedStreamCell(Box::new(cell)));
     }
 }

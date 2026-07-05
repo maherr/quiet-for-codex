@@ -453,6 +453,7 @@ use self::user_messages::user_message_preview_text;
 mod warnings;
 use self::warnings::WarningDisplayState;
 pub(crate) use crate::branch_summary::StatusLineGitSummary;
+use crate::streaming::StreamSurface;
 use crate::streaming::chunking::AdaptiveChunkingPolicy;
 use crate::streaming::commit_tick::CommitTickScope;
 use crate::streaming::commit_tick::run_commit_tick;
@@ -579,11 +580,13 @@ pub(crate) struct ChatWidget {
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     add_credits_nudge_email_in_flight: Option<AddCreditsNudgeCreditType>,
     adaptive_chunking: AdaptiveChunkingPolicy,
+    /// Selects whether active streams emit immutable terminal rows or one retained live entry.
+    stream_surface: StreamSurface,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
-    pending_stream_consolidations: usize,
+    pending_stream_commits: usize,
     /// Holds the platform clipboard lease so copied text remains available while supported.
     clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
     copy_last_response_binding: Vec<KeyBinding>,
@@ -1213,6 +1216,7 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
+        self.transcript.retained_stream_source_revision = None;
         if let Some(active) = self.transcript.active_cell.take() {
             if active
                 .as_any()
@@ -1618,6 +1622,14 @@ impl ChatWidget {
         } else {
             HistoryRenderMode::Rich
         }
+    }
+
+    pub(crate) fn set_stream_surface(&mut self, stream_surface: StreamSurface) {
+        debug_assert!(
+            self.stream_controller.is_none() && self.plan_stream_controller.is_none(),
+            "stream surface must be selected before streaming starts",
+        );
+        self.stream_surface = stream_surface;
     }
 
     pub(crate) fn set_raw_output_mode(&mut self, enabled: bool) {

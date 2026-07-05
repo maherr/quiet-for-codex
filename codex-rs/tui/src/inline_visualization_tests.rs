@@ -359,6 +359,7 @@ fn streaming_hides_partial_directive_and_renders_completed_link() {
         Path::new("/workspace"),
         HistoryRenderMode::Rich,
         Some(context),
+        crate::streaming::StreamSurface::Inline,
     );
 
     controller.push("Before\n::codex-inline-vis{file=\"chart");

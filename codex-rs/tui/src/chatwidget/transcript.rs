@@ -7,7 +7,10 @@ pub(super) struct TranscriptState {
     pub(super) active_cell: Option<Box<dyn HistoryCell>>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     pub(super) active_cell_revision: u64,
-    /// Raw markdown of the most recently completed agent response.
+    /// Source revision represented by the current retained streaming cell.
+    pub(super) retained_stream_source_revision: Option<u64>,
+    /// Raw markdown of the most recently completed agent response that
+    /// survived any local thread rollback.
     pub(super) last_agent_markdown: Option<String>,
     /// Raw markdown of the most recently completed proposed plan.
     pub(super) latest_proposed_plan_markdown: Option<String>,
