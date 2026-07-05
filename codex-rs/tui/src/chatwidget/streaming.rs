@@ -488,9 +488,10 @@ impl ChatWidget {
             }
 
             self.bottom_pane.hide_status_indicator();
-            let cell = history_cell::StreamingAgentTailCell::new(
+            let cell = history_cell::StreamingAgentTailCell::new_source_backed(
                 tail_lines,
                 controller.tail_starts_stream(),
+                controller.current_tail_selection_fragment(),
             );
             if self
                 .transcript
@@ -511,15 +512,16 @@ impl ChatWidget {
         }
 
         if let Some(controller) = self.plan_stream_controller.as_ref() {
-            let tail_lines = controller.current_tail_display_lines();
-            if tail_lines.is_empty() {
+            let Some(tail) = controller.current_tail_display() else {
                 return self.clear_active_stream_tail();
-            }
+            };
 
             self.bottom_pane.hide_status_indicator();
-            let cell = history_cell::StreamingPlanTailCell::new(
-                tail_lines,
+            let cell = history_cell::StreamingPlanTailCell::new_source_backed(
+                tail.lines,
                 !controller.tail_starts_stream(),
+                tail.selection_fragment,
+                tail.body_line_range,
             );
             if self
                 .transcript
