@@ -534,8 +534,10 @@ pub enum TuiEvent {
     Paste(String),
     /// A vertical mouse-wheel event reported while an owned screen has mouse capture.
     MouseScroll(MouseScrollEvent),
-    /// A primary mouse-button press with terminal coordinates.
-    MousePrimaryPress(MousePrimaryPressEvent),
+    /// A primary mouse-button lifecycle event with terminal coordinates.
+    MousePrimary(MousePrimaryEvent),
+    /// Notification that the terminal stopped receiving keyboard and mouse input.
+    FocusLost,
     /// A terminal size notification that should be handled as resize-sensitive draw work.
     ///
     /// Resize is separate from `Draw` so the app can run feature-gated pre-render logic without
@@ -553,9 +555,17 @@ pub struct MouseScrollEvent {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MousePrimaryPressEvent {
+pub struct MousePrimaryEvent {
+    pub kind: MousePrimaryEventKind,
     pub column: u16,
     pub row: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MousePrimaryEventKind {
+    Press,
+    Drag,
+    Release,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
