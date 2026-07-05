@@ -1,6 +1,7 @@
 mod live_output;
 mod model;
 mod render;
+mod selection;
 
 pub(crate) use model::CommandOutput;
 #[cfg(test)]

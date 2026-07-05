@@ -724,7 +724,7 @@ impl App {
                                 vec!["To continue this session, run ".into(), command.cyan()];
                             lines.push(spans.into());
                         }
-                        self.chat_widget.add_plain_history_lines(lines);
+                        self.chat_widget.add_literal_history_lines(lines);
                     }
                 }
             }
@@ -1048,7 +1048,7 @@ impl App {
                                     vec!["To continue this session, run ".into(), command.cyan()];
                                 lines.push(spans.into());
                             }
-                            self.chat_widget.add_plain_history_lines(lines);
+                            self.chat_widget.add_literal_history_lines(lines);
                         }
                         self.maybe_prompt_resume_paused_goal_after_resume(
                             app_server,
