@@ -132,6 +132,7 @@ pub(crate) struct ConversationPanes {
     focused: PaneSlot,
     dispatch: Option<PaneSlot>,
     owned_screen_split: OwnedScreenSplitState,
+    selection_clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
 }
 
 // Rendering and `/side` lifecycle consume the remaining APIs in the next stack layers.
@@ -144,6 +145,7 @@ impl ConversationPanes {
             focused: PaneSlot::Parent,
             dispatch: None,
             owned_screen_split: OwnedScreenSplitState::default(),
+            selection_clipboard_lease: None,
         })
     }
 
@@ -213,6 +215,15 @@ impl ConversationPanes {
 
     pub(super) fn cancel_owned_screen_split_drag(&mut self) -> bool {
         self.owned_screen_split.cancel_drag()
+    }
+
+    pub(super) fn retain_selection_clipboard_lease(
+        &mut self,
+        lease: Option<crate::clipboard_copy::ClipboardLease>,
+    ) {
+        if lease.is_some() {
+            self.selection_clipboard_lease = lease;
+        }
     }
 
     pub(super) fn by_slot(&self, slot: PaneSlot) -> Option<&ConversationPane> {
