@@ -361,6 +361,11 @@ impl App {
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
             }
+            AppEvent::CommitRetainedStreamCell(cell) => {
+                self.insert_history_cell(tui, cell);
+                self.chat_widget.note_stream_commit_completed();
+                self.insert_pending_usage_output_after_stream_shutdown(tui);
+            }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
             }
@@ -379,7 +384,7 @@ impl App {
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;
-                self.chat_widget.note_stream_consolidation_completed();
+                self.chat_widget.note_stream_commit_completed();
                 self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
             AppEvent::ConsolidateProposedPlan(source) => {
@@ -418,7 +423,7 @@ impl App {
 
                     self.maybe_finish_stream_reflow(tui)?;
                 }
-                self.chat_widget.note_stream_consolidation_completed();
+                self.chat_widget.note_stream_commit_completed();
                 self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
             AppEvent::StartCommitAnimation => {
