@@ -120,11 +120,11 @@ async fn live_web_search_notifications_replace_active_row_with_completed_row() {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             started_at_ms: 0,
-            item: AppServerThreadItem::WebSearch {
+            item: AppServerThreadItem::WebSearch(codex_app_server_protocol::WebSearchItem {
                 id: "search-1".to_string(),
                 query: String::new(),
                 action: None,
-            },
+            }),
         }),
         /*replay_kind*/ None,
     );
@@ -143,14 +143,14 @@ async fn live_web_search_notifications_replace_active_row_with_completed_row() {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             completed_at_ms: 0,
-            item: AppServerThreadItem::WebSearch {
+            item: AppServerThreadItem::WebSearch(codex_app_server_protocol::WebSearchItem {
                 id: "search-1".to_string(),
                 query: "Montreal free food".to_string(),
                 action: Some(codex_app_server_protocol::WebSearchAction::Search {
                     query: Some("Montreal free food".to_string()),
                     queries: None,
                 }),
-            },
+            }),
         }),
         /*replay_kind*/ None,
     );
