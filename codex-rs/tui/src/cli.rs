@@ -6,7 +6,7 @@ use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
 
 #[derive(Parser, Clone, Debug)]
-#[command(version = "codex-quiet 0.143")]
+#[command(version = "codex-quiet 0.144")]
 pub struct Cli {
     /// Process-only PSP routing selected by the parent Codex CLI.
     #[clap(skip)]
