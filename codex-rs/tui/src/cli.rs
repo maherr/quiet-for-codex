@@ -6,7 +6,7 @@ use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
 
 #[derive(Parser, Clone, Debug)]
-#[command(version = "codex-quiet 0.144.1")]
+#[command(version = concat!("codex-quiet ", env!("CARGO_PKG_VERSION")))]
 pub struct Cli {
     /// Optional user prompt to start the session.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
