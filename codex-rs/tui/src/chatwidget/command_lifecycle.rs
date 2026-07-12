@@ -49,6 +49,13 @@ impl ChatWidget {
 
     pub(super) fn on_exec_command_output_delta(&mut self, call_id: &str, delta: &str) {
         self.track_unified_exec_output_chunk(call_id, delta.as_bytes());
+        if let Some(lifecycle) = self
+            .background_terminal_lifecycles
+            .values()
+            .find(|lifecycle| lifecycle.call_id() == call_id)
+        {
+            lifecycle.append_output(delta);
+        }
         if !self.bottom_pane.is_task_running() {
             return;
         }
@@ -80,6 +87,7 @@ impl ChatWidget {
         if stdin.is_empty() && command_display.is_none() {
             return;
         }
+        self.record_background_terminal_interaction(&process_id, stdin.clone());
 
         self.flush_answer_stream_with_separator();
         if stdin.is_empty() {
@@ -120,10 +128,48 @@ impl ChatWidget {
             {
                 self.flush_unified_exec_wait_streak();
             }
-            self.add_to_history(history_cell::new_unified_exec_interaction(
-                command_display,
-                stdin,
-            ));
+            self.request_redraw();
+        }
+    }
+
+    fn record_background_terminal_interaction(&mut self, process_id: &str, stdin: String) {
+        let command_display = self
+            .unified_exec_processes
+            .iter()
+            .find(|process| process.key == process_id)
+            .map(|process| process.command_display.clone())
+            .unwrap_or_else(|| "background command".to_string());
+        let lifecycle = self
+            .background_terminal_lifecycles
+            .entry(process_id.to_string())
+            .or_insert_with(|| {
+                history_cell::BackgroundTerminalLifecycleCell::new(
+                    process_id.to_string(),
+                    process_id.to_string(),
+                    command_display,
+                )
+            })
+            .clone();
+        lifecycle.record_interaction(stdin);
+        if lifecycle.activate() {
+            let call_id = lifecycle.call_id();
+            if self
+                .transcript
+                .active_cell
+                .as_ref()
+                .and_then(|cell| cell.as_any().downcast_ref::<ExecCell>())
+                .is_some_and(|exec| exec.is_single_call(&call_id))
+            {
+                self.transcript.active_cell = None;
+                self.bump_active_cell_revision();
+            }
+            self.app_event_tx
+                .send(AppEvent::PromoteBackgroundTerminalLifecycle {
+                    call_id,
+                    cell: Box::new(lifecycle),
+                });
+        } else {
+            self.app_event_tx.send(AppEvent::RefreshLifecycleHistory);
         }
     }
 
@@ -132,12 +178,33 @@ impl ChatWidget {
             id,
             process_id,
             source,
+            exit_code,
+            duration_ms,
+            aggregated_output,
             ..
         } = &item
         else {
             return;
         };
         if is_unified_exec_source(*source) {
+            let lifecycle = process_id.as_deref().and_then(|process_id| {
+                self.background_terminal_lifecycles.get(process_id).cloned()
+            });
+            let lifecycle_was_active = lifecycle
+                .as_ref()
+                .is_some_and(history_cell::BackgroundTerminalLifecycleCell::is_active);
+            if let (Some(lifecycle), Some(exit_code)) = (lifecycle.as_ref(), *exit_code) {
+                lifecycle.complete(
+                    exit_code,
+                    duration_ms
+                        .and_then(|duration_ms| u64::try_from(duration_ms).ok())
+                        .map(Duration::from_millis),
+                    aggregated_output.clone(),
+                );
+                if lifecycle_was_active {
+                    self.app_event_tx.send(AppEvent::RefreshLifecycleHistory);
+                }
+            }
             if let Some(process_id) = process_id.as_deref()
                 && self
                     .unified_exec_wait_streak
@@ -147,6 +214,17 @@ impl ChatWidget {
                 self.flush_unified_exec_wait_streak();
             }
             self.track_unified_exec_process_end(id, process_id.as_deref());
+            if let Some(process_id) = process_id.as_deref()
+                && exit_code.is_some()
+            {
+                self.background_terminal_lifecycles.remove(process_id);
+            }
+            if lifecycle_was_active {
+                self.running_commands.remove(id);
+                self.suppressed_exec_calls.remove(id);
+                self.transcript.had_work_activity = true;
+                return;
+            }
             if !self.bottom_pane.is_task_running() {
                 return;
             }
@@ -167,6 +245,14 @@ impl ChatWidget {
         let key = process_id.unwrap_or(call_id).to_string();
         let command = split_command_string(command);
         let command_display = strip_bash_lc_and_escape(&command);
+        self.background_terminal_lifecycles.insert(
+            key.clone(),
+            history_cell::BackgroundTerminalLifecycleCell::new(
+                call_id.to_string(),
+                key.clone(),
+                command_display.clone(),
+            ),
+        );
         if let Some(existing) = self
             .unified_exec_processes
             .iter_mut()

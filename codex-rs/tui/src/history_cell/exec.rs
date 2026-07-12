@@ -19,12 +19,14 @@ fn selection_prefix_width(line: &Line<'_>, prefixes: &[&str]) -> u16 {
     0
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct UnifiedExecInteractionCell {
     command_display: Option<String>,
     stdin: String,
 }
 
+#[allow(dead_code)]
 impl UnifiedExecInteractionCell {
     pub(crate) fn new(command_display: Option<String>, stdin: String) -> Self {
         Self {
@@ -147,6 +149,7 @@ impl HistoryCell for UnifiedExecInteractionCell {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn new_unified_exec_interaction(
     command_display: Option<String>,
     stdin: String,
