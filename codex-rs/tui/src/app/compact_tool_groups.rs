@@ -806,7 +806,10 @@ mod tests {
             .map(render_line_text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(rich, "▸ Tools: read 2 files · Alt+O expands");
+        assert_eq!(
+            rich,
+            "▸ Work: read 2 files · Alt+I inspect · Alt+O all"
+        );
 
         let raw = projected[0]
             .raw_lines()
