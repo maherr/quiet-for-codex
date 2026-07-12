@@ -2758,7 +2758,7 @@ async fn bottom_pane_renderable_can_be_laid_out_independently() {
 "                                                "
 "› Ask Codex to do anything                      "
 "                                                "
-"  gpt-5.5 default · /tmp/project                "
+"  gpt-5.6-sol default · /tmp/project            "
 "###);
 }
 
