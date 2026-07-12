@@ -1912,7 +1912,7 @@ mod tests {
     }
 
     #[test]
-    fn rich_selection_excludes_output_hidden_by_middle_truncation() {
+    fn rich_selection_matches_quiet_success_summary() {
         let output = (1..=20)
             .map(|line| format!("visible-line-{line:02}"))
             .join("\n");
@@ -1933,10 +1933,10 @@ mod tests {
         let cell = ExecCell::new(call, /*animations_enabled*/ false);
 
         let selected = rich_selection_text(&cell, /*width*/ 40);
-        assert!(selected.contains("visible-line-01"));
-        assert!(selected.contains("visible-line-20"));
-        assert!(selected.contains("ctrl + t to view transcript"));
-        assert!(!selected.contains("visible-line-08"));
+        assert!(selected.contains("✓ completed"));
+        assert!(selected.contains("+20 lines in transcript"));
+        assert!(!selected.contains("visible-line-01"));
+        assert!(!selected.contains("visible-line-20"));
     }
 
     #[test]
@@ -1960,7 +1960,7 @@ mod tests {
 
         assert_eq!(
             rich_selection_text(&cell, /*width*/ 18),
-            "Explored\nSearch alpha beta gamma delta epsilon"
+            "Explored\nSearched query alpha beta gamma delta epsilon"
         );
     }
 }

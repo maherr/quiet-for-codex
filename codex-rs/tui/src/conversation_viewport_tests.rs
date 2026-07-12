@@ -268,7 +268,7 @@ fn markdown_cells_use_single_blank_rows_inside_and_between_cells() {
 
   second thought
 
-• first answer
+● first answer
 
   second answer
 "###);
