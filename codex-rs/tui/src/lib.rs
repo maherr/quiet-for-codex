@@ -1915,7 +1915,6 @@ impl Drop for TerminalRestoreGuard {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AltScreenBehavior {
     Disabled,
-    OverlayOnly,
     Owned,
 }
 
@@ -1925,7 +1924,7 @@ pub(crate) enum AltScreenBehavior {
 /// - Otherwise, respect the `tui.alternate_screen` config setting:
 ///   - `always`: Own the alternate screen for the full application run
 ///   - `never`: Inline mode only, preserves scrollback
-///   - `auto` (default): Enter alternate screen only for overlays
+///   - `auto` (Quiet default): Own the screen so the composer stays pinned to the bottom
 fn determine_alt_screen_behavior(
     no_alt_screen: bool,
     tui_alternate_screen: AltScreenMode,
@@ -1936,7 +1935,7 @@ fn determine_alt_screen_behavior(
 
     match tui_alternate_screen {
         AltScreenMode::Always => AltScreenBehavior::Owned,
-        AltScreenMode::Auto => AltScreenBehavior::OverlayOnly,
+        AltScreenMode::Auto => AltScreenBehavior::Owned,
         AltScreenMode::Never => AltScreenBehavior::Disabled,
     }
 }
@@ -2478,7 +2477,7 @@ mod tests {
     #[test]
     fn alternate_screen_mode_maps_to_explicit_behavior() {
         let cases = [
-            (false, AltScreenMode::Auto, AltScreenBehavior::OverlayOnly),
+            (false, AltScreenMode::Auto, AltScreenBehavior::Owned),
             (false, AltScreenMode::Always, AltScreenBehavior::Owned),
             (false, AltScreenMode::Never, AltScreenBehavior::Disabled),
             (true, AltScreenMode::Auto, AltScreenBehavior::Disabled),

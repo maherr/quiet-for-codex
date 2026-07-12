@@ -173,18 +173,14 @@ impl McpToolCallCell {
         if let Some(result) = &self.result {
             match result {
                 Ok(codex_protocol::mcp::CallToolResult { content, .. }) => {
-                    details.extend(
-                        content
-                            .iter()
-                            .map(|block| {
-                                Self::render_content_block(
-                                    block,
-                                    detail_width,
-                                    MCP_VIEWPORT_RESULT_MAX_LINES,
-                                )
-                                .0
-                            }),
-                    );
+                    details.extend(content.iter().map(|block| {
+                        Self::render_content_block(
+                            block,
+                            detail_width,
+                            MCP_VIEWPORT_RESULT_MAX_LINES,
+                        )
+                        .0
+                    }));
                 }
                 Err(err) => details.push(format_and_truncate_tool_result(
                     &format!("Error: {err}"),

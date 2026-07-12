@@ -16,12 +16,16 @@ use crate::app_event::PaneSlot;
 use crate::chatwidget::tests::constructor::make_chatwidget_for_pane;
 use crate::chatwidget::tests::constructor::make_chatwidget_for_pane_with_sender;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+use crate::exec_cell::CommandOutput;
+use crate::exec_cell::new_active_exec_command;
 use crate::file_search::FileSearchManager;
 use crate::tui::MousePrimaryEvent;
 use crate::tui::MousePrimaryEventKind;
 use crate::tui::MouseScrollDirection;
 use crate::tui::MouseScrollEvent;
+use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_protocol::parse_command::ParsedCommand;
 
 #[derive(Debug)]
 struct TestCell(&'static str);
@@ -151,6 +155,33 @@ fn primary_press(column: u16, row: u16) -> MousePrimaryEvent {
     primary_event(MousePrimaryEventKind::Press, column, row)
 }
 
+fn completed_read_exec(call_id: &str, name: &str) -> Box<dyn HistoryCell> {
+    let command = vec!["cat".to_string(), name.to_string()];
+    let parsed = vec![ParsedCommand::Read {
+        cmd: command.join(" "),
+        name: name.to_string(),
+        path: name.into(),
+    }];
+    let mut cell = new_active_exec_command(
+        call_id.to_string(),
+        command,
+        parsed,
+        ExecCommandSource::Agent,
+        /*interaction_input*/ None,
+        /*animations_enabled*/ false,
+    );
+    assert!(cell.complete_call(
+        call_id,
+        CommandOutput {
+            exit_code: 0,
+            aggregated_output: String::new(),
+            formatted_output: String::new(),
+        },
+        Duration::from_millis(10),
+    ));
+    Box::new(cell)
+}
+
 #[tokio::test]
 async fn single_pane_app_layout_preserves_existing_owned_render() {
     let mut app = app_with_owned_parent().await;
@@ -163,18 +194,18 @@ async fn single_pane_app_layout_preserves_existing_owned_render() {
 
     let terminal = render_app(&mut app, /*width*/ 50, /*height*/ 10);
 
-    assert_snapshot!(terminal.backend(), @r###"
-"committed response                                "
-"                                                  "
-"                                                  "
-"                                                  "
-"                                                  "
-"                                                  "
-"                                                  "
-"› draft sentinel                                  "
-"                                                  "
-"  gpt-5.5 default · /tmp/project                  "
-"###);
+    assert_snapshot!(terminal.backend(), @r#"
+    "committed response                                "
+    "                                                  "
+    "                                                  "
+    "                                                  "
+    "                                                  "
+    "                                                  "
+    "                                                  "
+    "› draft sentinel                                  "
+    "                                                  "
+    "  gpt-5.6-sol default · /tmp/project              "
+    "#);
 }
 
 #[tokio::test]
@@ -1231,18 +1262,18 @@ async fn renders_committed_conversation_above_fixed_composer() {
         })
         .expect("render owned screen");
 
-    assert_snapshot!(terminal.backend(), @r###"
-"committed response                                "
-"                                                  "
-"                                                  "
-"                                                  "
-"                                                  "
-"                                                  "
-"                                                  "
-"› draft sentinel                                  "
-"                                                  "
-"  gpt-5.5 default · /tmp/project                  "
-"###);
+    assert_snapshot!(terminal.backend(), @r#"
+    "committed response                                "
+    "                                                  "
+    "                                                  "
+    "                                                  "
+    "                                                  "
+    "                                                  "
+    "                                                  "
+    "› draft sentinel                                  "
+    "                                                  "
+    "  gpt-5.6-sol default · /tmp/project              "
+    "#);
 }
 
 #[tokio::test]
@@ -1262,6 +1293,54 @@ async fn committed_cell_updates_viewport_without_queuing_terminal_history() {
     assert_eq!(app.chat_widget.transcript_cells.len(), 1);
     assert!(!app.has_emitted_history_lines);
     assert!(!tui.has_pending_history_lines());
+}
+
+#[tokio::test]
+async fn owned_tool_groups_toggle_between_compact_expanded_and_raw_projections() {
+    let mut app = app_with_owned_parent().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+
+    app.insert_history_cell(&mut tui, completed_read_exec("read-1", "app.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("read-2", "lib.rs"));
+
+    let committed_count = |app: &App| {
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .viewport
+            .committed_cell_count()
+    };
+    assert_eq!(app.chat_widget.transcript_cells.len(), 2);
+    assert_eq!(
+        committed_count(&app),
+        1,
+        "rich mode should retain one group"
+    );
+
+    app.toggle_compact_tool_groups_expanded(&mut tui)
+        .expect("expand compact tool groups");
+    assert!(app.chat_widget.compact_tool_groups_expanded);
+    assert_eq!(committed_count(&app), 2);
+
+    app.toggle_compact_tool_groups_expanded(&mut tui)
+        .expect("collapse compact tool groups");
+    assert!(!app.chat_widget.compact_tool_groups_expanded);
+    assert_eq!(committed_count(&app), 1);
+
+    app.apply_raw_output_mode(&mut tui, /*enabled*/ true, /*notify*/ false);
+    assert_eq!(
+        committed_count(&app),
+        2,
+        "raw mode should expose source cells"
+    );
+
+    app.apply_raw_output_mode(&mut tui, /*enabled*/ false, /*notify*/ false);
+    assert_eq!(
+        committed_count(&app),
+        1,
+        "rich mode should restore grouping"
+    );
 }
 
 #[tokio::test]
@@ -1386,16 +1465,16 @@ async fn mouse_wheel_scrolls_transcript_without_changing_draft() {
         })
         .expect("render scrolled");
 
-    assert_snapshot!(terminal.backend(), @r###"
-"                                        "
-"middle                                  "
-"                                        "
-"                                        "
-"                                        "
-"› draft sentinel                        "
-"                                        "
-"  gpt-5.5 default · /tmp/project        "
-"###);
+    assert_snapshot!(terminal.backend(), @r#"
+    "                                        "
+    "middle                                  "
+    "                                        "
+    "                                        "
+    "                                        "
+    "› draft sentinel                        "
+    "                                        "
+    "  gpt-5.6-sol default · /tmp/project    "
+    "#);
     assert!(!screen.viewport.is_following_bottom());
     assert!(!screen.handle_mouse_scroll(MouseScrollEvent {
         direction: MouseScrollDirection::Up,

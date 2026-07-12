@@ -4,7 +4,7 @@ expression: terminal.backend()
 ---
 " Parent                                  │ Side  ⌥ + 1 / ⌥ + 2 focus               "
 "parent transcript                        │╭───────────────────────────────────────╮"
-"                                         ││ >_ OpenAI Codex (v0.0.0)              │"
+"                                         ││ >_ OpenAI Codex (codex-quiet 0.144.1) │"
 "                                         ││                                       │"
 "                                         ││ model:     loading   /model to change │"
 "                                         ││ directory: /tmp/project               │"
@@ -13,4 +13,4 @@ expression: terminal.backend()
 "                                         │                                         "
 "› Conversation closed.                   │› side draft                             "
 "                                         │                                         "
-"  gpt-5.5 default · /tmp/project         │  gpt-5.5 default · /tmp/project         "
+"  gpt-5.6-sol default · /tmp/project     │  gpt-5.6-sol default · /tmp/project     "

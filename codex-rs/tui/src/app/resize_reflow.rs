@@ -85,7 +85,11 @@ impl App {
         self.chat_widget.compact_tool_groups_expanded =
             !self.chat_widget.compact_tool_groups_expanded;
         if self.overlay.is_none() {
-            self.reflow_transcript_now(tui)?;
+            if self.has_owned_screen() {
+                self.sync_owned_screen_cells();
+            } else {
+                self.reflow_transcript_now(tui)?;
+            }
         }
         tui.frame_requester().schedule_frame();
         Ok(())

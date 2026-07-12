@@ -21,6 +21,7 @@ use ratatui::widgets::Widget;
 use super::owned_screen_resize::OwnedScreenLayout;
 use super::*;
 use crate::AltScreenBehavior;
+use crate::history_cell::HistoryRenderMode;
 use crate::key_hint::is_plain_text_key_event;
 use crate::tui::MousePrimaryEvent;
 use crate::tui::MousePrimaryEventKind;
@@ -30,6 +31,8 @@ const PANE_HEADER_HEIGHT: u16 = 1;
 
 pub(super) struct OwnedScreen {
     viewport: ConversationViewport,
+    source_cells: Vec<Arc<dyn HistoryCell>>,
+    compact_tool_groups: bool,
     replay_in_progress: bool,
     last_pane_area: Rect,
     last_conversation_area: Rect,
@@ -50,11 +53,65 @@ impl OwnedScreen {
                 chat_widget.history_render_mode(),
                 keymap,
             ),
+            source_cells: Vec::new(),
+            compact_tool_groups: chat_widget.history_render_mode() == HistoryRenderMode::Rich,
             replay_in_progress: false,
             last_pane_area: Rect::default(),
             last_conversation_area: Rect::default(),
             last_selection_viewport_area: None,
         }
+    }
+
+    fn replace_source_cells(
+        &mut self,
+        cells: Vec<Arc<dyn HistoryCell>>,
+        compact_tool_groups: bool,
+    ) {
+        let projected = compact_tool_groups::project_owned_cells(&cells, compact_tool_groups);
+        self.source_cells = cells;
+        self.compact_tool_groups = compact_tool_groups;
+        self.viewport.replace_cells(projected);
+    }
+
+    fn push_source_cell(&mut self, cell: Arc<dyn HistoryCell>, compact_tool_groups: bool) {
+        if self.compact_tool_groups != compact_tool_groups {
+            self.source_cells.push(cell);
+            let cells = self.source_cells.clone();
+            self.replace_source_cells(cells, compact_tool_groups);
+            return;
+        }
+
+        if !compact_tool_groups {
+            self.source_cells.push(cell.clone());
+            self.viewport.push_cell(cell);
+            return;
+        }
+
+        let previous_run_start =
+            compact_tool_groups::trailing_compact_tool_run_start(&self.source_cells);
+        let previous_run = &self.source_cells[previous_run_start..];
+        let previous_projection_count =
+            compact_tool_groups::project_owned_cells(previous_run, /*compact*/ true).len();
+
+        self.source_cells.push(cell);
+        let next_run_start =
+            compact_tool_groups::trailing_compact_tool_run_start(&self.source_cells);
+        if next_run_start == self.source_cells.len() {
+            let cell = self
+                .source_cells
+                .last()
+                .expect("a pushed source cell must be present")
+                .clone();
+            self.viewport.push_cell(cell);
+            return;
+        }
+
+        let projected_tail = compact_tool_groups::project_owned_cells(
+            &self.source_cells[next_run_start..],
+            /*compact*/ true,
+        );
+        self.viewport
+            .replace_tail(previous_projection_count, projected_tail);
     }
 
     fn render(
@@ -345,7 +402,7 @@ impl App {
         keymap: crate::keymap::PagerKeymap,
     ) -> Option<OwnedScreen> {
         match alt_screen_behavior {
-            AltScreenBehavior::Disabled | AltScreenBehavior::OverlayOnly => None,
+            AltScreenBehavior::Disabled => None,
             AltScreenBehavior::Owned => Some(OwnedScreen::new(chat_widget, keymap)),
         }
     }
@@ -357,8 +414,9 @@ impl App {
     }
 
     pub(super) fn owned_screen_push_cell(&mut self, cell: Arc<dyn HistoryCell>) {
+        let compact_tool_groups = self.compact_tool_groups_enabled();
         if let Some(screen) = &mut self.chat_widget.owned_screen {
-            screen.viewport.push_cell(cell);
+            screen.push_source_cell(cell, compact_tool_groups);
         }
     }
 
@@ -566,9 +624,22 @@ impl App {
 
     pub(crate) fn sync_owned_screen_cells(&mut self) {
         let cells = self.chat_widget.transcript_cells.clone();
+        let compact_tool_groups = self.compact_tool_groups_enabled();
         if let Some(screen) = &mut self.chat_widget.owned_screen {
-            screen.viewport.replace_cells(cells);
+            screen.replace_source_cells(cells, compact_tool_groups);
         }
+    }
+
+    pub(super) fn sync_all_owned_screen_cells(&mut self) {
+        self.chat_widget.for_each_installed_mut(|pane| {
+            let cells = pane.transcript_cells.clone();
+            let compact_tool_groups = pane.chat_widget.history_render_mode()
+                == HistoryRenderMode::Rich
+                && !pane.compact_tool_groups_expanded;
+            if let Some(screen) = &mut pane.owned_screen {
+                screen.replace_source_cells(cells, compact_tool_groups);
+            }
+        });
     }
 
     pub(super) fn sync_owned_screen_render_mode(&mut self) {
