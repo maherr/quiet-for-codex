@@ -108,13 +108,8 @@ impl ChatWidget {
         self.transcript.had_work_activity = true;
     }
 
-    pub(super) fn on_collab_event(&mut self, cell: PlainHistoryCell) {
-        self.flush_answer_stream_with_separator();
-        self.add_to_history(cell);
-        self.request_redraw();
-    }
-
     pub(super) fn on_collab_agent_tool_call(&mut self, item: ThreadItem) {
+        self.record_visible_turn_activity();
         let ThreadItem::CollabAgentToolCall {
             id, tool, status, ..
         } = &item
@@ -128,7 +123,7 @@ impl ChatWidget {
                 .insert(id.clone(), spawn_request);
         }
 
-        let cached_spawn_request = if matches!(tool, CollabAgentTool::SpawnAgent)
+        let _cached_spawn_request = if matches!(tool, CollabAgentTool::SpawnAgent)
             && !matches!(status, CollabAgentToolCallStatus::InProgress)
         {
             self.pending_collab_spawn_requests.remove(id)
@@ -136,19 +131,66 @@ impl ChatWidget {
             None
         };
 
-        if let Some(cell) = multi_agents::tool_call_history_cell(
-            &item,
-            cached_spawn_request.as_ref(),
-            |thread_id| self.collab_agent_metadata(thread_id),
-        ) {
-            self.on_collab_event(cell);
+        let first_event = self.agent_fleet_lifecycle.is_none();
+        let fleet = self
+            .agent_fleet_lifecycle
+            .get_or_insert_with(history_cell::AgentFleetLifecycleCell::new)
+            .clone();
+        let labels = self.collab_agent_labels(&item);
+        fleet.update_tool_call(&item, &labels);
+        self.flush_answer_stream_with_separator();
+        if first_event {
+            self.add_to_history(fleet);
+        } else {
+            self.app_event_tx.send(AppEvent::RefreshLifecycleHistory);
+            self.request_redraw();
         }
     }
 
     pub(super) fn on_sub_agent_activity(&mut self, item: ThreadItem) {
-        if let Some(cell) = multi_agents::sub_agent_activity_history_cell(&item) {
-            self.on_collab_event(cell);
+        self.record_visible_turn_activity();
+        let first_event = self.agent_fleet_lifecycle.is_none();
+        let fleet = self
+            .agent_fleet_lifecycle
+            .get_or_insert_with(history_cell::AgentFleetLifecycleCell::new)
+            .clone();
+        fleet.update_activity(&item);
+        self.flush_answer_stream_with_separator();
+        if first_event {
+            self.add_to_history(fleet);
+        } else {
+            self.app_event_tx.send(AppEvent::RefreshLifecycleHistory);
+            self.request_redraw();
         }
+    }
+
+    fn collab_agent_labels(&self, item: &ThreadItem) -> std::collections::BTreeMap<String, String> {
+        let ThreadItem::CollabAgentToolCall {
+            receiver_thread_ids,
+            agents_states,
+            ..
+        } = item
+        else {
+            return std::collections::BTreeMap::new();
+        };
+        receiver_thread_ids
+            .iter()
+            .chain(agents_states.keys())
+            .filter_map(|thread_id| {
+                let parsed = ThreadId::from_string(thread_id).ok()?;
+                let metadata = self.collab_agent_metadata(parsed);
+                let label = match (
+                    metadata.agent_nickname.as_deref(),
+                    metadata.agent_role.as_deref(),
+                ) {
+                    (Some(nickname), Some(role)) => format!("{nickname} [{role}]"),
+                    (Some(nickname), None) => nickname.to_string(),
+                    (None, Some(role)) => format!("{thread_id} [{role}]"),
+                    (None, None) => thread_id.clone(),
+                };
+                Some((thread_id.clone(), label))
+            })
+            .collect()
     }
 
     pub(crate) fn handle_file_change_completed_now(&mut self, item: ThreadItem) {

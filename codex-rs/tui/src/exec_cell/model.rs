@@ -175,6 +175,14 @@ impl ExecCell {
         self.calls.iter()
     }
 
+    pub(crate) fn contains_call_id(&self, call_id: &str) -> bool {
+        self.calls.iter().any(|call| call.call_id == call_id)
+    }
+
+    pub(crate) fn is_single_call(&self, call_id: &str) -> bool {
+        self.calls.len() == 1 && self.contains_call_id(call_id)
+    }
+
     pub(crate) fn append_output(&mut self, call_id: &str, chunk: &str) -> bool {
         if chunk.is_empty() {
             return false;

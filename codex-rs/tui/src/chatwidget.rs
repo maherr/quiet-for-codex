@@ -593,6 +593,7 @@ pub(crate) struct ChatWidget {
     running_commands: HashMap<String, RunningCommand>,
     collab_agent_metadata: HashMap<ThreadId, AgentMetadata>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
+    agent_fleet_lifecycle: Option<history_cell::AgentFleetLifecycleCell>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<SkillMetadata>,
     skills_initial_state: Option<HashMap<AbsolutePathBuf, bool>>,
@@ -601,6 +602,7 @@ pub(crate) struct ChatWidget {
     safety_buffering: SafetyBufferingState,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
+    background_terminal_lifecycles: HashMap<String, history_cell::BackgroundTerminalLifecycleCell>,
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first startup status update until the
