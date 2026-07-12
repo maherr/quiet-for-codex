@@ -13,7 +13,9 @@ use crate::exec_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::McpToolCallCell;
+use crate::history_cell::SelectionContribution;
 use crate::history_cell::WebSearchCell;
+use crate::history_cell::selection_contribution_from_display_lines;
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
@@ -21,6 +23,91 @@ use crate::wrapping::adaptive_wrap_line;
 pub(super) struct CompactToolGroup {
     pub(super) lines: Vec<Line<'static>>,
     pub(super) consumed_cells: usize,
+}
+
+/// A retained-view projection of adjacent completed tool cells.
+///
+/// The source cells stay intact for raw mode, transcript overlays, replay, and selection. Rich
+/// owned-screen rendering asks the group to recompute its one-line summary at the current width,
+/// so terminal resize does not require flattening the transcript into cached rows.
+#[derive(Debug)]
+struct CompactToolGroupCell {
+    source_cells: Vec<Arc<dyn HistoryCell>>,
+}
+
+impl CompactToolGroupCell {
+    fn new(source_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
+        Self { source_cells }
+    }
+
+    fn expanded_lines(&self, width: u16, mode: HistoryRenderMode) -> Vec<Line<'static>> {
+        render_transcript_lines(
+            &self.source_cells,
+            width,
+            mode,
+            /*compact_tool_groups*/ false,
+            /*row_cap*/ None,
+        )
+    }
+}
+
+impl HistoryCell for CompactToolGroupCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        compact_tool_group_at(&self.source_cells, /*start*/ 0, width)
+            .map(|group| group.lines)
+            .unwrap_or_else(|| self.expanded_lines(width, HistoryRenderMode::Rich))
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        self.expanded_lines(u16::MAX, HistoryRenderMode::Raw)
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.expanded_lines(width, HistoryRenderMode::Rich)
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        selection_contribution_from_display_lines(self.display_lines_for_mode(width, mode), width)
+    }
+}
+
+/// Builds the retained presentation cells used by the application-owned viewport.
+///
+/// This runs only when committed source changes or the user toggles compact/raw presentation. The
+/// viewport continues rendering retained cells frame-to-frame and never rebuilds the full history
+/// during an ordinary draw.
+pub(super) fn project_owned_cells(
+    cells: &[Arc<dyn HistoryCell>],
+    compact_tool_groups: bool,
+) -> Vec<Arc<dyn HistoryCell>> {
+    if !compact_tool_groups {
+        return cells.to_vec();
+    }
+
+    let mut projected = Vec::with_capacity(cells.len());
+    let mut index = 0usize;
+    while index < cells.len() {
+        if let Some(group) = compact_tool_group_at(cells, index, /*width*/ u16::MAX) {
+            let end = index.saturating_add(group.consumed_cells).min(cells.len());
+            projected.push(
+                Arc::new(CompactToolGroupCell::new(cells[index..end].to_vec()))
+                    as Arc<dyn HistoryCell>,
+            );
+            index = end;
+        } else {
+            projected.push(cells[index].clone());
+            index += 1;
+        }
+    }
+    projected
+}
+
+pub(super) fn trailing_compact_tool_run_start(cells: &[Arc<dyn HistoryCell>]) -> usize {
+    let mut start = cells.len();
+    while start > 0 && tool_group_item(cells[start - 1].as_ref()).is_some() {
+        start -= 1;
+    }
+    start
 }
 
 #[derive(Default)]
@@ -497,6 +584,42 @@ mod tests {
             render_group_text(group),
             "▸ Tools: read 2 files, called gmail.read_thread · Alt+O expands"
         );
+    }
+
+    #[test]
+    fn owned_projection_compacts_rich_view_and_preserves_raw_sources() {
+        let cells = vec![
+            completed_read_exec("read-1", "app.rs"),
+            completed_read_exec("read-2", "lib.rs"),
+        ];
+
+        let projected = project_owned_cells(&cells, /*compact_tool_groups*/ true);
+        assert_eq!(projected.len(), 1);
+        let rich = projected[0]
+            .display_lines(/*width*/ 80)
+            .iter()
+            .map(render_line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(rich, "▸ Tools: read 2 files · Alt+O expands");
+
+        let raw = projected[0]
+            .raw_lines()
+            .iter()
+            .map(render_line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            raw.contains("app.rs"),
+            "raw projection lost first source: {raw}"
+        );
+        assert!(
+            raw.contains("lib.rs"),
+            "raw projection lost second source: {raw}"
+        );
+
+        let expanded = project_owned_cells(&cells, /*compact_tool_groups*/ false);
+        assert_eq!(expanded.len(), 2);
     }
 
     #[test]

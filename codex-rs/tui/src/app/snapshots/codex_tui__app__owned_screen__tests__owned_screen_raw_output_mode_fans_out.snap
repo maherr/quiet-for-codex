@@ -3,14 +3,14 @@ source: tui/src/app/owned_screen_tests.rs
 expression: terminal.backend()
 ---
 " Parent                                  │ Side  ⌥ + 1 / ⌥ + 2 focus               "
-"parent raw transcript                    │side raw transcript                      "
-"                                         │                                         "
-"                                         │OpenAI Codex (v0.0.0)                    "
+"                                         │OpenAI Codex (vcodex-quiet 0.144.1)      "
 "                                         │model: loading                           "
 "                                         │directory: /tmp/project                  "
 "                                         │                                         "
 "                                         │                                         "
 "                                         │                                         "
+"                                         │                                         "
+"                                         │                                         "
 "› parent draft                           │› side draft                             "
 "                                         │                                         "
-"  gpt-5.5 default · /tmp/project         │  gpt-5.5 default · /tmp/project         "
+"  gpt-5.6-sol default · /tmp/project     │  gpt-5.6-sol default · /tmp/project     "

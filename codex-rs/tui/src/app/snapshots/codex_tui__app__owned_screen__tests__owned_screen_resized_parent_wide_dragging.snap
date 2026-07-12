@@ -4,7 +4,7 @@ expression: active.backend()
 ---
 " Parent  ⌥ + 1 / ⌥ + 2 focus                                          ┃ Side                                            "
 "parent transcript                                                     ┃╭───────────────────────────────────────╮        "
-"                                                                      ┃│ >_ OpenAI Codex (v0.0.0)              │        "
+"                                                                      ┃│ >_ OpenAI Codex (codex-quiet 0.144.1) │        "
 "                                                                      ┃│                                       │        "
 "                                                                      ┃│ model:     loading   /model to change │        "
 "                                                                      ┃│ directory: /tmp/project               │        "
@@ -13,4 +13,4 @@ expression: active.backend()
 "                                                                      ┃                                                 "
 "› parent draft                                                        ┃› side draft                                     "
 "                                                                      ┃                                                 "
-"  gpt-5.5 default · /tmp/project                                      ┃  gpt-5.5 default · /tmp/project                 "
+"  gpt-5.6-sol default · /tmp/project                                  ┃  gpt-5.6-sol default · /tmp/project             "

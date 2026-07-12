@@ -84,6 +84,7 @@ impl App {
         });
         self.sync_owned_screen_render_mode();
         if self.has_owned_screen() {
+            self.sync_all_owned_screen_cells();
             tui.frame_requester().schedule_frame();
             return;
         }

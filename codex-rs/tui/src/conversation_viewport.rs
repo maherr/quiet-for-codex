@@ -274,6 +274,44 @@ impl ConversationViewport {
         }
     }
 
+    /// Replaces only the committed tail while preserving the retained prefix and scroll state.
+    ///
+    /// Compact tool summaries use this when one newly committed tool extends the trailing group.
+    /// Rebuilding the entire conversation for every tool completion would make long sessions pay
+    /// an avoidable O(history) cost even though only the final presentation cell changed.
+    pub(crate) fn replace_tail(
+        &mut self,
+        remove_count: usize,
+        replacement: Vec<Arc<dyn HistoryCell>>,
+    ) {
+        if self.selection.is_active() {
+            let cells = self
+                .deferred_cells
+                .get_or_insert_with(|| self.cells.clone());
+            cells.truncate(cells.len().saturating_sub(remove_count));
+            cells.extend(replacement);
+            return;
+        }
+
+        self.invalidate_selection_projections();
+        let follow_bottom = self.content.is_following_bottom();
+        self.take_live_tail_renderables();
+        for _ in 0..remove_count.min(self.cells.len()) {
+            self.cells.pop();
+            self.content.pop();
+        }
+        for cell in replacement {
+            let has_prior_cells = !self.cells.is_empty();
+            let renderable = Self::cell_renderable(cell.clone(), self.render_mode, has_prior_cells);
+            self.cells.push(cell);
+            self.content.push(renderable);
+        }
+        self.push_live_tail_renderables();
+        if follow_bottom {
+            self.content.scroll_to_bottom();
+        }
+    }
+
     pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
         if self.selection.is_active() {
             self.deferred_cells = Some(cells);

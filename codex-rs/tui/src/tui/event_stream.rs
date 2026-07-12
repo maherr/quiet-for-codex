@@ -264,7 +264,6 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 }
                 Some(TuiEvent::Key(key_event))
             }
-            Event::Mouse(_) => None,
             Event::Resize(_, _) => Some(TuiEvent::Resize),
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
             Event::Mouse(mouse_event) => match mouse_event.kind {

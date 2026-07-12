@@ -888,21 +888,19 @@ impl ExecCell {
         );
 
         if raw_output.lines.is_empty() {
-            return vec![ExecDisplayLine::generated(
-                Line::from("(no output)".dim()),
-                "(no output)".to_string(),
-            )
-            .with_prefix(Line::from(
-                Span::from(layout.output_block.initial_prefix).dim(),
-            ))];
+            return vec![
+                ExecDisplayLine::generated(
+                    Line::from("(no output)".dim()),
+                    "(no output)".to_string(),
+                )
+                .with_prefix(Line::from(
+                    Span::from(layout.output_block.initial_prefix).dim(),
+                )),
+            ];
         }
 
-        let prefixed_output = Self::wrap_output_block(
-            &raw_output.lines,
-            width,
-            layout,
-            next_source_id,
-        );
+        let prefixed_output =
+            Self::wrap_output_block(&raw_output.lines, width, layout, next_source_id);
         Self::truncate_exec_lines_middle(
             &prefixed_output,
             USER_SHELL_TOOL_CALL_MAX_LINES,
