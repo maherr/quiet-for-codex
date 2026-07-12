@@ -21,7 +21,10 @@ use ratatui::prelude::*;
 use ratatui::style::Stylize;
 
 use super::HistoryCell;
+use super::HistoryRenderMode;
+use super::SelectionContribution;
 use super::raw_lines_from_source;
+use super::selection_contribution_from_display_lines;
 use crate::render::line_utils::line_to_static;
 use crate::text_formatting::truncate_text;
 use crate::wrapping::RtOptions;
@@ -166,6 +169,10 @@ impl HistoryCell for BackgroundTerminalLifecycleCell {
 
     fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.raw_lines()
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        selection_contribution_from_display_lines(self.display_lines_for_mode(width, mode), width)
     }
 }
 
@@ -502,6 +509,10 @@ impl HistoryCell for AgentFleetLifecycleCell {
 
     fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.raw_lines()
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        selection_contribution_from_display_lines(self.display_lines_for_mode(width, mode), width)
     }
 }
 
