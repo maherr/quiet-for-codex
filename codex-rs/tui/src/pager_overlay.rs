@@ -60,6 +60,17 @@ impl Overlay {
         Self::Transcript(TranscriptOverlay::new(cells, keymap))
     }
 
+    pub(crate) fn new_work_inspector(
+        cells: Vec<Arc<dyn HistoryCell>>,
+        keymap: PagerKeymap,
+    ) -> Self {
+        Self::Transcript(TranscriptOverlay::with_title(
+            cells,
+            "L A S T  W O R K".to_string(),
+            keymap,
+        ))
+    }
+
     pub(crate) fn new_static_with_lines(
         lines: Vec<Line<'static>>,
         title: String,
@@ -677,10 +688,18 @@ impl TranscriptOverlay {
     /// This overlay does not own the "active cell"; callers may optionally append a live tail via
     /// `sync_live_tail` during draws to reflect in-flight activity.
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>, keymap: PagerKeymap) -> Self {
+        Self::with_title(transcript_cells, "T R A N S C R I P T".to_string(), keymap)
+    }
+
+    fn with_title(
+        transcript_cells: Vec<Arc<dyn HistoryCell>>,
+        title: String,
+        keymap: PagerKeymap,
+    ) -> Self {
         Self {
             view: PagerView::new(
                 Self::render_cells(&transcript_cells, /*highlight_cell*/ None),
-                "T R A N S C R I P T".to_string(),
+                title,
                 usize::MAX,
                 keymap,
             ),

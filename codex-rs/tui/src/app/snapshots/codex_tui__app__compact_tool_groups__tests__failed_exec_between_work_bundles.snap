@@ -1,0 +1,11 @@
+---
+source: tui/src/app/compact_tool_groups.rs
+expression: rendered
+---
+▸ Work: read 2 files · Alt+I inspect · Alt+O all
+
+• Ran cargo build
+  └ permission denied
+    ✗ failed (exit 7) • 10ms
+
+▸ Work: read 2 files · Alt+I inspect · Alt+O all

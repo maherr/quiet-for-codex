@@ -170,6 +170,26 @@ impl App {
         }
 
         if app_keymap_shortcuts_available
+            && compact_tool_group_inspect_shortcut_matches(key_event)
+            && self.chat_widget.composer_text_with_pending().is_empty()
+        {
+            let width = self
+                .chat_widget
+                .history_wrap_width(tui.terminal.last_known_screen_size.width);
+            if let Some(cells) =
+                compact_tool_groups::latest_compact_tool_group_cells(&self.transcript_cells, width)
+            {
+                let _ = tui.enter_alt_screen();
+                self.overlay = Some(Overlay::new_work_inspector(
+                    cells,
+                    self.keymap.pager.clone(),
+                ));
+                tui.frame_requester().schedule_frame();
+            }
+            return;
+        }
+
+        if app_keymap_shortcuts_available
             && compact_tool_group_toggle_shortcut_matches(key_event)
             && self.chat_widget.composer_text_with_pending().is_empty()
         {
@@ -359,6 +379,13 @@ fn compact_tool_group_toggle_shortcut_matches(key_event: KeyEvent) -> bool {
     matches!(
         (key_event.code, key_event.modifiers),
         (KeyCode::Char('o') | KeyCode::Char('O'), KeyModifiers::ALT)
+    )
+}
+
+fn compact_tool_group_inspect_shortcut_matches(key_event: KeyEvent) -> bool {
+    matches!(
+        (key_event.code, key_event.modifiers),
+        (KeyCode::Char('i') | KeyCode::Char('I'), KeyModifiers::ALT)
     )
 }
 

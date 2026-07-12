@@ -13,9 +13,11 @@ use crate::exec_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::McpToolCallCell;
+use crate::history_cell::PatchHistoryCell;
 use crate::history_cell::SelectionContribution;
 use crate::history_cell::WebSearchCell;
 use crate::history_cell::selection_contribution_from_display_lines;
+use crate::history_cell::tool_result_requires_user_action;
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
@@ -121,12 +123,16 @@ struct ToolGroupSummary {
     read_labels: BTreeSet<String>,
     list_count: usize,
     search_count: usize,
+    edit_file_count: usize,
     run_count: usize,
     test_count: usize,
+    build_count: usize,
+    check_count: usize,
     install_count: usize,
-    web_count: usize,
+    web_search_count: usize,
+    web_open_count: usize,
+    web_find_count: usize,
     mcp_counts: BTreeMap<String, usize>,
-    failures: usize,
     actions: usize,
 }
 
@@ -135,11 +141,15 @@ impl ToolGroupSummary {
         self.read_labels.extend(other.read_labels);
         self.list_count += other.list_count;
         self.search_count += other.search_count;
+        self.edit_file_count += other.edit_file_count;
         self.run_count += other.run_count;
         self.test_count += other.test_count;
+        self.build_count += other.build_count;
+        self.check_count += other.check_count;
         self.install_count += other.install_count;
-        self.web_count += other.web_count;
-        self.failures += other.failures;
+        self.web_search_count += other.web_search_count;
+        self.web_open_count += other.web_open_count;
+        self.web_find_count += other.web_find_count;
         self.actions += other.actions;
         for (label, count) in other.mcp_counts {
             *self.mcp_counts.entry(label).or_default() += count;
@@ -153,7 +163,30 @@ impl ToolGroupSummary {
         }
         push_count_part(&mut parts, self.list_count, "listed dir", "listed dirs");
         push_count_part(&mut parts, self.search_count, "searched", "searched");
-        push_count_part(&mut parts, self.test_count, "ran tests", "ran tests");
+        push_count_part(
+            &mut parts,
+            self.edit_file_count,
+            "edited 1 file",
+            "files edited",
+        );
+        push_count_part(
+            &mut parts,
+            self.test_count,
+            "tests passed",
+            "test runs passed",
+        );
+        push_count_part(
+            &mut parts,
+            self.build_count,
+            "build passed",
+            "builds passed",
+        );
+        push_count_part(
+            &mut parts,
+            self.check_count,
+            "check passed",
+            "checks passed",
+        );
         push_count_part(
             &mut parts,
             self.install_count,
@@ -161,12 +194,26 @@ impl ToolGroupSummary {
             "installed deps",
         );
         push_count_part(&mut parts, self.run_count, "ran command", "ran commands");
-        push_count_part(&mut parts, self.web_count, "searched web", "searched web");
+        push_count_part(
+            &mut parts,
+            self.web_search_count,
+            "searched web",
+            "web searches",
+        );
+        push_count_part(
+            &mut parts,
+            self.web_open_count,
+            "opened web page",
+            "web pages opened",
+        );
+        push_count_part(
+            &mut parts,
+            self.web_find_count,
+            "found on page",
+            "in-page finds",
+        );
         if !self.mcp_counts.is_empty() {
             parts.push(mcp_summary(&self.mcp_counts));
-        }
-        if self.failures > 0 {
-            push_count_part(&mut parts, self.failures, "1 failed", "failed");
         }
         parts
     }
@@ -199,14 +246,14 @@ pub(super) fn compact_tool_group_at(
         return None;
     }
 
-    let detail = parts.join(", ");
+    let detail = parts.join(" · ");
     let line = Line::from(vec![
         "▸ ".dim(),
-        "Tools".bold(),
+        "Work".bold(),
         ": ".dim(),
         detail.into(),
         " · ".dim(),
-        "Alt+O expands".dim(),
+        "Alt+I inspect · Alt+O all".dim(),
     ]);
     let wrapped = adaptive_wrap_line(
         &line,
@@ -237,6 +284,26 @@ pub(super) fn appended_cell_touches_compact_group(
         compact_tool_group_at(cells, start, width)
             .is_some_and(|group| start.saturating_add(group.consumed_cells) == len)
     })
+}
+
+pub(super) fn latest_compact_tool_group_cells(
+    cells: &[Arc<dyn HistoryCell>],
+    width: u16,
+) -> Option<Vec<Arc<dyn HistoryCell>>> {
+    let mut latest = None;
+    let mut start = 0usize;
+
+    while start < cells.len() {
+        if let Some(group) = compact_tool_group_at(cells, start, width) {
+            let end = start.saturating_add(group.consumed_cells).min(cells.len());
+            latest = Some(cells[start..end].to_vec());
+            start = end;
+        } else {
+            start += 1;
+        }
+    }
+
+    latest
 }
 
 pub(super) fn render_transcript_lines(
@@ -296,6 +363,9 @@ fn tool_group_item(cell: &dyn HistoryCell) -> Option<ToolGroupItem> {
     if let Some(web) = cell.as_any().downcast_ref::<WebSearchCell>() {
         return web_tool_group_item(web);
     }
+    if let Some(patch) = cell.as_any().downcast_ref::<PatchHistoryCell>() {
+        return patch_tool_group_item(patch);
+    }
     None
 }
 
@@ -310,8 +380,11 @@ fn exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
     for call in exec.iter_calls() {
         call_count += 1;
         let output = call.output.as_ref()?;
-        if output.exit_code != 0 {
-            summary.failures += 1;
+        if output.exit_code != 0
+            || tool_result_requires_user_action(&output.aggregated_output)
+            || tool_result_requires_user_action(&output.formatted_output)
+        {
+            return None;
         }
 
         if call.parsed.is_empty() {
@@ -332,13 +405,13 @@ fn exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
 
 fn mcp_tool_group_item(mcp: &McpToolCallCell) -> Option<ToolGroupItem> {
     let (invocation, success) = mcp.completed_invocation()?;
+    if !success || !mcp.is_safe_to_compact() {
+        return None;
+    }
     let mut summary = ToolGroupSummary::default();
     let label = format!("{}.{}", invocation.server, invocation.tool);
     summary.mcp_counts.insert(label, 1);
     summary.actions = 1;
-    if !success {
-        summary.failures = 1;
-    }
     Some(ToolGroupItem {
         summary,
         collapse_single: false,
@@ -346,16 +419,34 @@ fn mcp_tool_group_item(mcp: &McpToolCallCell) -> Option<ToolGroupItem> {
 }
 
 fn web_tool_group_item(web: &WebSearchCell) -> Option<ToolGroupItem> {
-    if !web.is_completed() {
-        return None;
-    }
-    let summary = ToolGroupSummary {
-        web_count: 1,
+    let action = web.completed_action()?;
+    let mut summary = ToolGroupSummary {
         actions: 1,
         ..Default::default()
     };
+    match action {
+        codex_app_server_protocol::WebSearchAction::Search { .. }
+        | codex_app_server_protocol::WebSearchAction::Other => summary.web_search_count = 1,
+        codex_app_server_protocol::WebSearchAction::OpenPage { .. } => summary.web_open_count = 1,
+        codex_app_server_protocol::WebSearchAction::FindInPage { .. } => summary.web_find_count = 1,
+    }
     Some(ToolGroupItem {
         summary,
+        collapse_single: false,
+    })
+}
+
+fn patch_tool_group_item(patch: &PatchHistoryCell) -> Option<ToolGroupItem> {
+    let edit_file_count = patch.changed_file_count();
+    if edit_file_count == 0 {
+        return None;
+    }
+    Some(ToolGroupItem {
+        summary: ToolGroupSummary {
+            edit_file_count,
+            actions: 1,
+            ..Default::default()
+        },
         collapse_single: false,
     })
 }
@@ -381,12 +472,53 @@ fn add_parsed_command(summary: &mut ToolGroupSummary, parsed: &ParsedCommand) {
 fn add_command(summary: &mut ToolGroupSummary, command: &str) {
     if is_test_command(command) {
         summary.test_count += 1;
+    } else if is_build_command(command) {
+        summary.build_count += 1;
+    } else if is_check_command(command) {
+        summary.check_count += 1;
     } else if is_dependency_install_command(command) {
         summary.install_count += 1;
     } else {
         summary.run_count += 1;
     }
     summary.actions += 1;
+}
+
+fn is_build_command(command: &str) -> bool {
+    [
+        "cargo build",
+        "npm run build",
+        "pnpm run build",
+        "yarn build",
+        "yarn run build",
+        "bun run build",
+        "go build",
+        "swift build",
+        "zig build",
+        "cmake --build",
+        "make",
+        "just build",
+    ]
+    .iter()
+    .any(|prefix| command_has_prefix(command.trim_start(), prefix))
+}
+
+fn is_check_command(command: &str) -> bool {
+    [
+        "cargo check",
+        "cargo clippy",
+        "npm run typecheck",
+        "pnpm run typecheck",
+        "yarn typecheck",
+        "bun run typecheck",
+        "tsc",
+        "eslint",
+        "ruff check",
+        "just lint",
+        "just check",
+    ]
+    .iter()
+    .any(|prefix| command_has_prefix(command.trim_start(), prefix))
 }
 
 fn read_label(name: &str, path: &Path) -> String {
@@ -487,6 +619,7 @@ fn command_has_prefix(command: &str, prefix: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::time::Duration;
 
     use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
@@ -495,10 +628,12 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::diff_model::FileChange;
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::new_active_exec_command;
     use crate::history_cell::McpInvocation;
     use crate::history_cell::new_active_mcp_tool_call;
+    use crate::history_cell::new_patch_event;
     use crate::history_cell::new_web_search_call;
 
     fn render_line_text(line: &Line<'static>) -> String {
@@ -511,6 +646,14 @@ mod tests {
     fn render_group_text(group: CompactToolGroup) -> String {
         group
             .lines
+            .iter()
+            .map(render_line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn render_lines_text(lines: &[Line<'static>]) -> String {
+        lines
             .iter()
             .map(render_line_text)
             .collect::<Vec<_>>()
@@ -545,6 +688,25 @@ mod tests {
     }
 
     fn completed_mcp(call_id: &str, server: &str, tool: &str) -> Arc<dyn HistoryCell> {
+        completed_mcp_result(
+            call_id,
+            server,
+            tool,
+            Ok(CallToolResult {
+                content: Vec::new(),
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        )
+    }
+
+    fn completed_mcp_result(
+        call_id: &str,
+        server: &str,
+        tool: &str,
+        result: Result<CallToolResult, String>,
+    ) -> Arc<dyn HistoryCell> {
         let mut cell = new_active_mcp_tool_call(
             call_id.to_string(),
             McpInvocation {
@@ -554,19 +716,62 @@ mod tests {
             },
             /*animations_enabled*/ false,
         );
-        assert!(
-            cell.complete(
-                Duration::from_millis(10),
-                Ok(CallToolResult {
-                    content: Vec::new(),
-                    structured_content: None,
-                    is_error: Some(false),
-                    meta: None,
-                }),
-            )
-            .is_none()
-        );
+        assert!(cell.complete(Duration::from_millis(10), result).is_none());
         Arc::new(cell)
+    }
+
+    fn completed_command(call_id: &str, command: &str, exit_code: i32) -> Arc<dyn HistoryCell> {
+        completed_command_with_output(
+            call_id,
+            command,
+            exit_code,
+            if exit_code == 0 {
+                String::new()
+            } else {
+                "permission denied".to_string()
+            },
+        )
+    }
+
+    fn completed_command_with_output(
+        call_id: &str,
+        command: &str,
+        exit_code: i32,
+        output: String,
+    ) -> Arc<dyn HistoryCell> {
+        let mut cell = new_active_exec_command(
+            call_id.to_string(),
+            command.split_whitespace().map(str::to_string).collect(),
+            Vec::new(),
+            ExecCommandSource::Agent,
+            /*interaction_input*/ None,
+            /*animations_enabled*/ false,
+        );
+        assert!(cell.complete_call(
+            call_id,
+            CommandOutput {
+                exit_code,
+                aggregated_output: output.clone(),
+                formatted_output: output,
+            },
+            Duration::from_millis(10),
+        ));
+        Arc::new(cell)
+    }
+
+    fn completed_patch(paths: &[&str]) -> Arc<dyn HistoryCell> {
+        let changes = paths
+            .iter()
+            .map(|path| {
+                (
+                    Path::new(path).to_path_buf(),
+                    FileChange::Add {
+                        content: String::new(),
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        Arc::new(new_patch_event(changes, Path::new("/repo")))
     }
 
     #[test]
@@ -577,12 +782,12 @@ mod tests {
             completed_mcp("mcp-1", "gmail", "read_thread"),
         ];
 
-        let group = compact_tool_group_at(&cells, 0, 80).expect("compact group");
+        let group = compact_tool_group_at(&cells, 0, 120).expect("compact group");
 
         assert_eq!(group.consumed_cells, 3);
         assert_eq!(
             render_group_text(group),
-            "▸ Tools: read 2 files, called gmail.read_thread · Alt+O expands"
+            "▸ Work: read 2 files · called gmail.read_thread · Alt+I inspect · Alt+O all"
         );
     }
 
@@ -661,7 +866,7 @@ mod tests {
         assert_eq!(group.consumed_cells, 1);
         assert_eq!(
             render_group_text(group),
-            "▸ Tools: read app.rs, searched · Alt+O expands"
+            "▸ Work: read app.rs · searched · Alt+I inspect · Alt+O all"
         );
     }
 
@@ -671,21 +876,201 @@ mod tests {
             Arc::new(new_web_search_call(
                 "web-1".to_string(),
                 "coffee montreal".to_string(),
-                codex_app_server_protocol::WebSearchAction::Other,
+                codex_app_server_protocol::WebSearchAction::Search {
+                    query: Some("coffee montreal".to_string()),
+                    queries: None,
+                },
             )),
             Arc::new(new_web_search_call(
                 "web-2".to_string(),
-                "cafe pista".to_string(),
-                codex_app_server_protocol::WebSearchAction::Other,
+                String::new(),
+                codex_app_server_protocol::WebSearchAction::OpenPage {
+                    url: Some("https://example.com".to_string()),
+                },
+            )),
+            Arc::new(new_web_search_call(
+                "web-3".to_string(),
+                String::new(),
+                codex_app_server_protocol::WebSearchAction::FindInPage {
+                    url: Some("https://example.com".to_string()),
+                    pattern: Some("needle".to_string()),
+                },
             )),
         ];
 
-        let group = compact_tool_group_at(&cells, 0, 80).expect("compact group");
+        let group = compact_tool_group_at(&cells, 0, 120).expect("compact group");
 
-        assert_eq!(group.consumed_cells, 2);
+        assert_eq!(group.consumed_cells, 3);
         assert_eq!(
             render_group_text(group),
-            "▸ Tools: 2 searched web · Alt+O expands"
+            "▸ Work: searched web · opened web page · found on page · Alt+I inspect · Alt+O all"
         );
+    }
+
+    #[test]
+    fn outcome_first_work_bundle_golden() {
+        let cells = vec![
+            completed_read_exec("read-1", "app.rs"),
+            completed_read_exec("read-2", "lib.rs"),
+            completed_patch(&["src/app.rs", "src/lib.rs"]),
+            completed_command("test-1", "just test -p codex-tui", 0),
+            completed_command("build-1", "cargo build", 0),
+            completed_command("check-1", "cargo clippy", 0),
+            completed_mcp("mcp-1", "gmail", "read_thread"),
+        ];
+
+        let rendered = render_group_text(compact_tool_group_at(&cells, 0, 120).unwrap());
+
+        insta::assert_snapshot!("outcome_first_work_bundle", rendered);
+    }
+
+    #[test]
+    fn failures_break_groups_and_render_their_error_tail() {
+        let cells = vec![
+            completed_read_exec("read-1", "app.rs"),
+            completed_read_exec("read-2", "lib.rs"),
+            completed_command("failed", "cargo build", 7),
+            completed_read_exec("read-3", "main.rs"),
+            completed_read_exec("read-4", "mod.rs"),
+        ];
+
+        assert_eq!(
+            compact_tool_group_at(&cells, 0, 100)
+                .unwrap()
+                .consumed_cells,
+            2
+        );
+        assert!(compact_tool_group_at(&cells, 2, 100).is_none());
+        assert_eq!(
+            compact_tool_group_at(&cells, 3, 100)
+                .unwrap()
+                .consumed_cells,
+            2
+        );
+
+        let rendered = render_lines_text(&render_transcript_lines(
+            &cells,
+            100,
+            HistoryRenderMode::Rich,
+            true,
+            None,
+        ));
+        assert!(rendered.contains("permission denied"));
+        assert!(rendered.contains("failed (exit 7)"));
+        insta::assert_snapshot!("failed_exec_between_work_bundles", rendered);
+    }
+
+    #[test]
+    fn failed_and_action_required_mcp_calls_never_compact() {
+        let failed = completed_mcp_result(
+            "mcp-failed",
+            "calendar",
+            "create",
+            Err("permission denied".to_string()),
+        );
+        let action_required = completed_mcp_result(
+            "mcp-auth",
+            "drive",
+            "read",
+            Ok(CallToolResult {
+                content: vec![json!({
+                    "type": "text",
+                    "text": "Log in at https://example.com/device"
+                })],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        );
+        let cells = vec![
+            completed_read_exec("read-1", "app.rs"),
+            completed_read_exec("read-2", "lib.rs"),
+            failed,
+            action_required,
+            completed_read_exec("read-3", "main.rs"),
+            completed_read_exec("read-4", "mod.rs"),
+        ];
+
+        assert!(compact_tool_group_at(&cells, 2, 100).is_none());
+        assert!(compact_tool_group_at(&cells, 3, 100).is_none());
+        let rendered = render_lines_text(&render_transcript_lines(
+            &cells,
+            100,
+            HistoryRenderMode::Rich,
+            true,
+            None,
+        ));
+        assert!(rendered.contains("Error: permission denied"));
+        assert!(rendered.contains("https://example.com/device"));
+    }
+
+    #[test]
+    fn action_required_exec_output_never_compacts() {
+        let action_required = completed_command_with_output(
+            "login",
+            "service login",
+            0,
+            "Open the following URL to sign in: https://example.com/device".to_string(),
+        );
+        let cells = vec![
+            completed_read_exec("read-1", "app.rs"),
+            completed_read_exec("read-2", "lib.rs"),
+            action_required,
+            completed_read_exec("read-3", "main.rs"),
+            completed_read_exec("read-4", "mod.rs"),
+        ];
+
+        assert!(compact_tool_group_at(&cells, 2, 100).is_none());
+        let rendered = render_lines_text(&render_transcript_lines(
+            &cells,
+            100,
+            HistoryRenderMode::Rich,
+            true,
+            None,
+        ));
+        assert!(rendered.contains("https://example.com/device"));
+    }
+
+    #[test]
+    fn latest_group_inspector_returns_only_the_latest_bundle_source_cells() {
+        let cells = vec![
+            completed_read_exec("read-1", "app.rs"),
+            completed_read_exec("read-2", "lib.rs"),
+            completed_command("failed", "false", 1),
+            completed_read_exec("read-3", "main.rs"),
+            completed_read_exec("read-4", "mod.rs"),
+        ];
+
+        let inspected = latest_compact_tool_group_cells(&cells, 100).unwrap();
+        let rendered = render_lines_text(&render_transcript_lines(
+            &inspected,
+            100,
+            HistoryRenderMode::Raw,
+            false,
+            None,
+        ));
+
+        assert_eq!(inspected.len(), 2);
+        assert!(rendered.contains("$ cat main.rs"));
+        assert!(rendered.contains("$ cat mod.rs"));
+        assert!(!rendered.contains("$ cat app.rs"));
+        assert!(!rendered.contains("permission denied"));
+    }
+
+    #[test]
+    fn compact_rows_are_bounded_and_raw_source_remains_recoverable() {
+        let cells = (0..8)
+            .map(|index| completed_read_exec(&format!("read-{index}"), &format!("file-{index}.rs")))
+            .collect::<Vec<_>>();
+
+        let compact = render_transcript_lines(&cells, 120, HistoryRenderMode::Rich, true, Some(2));
+        let raw = render_transcript_lines(&cells, 120, HistoryRenderMode::Raw, false, None);
+        let raw_text = render_lines_text(&raw);
+
+        assert!(compact.len() <= 2);
+        assert!(raw.len() > compact.len());
+        for index in 0..8 {
+            assert!(raw_text.contains(&format!("$ cat file-{index}.rs")));
+        }
     }
 }

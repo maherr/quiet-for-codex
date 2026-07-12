@@ -111,6 +111,23 @@ impl McpToolCallCell {
         self.success().map(|success| (&self.invocation, success))
     }
 
+    /// Returns whether a completed MCP call can be represented by a compact work summary without
+    /// hiding a failure or a likely instruction that requires the user to act.
+    pub(crate) fn is_safe_to_compact(&self) -> bool {
+        let Some(Ok(result)) = &self.result else {
+            return false;
+        };
+        if result.is_error.unwrap_or(false) {
+            return false;
+        }
+
+        let mut visible_result = serde_json::to_string(&result.content).unwrap_or_default();
+        if let Some(structured_content) = &result.structured_content {
+            visible_result.push_str(&structured_content.to_string());
+        }
+        !tool_result_requires_user_action(&visible_result)
+    }
+
     pub(crate) fn mark_failed(&mut self) {
         let elapsed = self.start_time.elapsed();
         self.duration = Some(elapsed);
@@ -323,6 +340,28 @@ impl McpToolCallCell {
 
         lines
     }
+}
+
+pub(crate) fn tool_result_requires_user_action(result: &str) -> bool {
+    let result = result.to_ascii_lowercase();
+    [
+        "http://",
+        "https://",
+        "log in",
+        "login",
+        "sign in",
+        "authenticate",
+        "authentication",
+        "authorize",
+        "authorization",
+        "approval required",
+        "requires approval",
+        "confirm in",
+        "open the following",
+        "visit the following",
+    ]
+    .iter()
+    .any(|marker| result.contains(marker))
 }
 
 impl HistoryCell for McpToolCallCell {
