@@ -169,6 +169,17 @@ impl App {
         }
     }
 
+    /// Lifecycle cards share mutable state with the event handler. If one changes while resume
+    /// replay is buffering already-rendered rows, rebuild from source cells at the end so the
+    /// buffer cannot preserve the card's earlier state.
+    pub(super) fn defer_lifecycle_refresh_during_replay(&mut self) -> bool {
+        let Some(buffer) = self.chat_widget.initial_history_replay_buffer.as_mut() else {
+            return false;
+        };
+        buffer.render_from_transcript_tail = true;
+        true
+    }
+
     /// Flush retained initial resume replay rows into terminal scrollback.
     ///
     /// The buffer stores display lines, not cells, because the cap is measured in terminal rows.
@@ -335,6 +346,10 @@ impl App {
     fn schedule_immediate_resize_reflow(&mut self, tui: &mut tui::Tui) {
         self.chat_widget.transcript_reflow.schedule_immediate();
         tui.frame_requester().schedule_frame();
+    }
+
+    pub(super) fn schedule_lifecycle_history_reflow(&mut self, tui: &mut tui::Tui) {
+        self.schedule_immediate_resize_reflow(tui);
     }
 
     /// Force stream-finalized output through the resize reflow path.

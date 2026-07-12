@@ -4,6 +4,10 @@
 //! entries, and the fast-switch keyboard shortcuts. Higher-level coordination, such as deciding
 //! which thread becomes active or when a thread closes, stays in [`crate::app::App`].
 
+// Quiet routes collaborator chatter through one lifecycle card. Keep the upstream per-event
+// renderers below as tested detail-formatting references and a cheap fallback during rebases.
+#![allow(dead_code)]
+
 use crate::history_cell::PlainHistoryCell;
 use crate::render::line_utils::prefix_lines;
 use crate::text_formatting::truncate_text;

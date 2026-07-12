@@ -5598,6 +5598,26 @@ async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
 }
 
 #[tokio::test]
+async fn lifecycle_refresh_during_initial_replay_rebuilds_from_source_cells() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.begin_initial_history_replay_buffer();
+    let buffer = app
+        .initial_history_replay_buffer
+        .as_mut()
+        .expect("initial replay buffer should be active");
+    buffer.retained_lines.push_back(Line::from("stale card").into());
+    assert!(!buffer.render_from_transcript_tail);
+
+    assert!(app.defer_lifecycle_refresh_during_replay());
+
+    let buffer = app
+        .initial_history_replay_buffer
+        .as_ref()
+        .expect("initial replay buffer should remain active");
+    assert!(buffer.render_from_transcript_tail);
+}
+
+#[tokio::test]
 async fn required_stream_reflow_during_capped_initial_replay_uses_transcript_tail() -> Result<()> {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(20);

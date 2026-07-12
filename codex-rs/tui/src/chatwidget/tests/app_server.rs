@@ -495,8 +495,8 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
         .join("\n");
 
     assert!(
-        rendered.contains("Spawned Robie [explorer] (gpt-5 high)"),
-        "expected spawn line to include agent metadata and requested model, got {rendered:?}"
+        rendered.contains("Robie [explorer] (gpt-5 high): Explore the repo"),
+        "expected fleet card to include agent metadata, requested model, and task, got {rendered:?}"
     );
 }
 

@@ -786,6 +786,17 @@ pub(crate) enum AppEvent {
     /// asynchronous usage output from overtaking the finalized assistant message or plan.
     CommitRetainedStreamCell(Box<dyn HistoryCell>),
 
+    /// Replace the original exec row with its causal background-terminal lifecycle card.
+    /// The card shares mutable source state with `ChatWidget`, so later refresh events redraw the
+    /// same history entry even when unrelated cells were inserted in between.
+    PromoteBackgroundTerminalLifecycle {
+        call_id: String,
+        cell: Box<dyn HistoryCell>,
+    },
+
+    /// Redraw source-backed lifecycle cells after their shared state changes.
+    RefreshLifecycleHistory,
+
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
 

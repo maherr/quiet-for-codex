@@ -50,6 +50,40 @@ impl App {
         self.chat_widget.request_pending_usage_output_insertion();
     }
 
+    pub(super) fn promote_background_terminal_lifecycle(
+        &mut self,
+        tui: &mut tui::Tui,
+        call_id: &str,
+        cell: Box<dyn HistoryCell>,
+    ) -> Result<()> {
+        let cell: Arc<dyn HistoryCell> = cell.into();
+        promote_background_terminal_cell(&mut self.transcript_cells, call_id, cell);
+        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
+            overlay.replace_cells(self.transcript_cells.clone());
+        }
+        if self.has_owned_screen() {
+            self.sync_owned_screen_cells();
+        }
+        self.refresh_lifecycle_history(tui)
+    }
+
+    pub(super) fn refresh_lifecycle_history(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if self.has_owned_screen() {
+            tui.frame_requester().schedule_frame();
+            return Ok(());
+        }
+        if self.defer_lifecycle_refresh_during_replay() {
+            return Ok(());
+        }
+        if self.overlay.is_some() {
+            self.schedule_lifecycle_history_reflow(tui);
+            return Ok(());
+        }
+        self.reflow_transcript_now(tui)?;
+        tui.frame_requester().schedule_frame();
+        Ok(())
+    }
+
     pub(super) fn pending_usage_output_insertion_blocked(&self) -> bool {
         self.chat_widget.usage_history_insertion_blocked()
             || self
@@ -211,6 +245,23 @@ impl App {
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
         self.skill_load_warnings.clear();
+    }
+}
+
+fn promote_background_terminal_cell(
+    transcript_cells: &mut Vec<Arc<dyn HistoryCell>>,
+    call_id: &str,
+    cell: Arc<dyn HistoryCell>,
+) {
+    if let Some(index) = transcript_cells.iter().position(|candidate| {
+        candidate
+            .as_any()
+            .downcast_ref::<crate::exec_cell::ExecCell>()
+            .is_some_and(|exec| exec.is_single_call(call_id))
+    }) {
+        transcript_cells[index] = cell;
+    } else {
+        transcript_cells.push(cell);
     }
 }
 

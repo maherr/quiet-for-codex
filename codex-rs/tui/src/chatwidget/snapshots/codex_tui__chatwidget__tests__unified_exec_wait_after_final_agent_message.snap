@@ -1,6 +1,8 @@
 ---
 source: tui/src/chatwidget/tests/exec_flow.rs
-assertion_line: 636
 expression: combined
 ---
+▸ Terminal: cargo test -p codex-core · 1 interaction · running 0s · Ctrl+T
+  details
+
 ● Final response.

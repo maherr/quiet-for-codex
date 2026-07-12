@@ -364,6 +364,12 @@ impl App {
                 self.chat_widget.note_stream_commit_completed();
                 self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
+            AppEvent::PromoteBackgroundTerminalLifecycle { call_id, cell } => {
+                self.promote_background_terminal_lifecycle(tui, &call_id, cell)?;
+            }
+            AppEvent::RefreshLifecycleHistory => {
+                self.refresh_lifecycle_history(tui)?;
+            }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
             }
