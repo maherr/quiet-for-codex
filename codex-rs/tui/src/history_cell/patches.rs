@@ -52,6 +52,12 @@ impl HistoryCell for PatchHistoryCell {
         }
     }
 }
+
+impl PatchHistoryCell {
+    pub(crate) fn changed_file_count(&self) -> usize {
+        self.changes.len()
+    }
+}
 /// Create a new `PendingPatch` cell that lists the file‑level summary of
 /// a proposed patch. The summary lines should already be formatted (e.g.
 /// "A path/to/file.rs").
