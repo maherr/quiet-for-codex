@@ -89,6 +89,10 @@ impl WebSearchCell {
     pub(crate) fn is_completed(&self) -> bool {
         self.completed
     }
+
+    pub(crate) fn completed_action(&self) -> Option<&WebSearchAction> {
+        self.completed.then_some(self.action.as_ref()).flatten()
+    }
 }
 
 impl HistoryCell for WebSearchCell {
