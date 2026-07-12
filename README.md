@@ -6,10 +6,19 @@ release and is not endorsed by OpenAI.
 The current fork branch is based on upstream `rust-v0.144.1` and changes TUI
 presentation only:
 
-- display completed tool calls in compact groups;
-- reduce noisy successful agent command output, with transcript access kept;
-- condense hook and session-start rows that otherwise dominate the viewport;
-- show the user-facing display version as `codex-quiet 0.144.1`.
+- keep the composer pinned to the bottom in an app-owned alternate screen;
+- retain terminal-style scroll, selection, copy, resize, and replay behavior;
+- display successful work as outcome-first `Work` groups while leaving failures
+  and action-required results expanded;
+- inspect the latest compact group with `Alt+I`, expand all groups with `Alt+O`,
+  or open the complete transcript with `Ctrl+T`;
+- coalesce background terminals and collaborator fleets into lifecycle cards;
+- reduce noisy successful agent output and condense hook/session-start rows;
+- derive the user-facing `codex-quiet` version from the Cargo package version.
+
+Use `--no-alt-screen` or set `tui.alternate_screen = "never"` to keep the
+original inline terminal mode. Submitted-paste folding is intentionally not
+part of this fork.
 
 Build from source:
 
