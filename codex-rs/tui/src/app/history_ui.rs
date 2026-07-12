@@ -57,9 +57,9 @@ impl App {
         cell: Box<dyn HistoryCell>,
     ) -> Result<()> {
         let cell: Arc<dyn HistoryCell> = cell.into();
-        promote_background_terminal_cell(&mut self.transcript_cells, call_id, cell);
+        promote_background_terminal_cell(&mut self.chat_widget.transcript_cells, call_id, cell);
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
-            overlay.replace_cells(self.transcript_cells.clone());
+            overlay.replace_cells(self.chat_widget.transcript_cells.clone());
         }
         if self.has_owned_screen() {
             self.sync_owned_screen_cells();

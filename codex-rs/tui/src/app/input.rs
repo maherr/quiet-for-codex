@@ -176,9 +176,10 @@ impl App {
             let width = self
                 .chat_widget
                 .history_wrap_width(tui.terminal.last_known_screen_size.width);
-            if let Some(cells) =
-                compact_tool_groups::latest_compact_tool_group_cells(&self.transcript_cells, width)
-            {
+            if let Some(cells) = compact_tool_groups::latest_compact_tool_group_cells(
+                &self.chat_widget.transcript_cells,
+                width,
+            ) {
                 let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_work_inspector(
                     cells,

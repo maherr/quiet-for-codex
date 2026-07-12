@@ -5602,15 +5602,19 @@ async fn lifecycle_refresh_during_initial_replay_rebuilds_from_source_cells() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.begin_initial_history_replay_buffer();
     let buffer = app
+        .chat_widget
         .initial_history_replay_buffer
         .as_mut()
         .expect("initial replay buffer should be active");
-    buffer.retained_lines.push_back(Line::from("stale card").into());
+    buffer
+        .retained_lines
+        .push_back(Line::from("stale card").into());
     assert!(!buffer.render_from_transcript_tail);
 
     assert!(app.defer_lifecycle_refresh_during_replay());
 
     let buffer = app
+        .chat_widget
         .initial_history_replay_buffer
         .as_ref()
         .expect("initial replay buffer should remain active");
