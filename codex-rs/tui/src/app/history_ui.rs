@@ -28,7 +28,12 @@ impl App {
             .history_wrap_width(tui.terminal.last_known_screen_size.width);
         let appended_cell_touches_compact_group =
             self.appended_cell_touches_compact_tool_group(width);
-        if self.chat_widget.initial_history_replay_buffer.as_ref().is_some() {
+        if self
+            .chat_widget
+            .initial_history_replay_buffer
+            .as_ref()
+            .is_some()
+        {
             self.insert_history_cell_lines_with_initial_replay_buffer(tui, cell.as_ref(), width);
         } else if appended_cell_touches_compact_group && self.overlay.is_none() {
             if let Err(err) = self.reflow_transcript_now(tui) {
@@ -133,7 +138,8 @@ impl App {
 
     pub(super) fn queue_clear_ui_header(&mut self, tui: &mut tui::Tui) {
         if self.has_owned_screen() {
-            let cell: Arc<dyn HistoryCell> = Arc::new(self.clear_ui_header_cell(CODEX_CLI_VERSION));
+            let cell: Arc<dyn HistoryCell> =
+                Arc::new(self.clear_ui_header_cell(crate::version::CODEX_CLI_DISPLAY_VERSION));
             self.chat_widget.transcript_cells.push(cell.clone());
             self.owned_screen_push_cell(cell);
             tui.frame_requester().schedule_frame();
