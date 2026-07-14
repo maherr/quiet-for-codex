@@ -3,7 +3,7 @@
 This is an unofficial fork of OpenAI Codex CLI. It is not an official OpenAI
 release and is not endorsed by OpenAI.
 
-The current fork branch is based on upstream `rust-v0.144.1` and changes TUI
+The current fork branch is based on upstream `rust-v0.144.4` and changes TUI
 presentation only:
 
 - keep the composer pinned to the bottom in an app-owned alternate screen;
