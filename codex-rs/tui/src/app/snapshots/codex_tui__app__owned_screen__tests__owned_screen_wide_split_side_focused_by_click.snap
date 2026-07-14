@@ -6,7 +6,7 @@ expression: side_terminal.backend()
 "parent transcript                        │side transcript                          "
 "                                         │                                         "
 "                                         │╭───────────────────────────────────────╮"
-"                                         ││ >_ OpenAI Codex (codex-quiet 0.144.1) │"
+"                                         ││ >_ OpenAI Codex (codex-quiet 0.144.4) │"
 "                                         ││                                       │"
 "                                         ││ model:     loading   /model to change │"
 "                                         ││ directory: /tmp/project               │"
