@@ -4,7 +4,7 @@ expression: terminal.backend()
 ---
 " Parent                                  │ Side  ⌥ + 1 / ⌥ + 2 focus               "
 "parent transcript                        │╭───────────────────────────────────────╮"
-"                                         ││ >_ OpenAI Codex (codex-quiet 0.144.4) │"
+"                                         ││ >_ OpenAI Codex (codex-quiet 0.144.5) │"
 "                                         ││                                       │"
 "                                         ││ model:     loading   /model to change │"
 "                                         ││ directory: /tmp/project               │"

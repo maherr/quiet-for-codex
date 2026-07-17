@@ -6,7 +6,7 @@ expression: terminal.backend()
 "⚠ Shared configuration warning           │⚠ Shared configuration warning           "
 "                                         │                                         "
 "                                         │╭───────────────────────────────────────╮"
-"                                         ││ >_ OpenAI Codex (codex-quiet 0.144.4) │"
+"                                         ││ >_ OpenAI Codex (codex-quiet 0.144.5) │"
 "                                         ││                                       │"
 "                                         ││ model:     loading   /model to change │"
 "                                         ││ directory: /tmp/project               │"
