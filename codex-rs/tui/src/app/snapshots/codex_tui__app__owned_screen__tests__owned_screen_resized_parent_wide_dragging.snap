@@ -4,7 +4,7 @@ expression: active.backend()
 ---
 " Parent  ⌥ + 1 / ⌥ + 2 focus                                          ┃ Side                                            "
 "parent transcript                                                     ┃╭───────────────────────────────────────╮        "
-"                                                                      ┃│ >_ OpenAI Codex (codex-quiet 0.144.5) │        "
+"                                                                      ┃│ >_ OpenAI Codex (codex-quiet 0.144.6) │        "
 "                                                                      ┃│                                       │        "
 "                                                                      ┃│ model:     loading   /model to change │        "
 "                                                                      ┃│ directory: /tmp/project               │        "

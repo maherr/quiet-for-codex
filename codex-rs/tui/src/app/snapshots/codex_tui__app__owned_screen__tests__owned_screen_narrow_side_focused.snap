@@ -6,7 +6,7 @@ expression: terminal.backend()
 "side transcript                                                                   "
 "                                                                                  "
 "╭───────────────────────────────────────╮                                         "
-"│ >_ OpenAI Codex (codex-quiet 0.144.5) │                                         "
+"│ >_ OpenAI Codex (codex-quiet 0.144.6) │                                         "
 "│                                       │                                         "
 "│ model:     loading   /model to change │                                         "
 "│ directory: /tmp/project               │                                         "
