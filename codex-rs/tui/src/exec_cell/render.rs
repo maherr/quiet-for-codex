@@ -361,12 +361,6 @@ fn dimmed_output_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<Line
         .collect()
 }
 
-fn tail_output_lines(output: &str, limit: usize) -> Vec<Line<'static>> {
-    let lines: Vec<&str> = output.lines().collect();
-    let start = lines.len().saturating_sub(limit);
-    dimmed_output_lines(lines[start..].iter().copied())
-}
-
 fn dim_line(line: &mut Line<'static>) {
     line.spans.iter_mut().for_each(|span| {
         span.style = span.style.add_modifier(Modifier::DIM);
@@ -441,7 +435,7 @@ pub(crate) fn output_lines(
         out.push(ExecCell::output_ellipsis_line(omitted));
     }
 
-    let tail = output.lines().rev().take(tail_len).collect_vec();
+    let tail = output.lines().rev().take(tail_len).collect::<Vec<_>>();
     for raw in tail.into_iter().rev() {
         let mut line = ansi_escape_line(raw.as_ref());
         if include_prefix {
@@ -919,8 +913,16 @@ impl ExecCell {
         layout: ExecDisplayLayout,
         next_source_id: &mut usize,
     ) -> Vec<ExecDisplayLine> {
-        let output_line_count = output.aggregated_output.lines().count();
-        let output_char_count = output.aggregated_output.chars().count();
+        let transcript = output
+            .transcript_lines()
+            .map(|line| line.into_owned())
+            .collect::<Vec<_>>();
+        let output_line_count = transcript.len();
+        let output_char_count = transcript
+            .iter()
+            .map(|line| line.chars().count())
+            .sum::<usize>()
+            .saturating_add(output_line_count.saturating_sub(1));
         if output.exit_code == 0 {
             if output_line_count == 0 {
                 return Self::wrap_output_block(
@@ -933,7 +935,7 @@ impl ExecCell {
             if output_line_count <= AGENT_SUCCESS_PREVIEW_MAX_LINES
                 && output_char_count <= AGENT_SUCCESS_PREVIEW_MAX_CHARS
             {
-                let preview = dimmed_output_lines(output.aggregated_output.lines());
+                let preview = dimmed_output_lines(transcript.iter().map(String::as_str));
                 return Self::wrap_output_block(&preview, width, layout, next_source_id);
             }
             return Self::wrap_output_block(
@@ -948,7 +950,8 @@ impl ExecCell {
             );
         }
 
-        let preview = tail_output_lines(&output.aggregated_output, AGENT_FAILURE_PREVIEW_MAX_LINES);
+        let preview_start = output_line_count.saturating_sub(AGENT_FAILURE_PREVIEW_MAX_LINES);
+        let preview = dimmed_output_lines(transcript[preview_start..].iter().map(String::as_str));
         let hidden = output_line_count.saturating_sub(preview.len());
         let mut block = preview;
         block.push(completion_summary_line(
@@ -1297,11 +1300,7 @@ mod tests {
                 call_id: "call-id".to_string(),
                 command: vec!["bash".into(), "-lc".into(), command.into()],
                 parsed: Vec::new(),
-                output: Some(CommandOutput {
-                    exit_code,
-                    aggregated_output: aggregated_output.to_string(),
-                    formatted_output: aggregated_output.to_string(),
-                }),
+                output: Some(CommandOutput::new(exit_code, aggregated_output.to_string())),
                 source: ExecCommandSource::Agent,
                 start_time: None,
                 duration: Some(Duration::from_millis(1500)),
@@ -1389,11 +1388,7 @@ mod tests {
                     "ssh dev@example.internal 'set -euo pipefail; printf noisy'".into(),
                 ],
                 parsed: Vec::new(),
-                output: Some(CommandOutput {
-                    exit_code: 0,
-                    aggregated_output: String::new(),
-                    formatted_output: String::new(),
-                }),
+                output: Some(CommandOutput::new(/*exit_code*/ 0, String::new())),
                 source: ExecCommandSource::UnifiedExecInteraction,
                 start_time: None,
                 duration: Some(Duration::from_millis(1500)),
@@ -1413,11 +1408,7 @@ mod tests {
                 call_id: "call-id".to_string(),
                 command: vec!["bash".into(), "-lc".into(), "ls".into()],
                 parsed: Vec::new(),
-                output: Some(CommandOutput {
-                    exit_code: 0,
-                    aggregated_output: output.clone(),
-                    formatted_output: output,
-                }),
+                output: Some(CommandOutput::new(/*exit_code*/ 0, output)),
                 source: ExecCommandSource::UserShell,
                 start_time: None,
                 duration: Some(Duration::from_millis(1500)),
@@ -1893,14 +1884,13 @@ mod tests {
             call_id: "call-id".to_string(),
             command: vec!["bash".into(), "-lc".into(), "echo words".into()],
             parsed: Vec::new(),
-            output: Some(CommandOutput {
-                exit_code: 0,
-                formatted_output: String::new(),
-                aggregated_output: "alpha beta gamma delta epsilon".to_string(),
-            }),
+            output: Some(CommandOutput::new(
+                /*exit_code*/ 0,
+                "alpha beta gamma delta epsilon".to_string(),
+            )),
             source: ExecCommandSource::Agent,
             start_time: None,
-            duration: None,
+            duration: Some(Duration::ZERO),
             interaction_input: None,
         };
         let cell = ExecCell::new(call, /*animations_enabled*/ false);
@@ -1920,11 +1910,7 @@ mod tests {
             call_id: "call-id".to_string(),
             command: vec!["bash".into(), "-lc".into(), "echo many".into()],
             parsed: Vec::new(),
-            output: Some(CommandOutput {
-                exit_code: 0,
-                formatted_output: String::new(),
-                aggregated_output: output,
-            }),
+            output: Some(CommandOutput::new(/*exit_code*/ 0, output)),
             source: ExecCommandSource::Agent,
             start_time: None,
             duration: None,
@@ -1953,7 +1939,7 @@ mod tests {
             output: Some(CommandOutput::default()),
             source: ExecCommandSource::Agent,
             start_time: None,
-            duration: None,
+            duration: Some(Duration::ZERO),
             interaction_input: None,
         };
         let cell = ExecCell::new(call, /*animations_enabled*/ false);

@@ -1229,6 +1229,17 @@ mod tests {
             vec![Line::from("counted")]
         }
 
+        fn selection_contribution(
+            &self,
+            width: u16,
+            mode: crate::history_cell::HistoryRenderMode,
+        ) -> crate::history_cell::SelectionContribution {
+            crate::history_cell::selection_contribution_from_display_lines(
+                self.display_lines_for_mode(width, mode),
+                width,
+            )
+        }
+
         fn desired_transcript_height(&self, _width: u16) -> u16 {
             self.height_calls.fetch_add(1, Ordering::Relaxed);
             1
