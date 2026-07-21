@@ -1194,6 +1194,7 @@ async fn deferred_mcp_lifecycle_events_keep_fifo_after_stream_finishes() {
         /*width*/ Some(80),
         cwd.as_path(),
         chat.history_render_mode(),
+        chat.stream_surface,
     ));
 
     chat.on_mcp_tool_call_started(AppServerThreadItem::McpToolCall {

@@ -8,6 +8,7 @@ use super::Event;
 use super::HyperlinkLine;
 use super::Options;
 use super::Parser;
+use super::TablePresentation;
 use super::Tag;
 use super::Writer;
 use super::never_hide_link_destination;
@@ -47,7 +48,14 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
         last_start: 0,
         first_is_html: false,
     };
-    let mut writer = Writer::new(input, parser, width, cwd, &never_hide_link_destination);
+    let mut writer = Writer::new(
+        input,
+        parser,
+        width,
+        cwd,
+        &never_hide_link_destination,
+        TablePresentation::Display,
+    );
     writer.run();
     StreamingMarkdownRender {
         lines: writer.text,
