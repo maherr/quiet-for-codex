@@ -26,7 +26,7 @@ async fn pane_init(
 }
 
 fn buffered_event(offset: usize) -> ThreadBufferedEvent {
-    ThreadBufferedEvent::HistoryEntryResponse(HistoryLookupResponse {
+    ThreadBufferedEvent::HistoryEntryResponse(HistoryLookupResponse::Entry {
         offset,
         log_id: offset as u64,
         entry: Some(format!("entry {offset}")),
@@ -37,7 +37,10 @@ fn event_offset(event: ThreadBufferedEvent) -> usize {
     let ThreadBufferedEvent::HistoryEntryResponse(response) = event else {
         panic!("expected history entry response");
     };
-    response.offset
+    let HistoryLookupResponse::Entry { offset, .. } = response else {
+        panic!("expected single history entry response");
+    };
+    offset
 }
 
 #[tokio::test]

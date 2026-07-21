@@ -1,0 +1,17 @@
+---
+source: tui/src/app/owned_screen_tests.rs
+assertion_line: 1054
+expression: active.backend()
+---
+" Parent  ⌥ + 1 / ⌥ + 2 focus                                          ┃ Side                                            "
+"parent transcript                                                     ┃╭───────────────────────────────────────╮        "
+"                                                                      ┃│ >_ OpenAI Codex (codex-quiet 0.145.0) │        "
+"                                                                      ┃│                                       │        "
+"                                                                      ┃│ model:     loading   /model to change │        "
+"                                                                      ┃│ directory: /tmp/project               │        "
+"                                                                      ┃╰───────────────────────────────────────╯        "
+"                                                                      ┃                                                 "
+"                                                                      ┃                                                 "
+"› parent draft                                                        ┃› side draft                                     "
+"                                                                      ┃                                                 "
+"  gpt-5.6-sol default · /tmp/project                                  ┃  gpt-5.6-sol default · /tmp/project             "

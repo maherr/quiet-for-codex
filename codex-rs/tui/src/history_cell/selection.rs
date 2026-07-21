@@ -18,7 +18,7 @@ pub(crate) enum SelectionContribution {
 /// The controller slices this from its full source projection using rendered-line boundaries.
 /// Cells can reuse the exact mapping at the original body width or realign the same canonical text
 /// after a resize without ever deriving clipboard text from joined terminal rows.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StreamSelectionFragment {
     projection: CellSelectionProjection,
     body_width: u16,

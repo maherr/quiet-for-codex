@@ -172,11 +172,7 @@ fn completed_read_exec(call_id: &str, name: &str) -> Box<dyn HistoryCell> {
     );
     assert!(cell.complete_call(
         call_id,
-        CommandOutput {
-            exit_code: 0,
-            aggregated_output: String::new(),
-            formatted_output: String::new(),
-        },
+        CommandOutput::new(/*exit_code*/ 0, String::new()),
         Duration::from_millis(10),
     ));
     Box::new(cell)
