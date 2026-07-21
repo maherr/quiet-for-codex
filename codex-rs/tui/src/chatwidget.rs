@@ -1750,6 +1750,18 @@ impl ChatWidget {
         self.bottom_pane.insert_str(text);
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_composer_text(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+    ) {
+        self.bottom_pane
+            .set_composer_text(text, text_elements, local_image_paths);
+        self.refresh_plan_mode_nudge();
+    }
+
     pub(crate) fn set_remote_image_urls(&mut self, remote_image_urls: Vec<String>) {
         self.bottom_pane.set_remote_image_urls(remote_image_urls);
     }

@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/helpers.rs
+assertion_line: 1689
+expression: combined
+---
+• SessionStart hook completed
+  └ warning: Heads up from the hook
+  └ ctrl + t to view transcript

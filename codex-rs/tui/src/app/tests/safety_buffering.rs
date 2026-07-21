@@ -70,8 +70,13 @@ fn next_user_turn_event(
     app_event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 ) -> AppCommand {
     while let Ok(event) = app_event_rx.try_recv() {
-        if let AppEvent::CodexOp(turn @ AppCommand::UserTurn { .. }) = event {
-            return turn;
+        match event {
+            AppEvent::CodexOp(turn @ AppCommand::UserTurn { .. })
+            | AppEvent::ConversationOp {
+                op: turn @ AppCommand::UserTurn { .. },
+                ..
+            } => return turn,
+            _ => {}
         }
     }
     panic!("expected UserTurn app event");
@@ -85,6 +90,7 @@ fn submit_prompt(app: &mut App, prompt: &str) {
 
 fn drain_active_thread_events(app: &mut App) {
     while let Some(event) = app
+        .chat_widget
         .active_thread_rx
         .as_mut()
         .and_then(|receiver| receiver.try_recv().ok())
@@ -437,7 +443,7 @@ goals = true
     .await;
 
     assert_eq!(app.primary_thread_id, Some(primary_thread_id));
-    assert_eq!(app.active_thread_id, Some(source_thread_id));
+    assert_eq!(app.chat_widget.active_thread_id, Some(source_thread_id));
     assert_eq!(app.chat_widget.thread_id(), Some(source_thread_id));
     app.primary_thread_id = Some(source_thread_id);
     while app_event_rx.try_recv().is_ok() {}
@@ -489,7 +495,7 @@ goals = true
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let second_retry = loop {
-            match app_event_rx.try_recv() {
+            match app_event_rx.try_recv().map(conversation_event_payload) {
                 Ok(AppEvent::RetrySafetyBufferedTurn {
                     thread_id,
                     turn_id,
@@ -536,7 +542,7 @@ goals = true
     drive_until_request_count(&mut app, &mut app_server, &server, expected_request_count).await;
     let mut replayed_history = String::new();
     while let Ok(event) = app_event_rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
+        if let AppEvent::InsertHistoryCell(cell) = conversation_event_payload(event) {
             replayed_history.push_str(&lines_to_single_string(
                 &cell.transcript_lines(/*width*/ 80),
             ));

@@ -52,7 +52,7 @@ impl CommandOutput {
     }
 
     /// Returns lines for the expanded transcript, including any storage-level omission marker.
-    pub(super) fn transcript_lines(&self) -> impl Iterator<Item = Cow<'_, str>> {
+    pub(crate) fn transcript_lines(&self) -> impl Iterator<Item = Cow<'_, str>> {
         match self.live_output.as_ref() {
             Some(output) => Either::Left(output.transcript_lines()),
             None => Either::Right(self.aggregated_output.lines().map(Cow::Borrowed)),

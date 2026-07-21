@@ -157,6 +157,17 @@ async fn chat_widget_frame_reuses_active_cell_height_across_frame_passes() {
             vec![Line::from("active cell")]
         }
 
+        fn selection_contribution(
+            &self,
+            width: u16,
+            mode: crate::history_cell::HistoryRenderMode,
+        ) -> crate::history_cell::SelectionContribution {
+            crate::history_cell::selection_contribution_from_display_lines(
+                self.display_lines_for_mode(width, mode),
+                width,
+            )
+        }
+
         fn desired_height(&self, _width: u16) -> u16 {
             self.desired_height_calls.fetch_add(1, Ordering::Relaxed);
             1
@@ -260,7 +271,8 @@ async fn next_thread_settings_updated(
 #[tokio::test]
 async fn handle_mcp_inventory_result_respects_origin_thread() {
     let mut app = make_test_app().await;
-    app.chat_widget.transcript_cells
+    app.chat_widget
+        .transcript_cells
         .push(Arc::new(history_cell::new_mcp_inventory_loading(
             /*animations_enabled*/ false,
         )));
@@ -281,7 +293,8 @@ async fn handle_mcp_inventory_result_respects_origin_thread() {
     assert_eq!(app.chat_widget.transcript_cells.len(), 0);
 
     app.chat_widget.active_thread_id = Some(ThreadId::new());
-    app.chat_widget.transcript_cells
+    app.chat_widget
+        .transcript_cells
         .push(Arc::new(history_cell::new_mcp_inventory_loading(
             /*animations_enabled*/ false,
         )));
@@ -327,6 +340,7 @@ async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach()
     .await?;
 
     let rx = app
+        .chat_widget
         .active_thread_rx
         .as_mut()
         .expect("primary thread receiver should be active");
@@ -391,6 +405,7 @@ async fn resolved_buffered_approval_does_not_become_actionable_after_drain() -> 
     while app_event_rx.try_recv().is_ok() {}
 
     let rx = app
+        .chat_widget
         .active_thread_rx
         .as_mut()
         .expect("primary thread receiver should be active");
@@ -1934,7 +1949,14 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(
             std::iter::from_fn(|| app_event_rx.try_recv().ok())
-                .any(|event| matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })))
+                .any(|event| matches!(
+                    event,
+                    AppEvent::CodexOp(Op::UserTurn { .. })
+                        | AppEvent::ConversationOp {
+                            op: Op::UserTurn { .. },
+                            ..
+                        }
+                ))
         );
 
         app.select_agent_thread(&mut tui, &mut app_server, child_thread_ids[1])
@@ -2154,6 +2176,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     .await?;
 
     let side_thread_id = app
+        .chat_widget
         .active_thread_id
         .expect("side conversation should become active");
     assert!(matches!(control, AppRunControl::Continue));
@@ -4329,6 +4352,7 @@ async fn active_side_thread_renders_live_mcp_startup_notifications() {
 
     let mut active_thread_events = Vec::new();
     let active_thread_rx = app
+        .chat_widget
         .active_thread_rx
         .as_mut()
         .expect("side thread receiver should be active");
@@ -5571,7 +5595,8 @@ async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
     app.begin_initial_history_replay_buffer();
     for index in 0..5 {
         App::buffer_initial_history_replay_display_lines(
-            app.chat_widget.initial_history_replay_buffer
+            app.chat_widget
+                .initial_history_replay_buffer
                 .as_mut()
                 .expect("initial replay buffer active"),
             vec![Line::from(format!("line {index}")).into()],
@@ -5580,6 +5605,7 @@ async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
     }
 
     let buffer = app
+        .chat_widget
         .initial_history_replay_buffer
         .as_ref()
         .expect("initial replay buffer should remain active");
@@ -5636,7 +5662,8 @@ async fn required_stream_reflow_during_capped_initial_replay_uses_transcript_tai
 
     app.begin_initial_history_replay_buffer();
     App::buffer_initial_history_replay_display_lines(
-        app.chat_widget.initial_history_replay_buffer
+        app.chat_widget
+            .initial_history_replay_buffer
             .as_mut()
             .expect("initial replay buffer active"),
         vec![Line::from("latest user question").into()],
@@ -5647,6 +5674,7 @@ async fn required_stream_reflow_during_capped_initial_replay_uses_transcript_tai
     app.finish_required_stream_reflow(&mut tui)?;
 
     let buffer = app
+        .chat_widget
         .initial_history_replay_buffer
         .as_ref()
         .expect("initial replay buffer should remain active");
@@ -5690,7 +5718,8 @@ async fn required_stream_reflow_during_capped_initial_replay_survives_transcript
 
     app.begin_initial_history_replay_buffer();
     App::buffer_initial_history_replay_display_lines(
-        app.chat_widget.initial_history_replay_buffer
+        app.chat_widget
+            .initial_history_replay_buffer
             .as_mut()
             .expect("initial replay buffer active"),
         vec![Line::from("stale streamed table tail").into()],
@@ -5743,6 +5772,7 @@ async fn thread_switch_replay_buffer_uses_transcript_tail_mode_when_row_cap_pres
     app.begin_thread_switch_history_replay_buffer();
 
     let buffer = app
+        .chat_widget
         .initial_history_replay_buffer
         .as_ref()
         .expect("thread switch replay buffer should be active");
@@ -6251,6 +6281,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
 
     assert_eq!(user_count(&app.chat_widget.transcript_cells), 2);
     let transcript_before: Vec<String> = app
+        .chat_widget
         .transcript_cells
         .iter()
         .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 80)))
@@ -6283,7 +6314,8 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
 
     app.backtrack.base_id = Some(base_id);
     app.backtrack.primed = true;
-    app.backtrack.nth_user_message = user_count(&app.chat_widget.transcript_cells).saturating_sub(1);
+    app.backtrack.nth_user_message =
+        user_count(&app.chat_widget.transcript_cells).saturating_sub(1);
 
     let selection = app
         .confirm_backtrack_from_main()
@@ -6320,6 +6352,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
     );
 
     let transcript_after: Vec<String> = app
+        .chat_widget
         .transcript_cells
         .iter()
         .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 80)))
@@ -6910,6 +6943,10 @@ async fn prompt_edit_forks_before_selected_prompt_and_preserves_source() -> Resu
     );
 
     let history = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+        .map(|event| match event {
+            AppEvent::FromConversation { event, .. } => *event,
+            event => event,
+        })
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => {
                 Some(lines_to_single_string(&cell.display_lines(/*width*/ 120)))
@@ -6982,6 +7019,10 @@ async fn prompt_edit_before_first_prompt_starts_fresh_thread() -> Result<()> {
     assert_ne!(fresh_thread_id, source_thread_id);
     assert_eq!(app.chat_widget.composer_text_with_pending(), "first prompt");
     let history = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+        .map(|event| match event {
+            AppEvent::FromConversation { event, .. } => *event,
+            event => event,
+        })
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => {
                 Some(lines_to_single_string(&cell.display_lines(/*width*/ 120)))
@@ -7072,6 +7113,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
     }
 
     let user_messages: Vec<String> = app
+        .chat_widget
         .transcript_cells
         .iter()
         .filter_map(|cell| {

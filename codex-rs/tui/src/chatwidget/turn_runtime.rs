@@ -355,7 +355,19 @@ impl ChatWidget {
             let cwd = self.config.cwd.to_path_buf();
             if let Some(source) = retained_sources.0 {
                 let source = parse_assistant_markdown(&source, cwd.as_path()).visible_markdown;
-                self.queue_retained_stream_cell(history_cell::AgentMarkdownCell::new(source, &cwd));
+                let inline_visualization_context = self.thread_id.and_then(|thread_id| {
+                    crate::inline_visualization::InlineVisualizationContext::from_config(
+                        &self.config,
+                        thread_id,
+                    )
+                });
+                self.queue_retained_stream_cell(
+                    history_cell::AgentMarkdownCell::new_with_inline_visualizations(
+                        source,
+                        &cwd,
+                        inline_visualization_context,
+                    ),
+                );
             }
             if let Some(source) = retained_sources.1 {
                 self.queue_retained_stream_cell(history_cell::new_proposed_plan(source, &cwd));

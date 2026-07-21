@@ -85,7 +85,6 @@ mod table_key_value;
 pub(crate) use selection::render_markdown_selection_projection;
 #[cfg(test)]
 pub(crate) use selection::render_markdown_selection_text;
-pub(crate) use selection::selection_text_contains_table;
 pub(crate) use streaming::StreamingMarkdownRender;
 pub(crate) use streaming::render_streaming_markdown_lines_with_width_and_cwd;
 

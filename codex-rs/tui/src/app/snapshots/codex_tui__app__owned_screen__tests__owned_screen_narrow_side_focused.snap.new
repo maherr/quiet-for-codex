@@ -1,0 +1,19 @@
+---
+source: tui/src/app/owned_screen_tests.rs
+assertion_line: 738
+expression: terminal.backend()
+---
+" Side  ⌥ + 1 / ⌥ + 2 focus                                                        "
+"side transcript                                                                   "
+"                                                                                  "
+"╭───────────────────────────────────────╮                                         "
+"│ >_ OpenAI Codex (codex-quiet 0.145.0) │                                         "
+"│                                       │                                         "
+"│ model:     loading   /model to change │                                         "
+"│ directory: /tmp/project               │                                         "
+"╰───────────────────────────────────────╯                                         "
+"                                                                                  "
+"                                                                                  "
+"› side draft                                                                      "
+"                                                                                  "
+"  gpt-5.6-sol default · /tmp/project                                              "

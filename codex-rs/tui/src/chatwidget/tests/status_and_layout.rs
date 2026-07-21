@@ -124,6 +124,7 @@ async fn live_web_search_notifications_replace_active_row_with_completed_row() {
                 id: "search-1".to_string(),
                 query: String::new(),
                 action: None,
+                results: None,
             }),
         }),
         /*replay_kind*/ None,
@@ -150,6 +151,7 @@ async fn live_web_search_notifications_replace_active_row_with_completed_row() {
                     query: Some("Montreal free food".to_string()),
                     queries: None,
                 }),
+                results: None,
             }),
         }),
         /*replay_kind*/ None,
@@ -4170,7 +4172,7 @@ async fn newline_plan_delta_redraws_stream_tail_after_noop_catch_up() {
 }
 
 #[tokio::test]
-async fn regular_commit_tick_clears_orphaned_plan_stream_tail() {
+async fn new_task_clears_orphaned_plan_stream_tail() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
     let plan_mask = collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
@@ -4181,7 +4183,7 @@ async fn regular_commit_tick_clears_orphaned_plan_stream_tail() {
     assert!(chat.active_cell_is_stream_tail());
 
     chat.on_task_started();
-    assert!(chat.active_cell_is_stream_tail());
+    assert!(!chat.active_cell_is_stream_tail());
     chat.on_commit_tick();
 
     assert!(!chat.active_cell_is_stream_tail());

@@ -381,8 +381,9 @@ fn exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
         call_count += 1;
         let output = call.output.as_ref()?;
         if output.exit_code != 0
-            || tool_result_requires_user_action(&output.aggregated_output)
-            || tool_result_requires_user_action(&output.formatted_output)
+            || output
+                .transcript_lines()
+                .any(|line| tool_result_requires_user_action(line.as_ref()))
         {
             return None;
         }
@@ -677,11 +678,7 @@ mod tests {
         );
         assert!(cell.complete_call(
             call_id,
-            CommandOutput {
-                exit_code: 0,
-                aggregated_output: String::new(),
-                formatted_output: String::new(),
-            },
+            CommandOutput::new(/*exit_code*/ 0, String::new()),
             Duration::from_millis(10),
         ));
         Arc::new(cell)
@@ -749,11 +746,7 @@ mod tests {
         );
         assert!(cell.complete_call(
             call_id,
-            CommandOutput {
-                exit_code,
-                aggregated_output: output.clone(),
-                formatted_output: output,
-            },
+            CommandOutput::new(exit_code, output),
             Duration::from_millis(10),
         ));
         Arc::new(cell)
@@ -852,11 +845,7 @@ mod tests {
         );
         assert!(cell.complete_call(
             "search-read",
-            CommandOutput {
-                exit_code: 0,
-                aggregated_output: String::new(),
-                formatted_output: String::new(),
-            },
+            CommandOutput::new(/*exit_code*/ 0, String::new()),
             Duration::from_millis(10),
         ));
         let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(cell)];

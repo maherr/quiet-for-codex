@@ -109,7 +109,6 @@ impl ChatWidget {
     }
 
     pub(super) fn on_collab_agent_tool_call(&mut self, item: ThreadItem) {
-        self.record_visible_turn_activity();
         let ThreadItem::CollabAgentToolCall {
             id, tool, status, ..
         } = &item
@@ -148,7 +147,6 @@ impl ChatWidget {
     }
 
     pub(super) fn on_sub_agent_activity(&mut self, item: ThreadItem) {
-        self.record_visible_turn_activity();
         let first_event = self.agent_fleet_lifecycle.is_none();
         let fleet = self
             .agent_fleet_lifecycle

@@ -50,11 +50,7 @@ fn background_terminal_promotion_replaces_causal_exec_across_interleaved_cells()
     );
     assert!(exec.complete_call(
         "call-background",
-        crate::exec_cell::CommandOutput {
-            exit_code: 0,
-            aggregated_output: String::new(),
-            formatted_output: String::new(),
-        },
+        crate::exec_cell::CommandOutput::new(/*exit_code*/ 0, String::new()),
         Duration::from_secs(1),
     ));
     let unrelated: Arc<dyn HistoryCell> = Arc::new(PlainHistoryCell::new(vec![Line::from(

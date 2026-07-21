@@ -1,0 +1,12 @@
+---
+source: tui/src/app/tests.rs
+assertion_line: 5683
+expression: "rendered.lines.iter().map(rendered_line_text).collect::<Vec<_>>().join(\"\\n\")"
+---
+latest user question
+
+● Final answer:
+
+   Pattern       Outcome
+  ━━━━━━━━━━━━  ━━━━━━━━━━━
+   Table tail    Preserved
