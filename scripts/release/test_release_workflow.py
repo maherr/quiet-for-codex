@@ -12,7 +12,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "quiet-release.yml"
 QUIET_CI_PATH = REPO_ROOT / ".github" / "workflows" / "quiet-ci.yml"
-TUI_CI_RUNNER_PATH = REPO_ROOT / "scripts" / "ci" / "run_quiet_tui_tests.sh"
 POWERSHELL_INSTALLER_PATH = REPO_ROOT / "scripts" / "release" / "install.ps1"
 POWERSHELL_INSTALLER_TEST_PATH = (
     REPO_ROOT / "scripts" / "release" / "test_install_ps1.ps1"
@@ -50,7 +49,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         cls.quiet_ci = QUIET_CI_PATH.read_text(encoding="utf-8")
-        cls.tui_ci_runner = TUI_CI_RUNNER_PATH.read_text(encoding="utf-8")
         cls.powershell_installer = POWERSHELL_INSTALLER_PATH.read_text(encoding="utf-8")
         cls.powershell_installer_test = POWERSHELL_INSTALLER_TEST_PATH.read_text(
             encoding="utf-8"
@@ -311,29 +309,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
         ]
         self.assertIn("- verify", build_needs)
 
-    def test_full_tui_suite_is_complete_and_process_isolated(self) -> None:
+    def test_full_tui_suite_runs_once_and_serially(self) -> None:
+        command = (
+            "cargo test --locked --target x86_64-unknown-linux-gnu "
+            "-p codex-tui --lib -- --test-threads=1"
+        )
         for workflow in (self.quiet_ci, self.workflow):
             tui_step = workflow.split(
                 "      - name: Run TUI library tests\n", 1
             )[1].split("      - name:", 1)[0]
-            self.assertEqual(
-                tui_step.count("bash scripts/ci/run_quiet_tui_tests.sh"), 1
-            )
-
-        for isolated_test in (
-            "edge_selection_schedules_frames_and_survives_resize_events",
-            "parent_scoped_exit_shuts_down_both_panes_without_submitting_op",
-        ):
-            self.assertEqual(self.tui_ci_runner.count(isolated_test), 1)
-        for required_guard in (
-            "cargo test --locked --target \"$target\" -p codex-tui --lib",
-            'main_args+=(--skip "$test")',
-            '"${common[@]}" "$test" -- --exact --test-threads=1',
-            'status=$?',
-            'exit "$status"',
-            'tail -c "$bytes" "$log"',
-        ):
-            self.assertIn(required_guard, self.tui_ci_runner)
+            self.assertEqual(tui_step.count(command), 1)
+            self.assertNotIn("--skip", tui_step)
 
     def test_quiet_ci_runs_targeted_fork_safety_tests(self) -> None:
         for test_name in (

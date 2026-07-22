@@ -566,7 +566,7 @@ where
         self.current = 1 - self.current;
     }
 
-    /// Queries the real size of the backend.
+    /// Returns the effective terminal size.
     pub fn size(&self) -> io::Result<Size> {
         #[cfg(test)]
         if let Some(size) = self.screen_size_override {
@@ -807,11 +807,13 @@ mod tests {
     use ratatui::widgets::Paragraph;
     use ratatui::widgets::Widget;
     use ratatui::widgets::Wrap;
+    use std::cell::Cell as CounterCell;
 
     struct CaptureBackend {
         output: Vec<u8>,
         size: Size,
         cursor: Position,
+        size_calls: CounterCell<usize>,
     }
 
     impl CaptureBackend {
@@ -820,6 +822,7 @@ mod tests {
                 output: Vec::new(),
                 size: Size { width, height },
                 cursor: Position { x: 0, y: 0 },
+                size_calls: CounterCell::new(0),
             }
         }
 
@@ -893,6 +896,7 @@ mod tests {
         }
 
         fn size(&self) -> io::Result<Size> {
+            self.size_calls.set(self.size_calls.get() + 1);
             Ok(self.size)
         }
 
@@ -906,6 +910,22 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn test_terminal_size_uses_fixed_size_without_querying_backend() {
+        let fixed_size = Size {
+            width: 80,
+            height: 24,
+        };
+        let terminal = Terminal::with_screen_size_and_cursor_position_for_test(
+            CaptureBackend::new(/*width*/ 120, /*height*/ 50),
+            fixed_size,
+            Position { x: 0, y: 0 },
+        );
+
+        assert_eq!(terminal.size().expect("fixed test size"), fixed_size);
+        assert_eq!(terminal.backend().size_calls.get(), 0);
     }
 
     #[test]
