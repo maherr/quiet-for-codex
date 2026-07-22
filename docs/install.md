@@ -1,65 +1,195 @@
-## Installing & building
+# Installing and building Quiet for Codex
 
-### System requirements
+Quiet for Codex is installed as `codex-quiet`, beside any official `codex` command.
+Both commands can use the same `~/.codex` configuration and login state, but
+their binaries and update channels remain separate.
 
-| Requirement                 | Details                                                         |
-| --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
-| Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
-| RAM                         | 4-GB minimum (8-GB recommended)                                 |
+## Install the latest release
 
-### DotSlash
+### macOS or Linux
 
-The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for the Codex CLI named `codex`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.
+```shell
+curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.1/scripts/release/install.sh | sh
+```
 
-### Build from source
+### Windows PowerShell
 
-```bash
-# Clone the repository and navigate to the root of the Cargo workspace.
-git clone https://github.com/openai/codex.git
-cd codex/codex-rs
+```powershell
+& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.1/scripts/release/install.ps1)))
+```
 
-# Install the Rust toolchain, if necessary.
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-rustup component add rustfmt
-rustup component add clippy
-# Install helper tools used by the workspace justfile:
-cargo install --locked just
-# DotSlash fetches pinned development tools such as buildifier on first use.
-cargo install --locked dotslash
-# Install nextest for the `just test` helper.
-cargo install --locked cargo-nextest
+The installers detect the host target, download the matching archive from the
+latest GitHub release, verify its published SHA-256 checksum, and install it in
+a user-local versioned directory. They do not modify an official Codex install.
 
-# Build Codex.
-cargo build
+On macOS and Linux, packages live under
+`~/.local/share/codex-quiet/releases/`. The installer updates
+`~/.local/share/codex-quiet/current` and exposes
+`~/.local/bin/codex-quiet`. Override those roots with
+`CODEX_QUIET_INSTALL_ROOT` and `CODEX_QUIET_BIN_DIR`.
 
-# Launch the TUI with a sample prompt.
-cargo run --bin codex -- "explain this codebase to me"
+On Windows, packages live under
+`%LOCALAPPDATA%\CodexQuiet\releases\`. The installer creates
+`%LOCALAPPDATA%\CodexQuiet\bin\codex-quiet.cmd`, records the current package in
+`current.txt`, and adds that bin directory to the user `PATH`. Override the
+root with `CODEX_QUIET_INSTALL_ROOT`.
 
-# After making changes, use the root justfile helpers (they default to codex-rs):
+To install a specific release instead of the latest beta, set
+`CODEX_QUIET_RELEASE` to a version such as `0.145.0-beta.1`. The Unix installer
+also accepts `--release 0.145.0-beta.1` when downloaded and run as a file.
+
+Run the installed command:
+
+```shell
+codex-quiet --version
+codex-quiet
+```
+
+## Manual installation
+
+1. Open the newest Quiet for Codex beta on the
+   [releases page](https://github.com/maherr/quiet-for-codex/releases).
+2. Select the archive matching your Rust target triple.
+3. Download the archive and the release checksum file.
+4. Verify the archive's SHA-256 digest.
+5. Extract the complete package. Keep `bin`, `codex-resources`, `codex-path`,
+   and `codex-package.json` together.
+6. Add the extracted `bin` directory to `PATH`, or create a launcher that runs
+   `bin/codex-quiet` from the package root.
+
+Unix archives use this pattern:
+
+```text
+codex-quiet-<version>-<target>.tar.gz
+```
+
+Windows archives use this pattern:
+
+```text
+codex-quiet-<version>-<target>.zip
+```
+
+Put one downloaded archive and `SHA256SUMS` in the same directory. On macOS or
+Linux, run:
+
+```shell
+(
+  set -eu
+  set -- codex-quiet-*.tar.gz
+  [ "$#" -eq 1 ] && [ -f "$1" ] || {
+    echo "expected exactly one codex-quiet tar.gz archive" >&2
+    exit 1
+  }
+  archive=$1
+  expected=$(awk -v file="$archive" '$2 == file { print $1 }' SHA256SUMS)
+  [ "${#expected}" -eq 64 ] || {
+    echo "no unique SHA256SUMS entry for $archive" >&2
+    exit 1
+  }
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$archive" | awk '{ print $1 }')
+  else
+    actual=$(shasum -a 256 "$archive" | awk '{ print $1 }')
+  fi
+  [ "$actual" = "$expected" ] || {
+    echo "SHA-256 mismatch for $archive" >&2
+    exit 1
+  }
+  echo "verified $archive"
+)
+```
+
+In Windows PowerShell, run:
+
+```powershell
+$Archives = @(Get-ChildItem -File codex-quiet-*.zip)
+if ($Archives.Count -ne 1) {
+    throw "Expected exactly one codex-quiet zip archive."
+}
+$Archive = $Archives[0]
+$Matches = @(Get-Content .\SHA256SUMS | Where-Object {
+    $_.EndsWith("  $($Archive.Name)")
+})
+if ($Matches.Count -ne 1) {
+    throw "No unique SHA256SUMS entry for $($Archive.Name)."
+}
+$Expected = ($Matches[0] -split '\s+', 2)[0]
+$Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive.FullName).Hash
+if ($Actual -ne $Expected) {
+    throw "SHA-256 mismatch for $($Archive.Name)."
+}
+Write-Host "Verified $($Archive.Name)"
+```
+
+This verifies that the archive exactly matches the release's published
+checksum. A checksum is not a publisher signature. The current macOS and
+Windows beta binaries remain unsigned, so also review the
+[unsigned binary notes](../SUPPORT.md#unsigned-beta-binaries).
+
+The package includes `codex-code-mode-host` beside the main executable and
+platform resources used by sandboxing, shell integration, and file search. Do
+not copy only the main executable if you need those features. Beta packages do
+not include upstream's experimental patched-zsh payload; an enabled zsh-fork
+flag falls back to the normal user shell.
+
+## Supported targets
+
+Published targets and validation levels are listed in [SUPPORT.md](../SUPPORT.md).
+There are no 32-bit release archives.
+
+The beta artifacts for macOS are not Apple-notarized, and Windows artifacts are
+not Authenticode-signed. Review the
+[unsigned binary notes](../SUPPORT.md#unsigned-beta-binaries) before using them.
+
+## Build from source
+
+Install Git and a current stable Rust toolchain, then:
+
+```shell
+git clone https://github.com/maherr/quiet-for-codex.git
+cd quiet-for-codex/codex-rs
+cargo build --release --bin codex --bin codex-code-mode-host
+```
+
+The resulting files are:
+
+```text
+target/release/codex
+target/release/codex-code-mode-host
+```
+
+On Windows they have an `.exe` suffix. Keep the two files together. Rename only
+the main executable from `codex` to `codex-quiet` if you copy them into a
+directory on `PATH`.
+
+A two-binary source build does not include all helper resources in a packaged
+release. It is sufficient for ordinary TUI use, but some platform sandbox,
+shell, and bundled search behavior may depend on resources from the full
+package.
+
+## Development checks
+
+The repository uses `just` helpers for formatting, linting, and tests. Read
+`AGENTS.md` before changing Rust code.
+
+```shell
+cargo install --locked just cargo-nextest
 just fmt
-just fix -p <crate-you-touched>
-
-# Run the relevant tests (project-specific is fastest), for example:
+just fix -p codex-tui
 just test -p codex-tui
-# `just test` runs the test suite via nextest:
-just test
-# Avoid `--all-features` for routine local runs because it increases build
-# time and `target/` disk usage by compiling additional feature combinations.
 ```
 
-## Tracing / verbose logging
+## Terminal fallback
 
-Codex is written in Rust, so it honors the `RUST_LOG` environment variable to configure its logging behavior.
+If your terminal does not handle the retained alternate screen correctly:
 
-The TUI records diagnostics in bounded local stores by default. Set `log_dir` explicitly to enable a plaintext TUI log for a run:
-
-```bash
-codex -c log_dir=./.codex-log
-tail -F ./.codex-log/codex-tui.log
+```shell
+codex-quiet --no-alt-screen
 ```
 
-The non-interactive mode (`codex exec`) defaults to `RUST_LOG=error`, but messages are printed inline, so there is no need to monitor a separate file.
+Or set:
 
-See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env_logger/#enabling-logging) for more information on the configuration options.
+```toml
+[tui]
+alternate_screen = "never"
+```

@@ -22,7 +22,12 @@ use crate::version::CODEX_CLI_VERSION;
 pub(crate) use crate::updates_cache::dismiss_version;
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
-    if !config.check_for_update_on_startup || is_source_build_version(CODEX_CLI_VERSION) {
+    // Quiet releases are installed side by side with stock Codex. Disable the
+    // inherited updater until a fork-owned, verified update path is available.
+    if crate::version::CODEX_CLI_DISPLAY_NAME == "codex-quiet"
+        || !config.check_for_update_on_startup
+        || is_source_build_version(CODEX_CLI_VERSION)
+    {
         return None;
     }
 
@@ -55,7 +60,8 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
 
 // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+const RELEASES_URL: &str =
+    "https://api.github.com/repos/maherr/quiet-for-codex/releases?per_page=20";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
@@ -115,22 +121,28 @@ async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> 
 }
 
 async fn fetch_latest_github_release_version() -> anyhow::Result<String> {
-    let ReleaseInfo {
-        tag_name: latest_tag_name,
-    } = create_client()
-        .get(LATEST_RELEASE_URL)
+    let releases = create_client()
+        .get(RELEASES_URL)
         .send()
         .await?
         .error_for_status()?
-        .json::<ReleaseInfo>()
+        .json::<Vec<ReleaseInfo>>()
         .await?;
+    let latest_tag_name = releases
+        .into_iter()
+        .map(|release| release.tag_name)
+        .find(|tag_name| tag_name.starts_with("quiet-v"))
+        .ok_or_else(|| anyhow::anyhow!("No Quiet for Codex release was found"))?;
     extract_version_from_latest_tag(&latest_tag_name)
 }
 
 /// Returns the latest version to show in a popup, if it should be shown.
 /// This respects the user's dismissal choice for the current latest version.
 pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
-    if !config.check_for_update_on_startup || is_source_build_version(CODEX_CLI_VERSION) {
+    if crate::version::CODEX_CLI_DISPLAY_NAME == "codex-quiet"
+        || !config.check_for_update_on_startup
+        || is_source_build_version(CODEX_CLI_VERSION)
+    {
         return None;
     }
 

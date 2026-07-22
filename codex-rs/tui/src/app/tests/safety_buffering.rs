@@ -250,7 +250,7 @@ stream_max_retries = 0
         }),
     ));
     assert!(matches!(
-        app_event_rx.try_recv(),
+        app_event_rx.try_recv().map(conversation_event_payload),
         Ok(AppEvent::InsertHistoryCell(_))
     ));
 

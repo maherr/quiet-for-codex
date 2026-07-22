@@ -70,7 +70,9 @@ pub(super) async fn background_server_check(config: &Config) -> DoctorCheck {
     )
     .details(details);
     if status.check_status() == CheckStatus::Warning {
-        check = check.remediation("Run codex app-server daemon version for more details.");
+        check = check.remediation(
+            "Quiet does not manage the upstream app-server daemon. Use the official Codex CLI for daemon diagnostics.",
+        );
     }
     check
 }

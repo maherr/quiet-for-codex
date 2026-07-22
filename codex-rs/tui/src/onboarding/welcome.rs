@@ -17,6 +17,7 @@ use crate::onboarding::keys;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::tui::FrameRequester;
+use crate::version::CODEX_CLI_PRODUCT_NAME;
 
 use super::onboarding_screen::StepState;
 
@@ -94,8 +95,8 @@ impl WidgetRef for &WelcomeWidget {
         lines.push(Line::from(vec![
             "  ".into(),
             "Welcome to ".into(),
-            "Codex".bold(),
-            ", OpenAI's command-line coding agent".into(),
+            CODEX_CLI_PRODUCT_NAME.bold(),
+            ", an unofficial Codex CLI fork".into(),
         ]));
 
         Paragraph::new(lines)

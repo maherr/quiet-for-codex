@@ -314,7 +314,9 @@ impl App {
 
     /// Apply a computed backtrack selection to the overlay and internal counter.
     fn apply_backtrack_selection_internal(&mut self, nth_user_message: usize) {
-        if let Some(cell_idx) = nth_user_position(&self.chat_widget.transcript_cells, nth_user_message) {
+        if let Some(cell_idx) =
+            nth_user_position(&self.chat_widget.transcript_cells, nth_user_message)
+        {
             self.backtrack.nth_user_message = nth_user_message;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.set_highlight_cell(Some(cell_idx));
