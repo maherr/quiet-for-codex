@@ -8,10 +8,15 @@ presentation only:
 
 - keep the composer pinned to the bottom in an app-owned alternate screen;
 - retain terminal-style scroll, selection, copy, resize, and replay behavior;
-- display successful work as outcome-first `Work` groups while leaving failures
+- display successful work as outcome-first `▸ Work` groups while leaving failures
   and action-required results expanded;
-- inspect the latest compact group with `Alt+I`, expand all groups with `Alt+O`,
-  or open the complete transcript with `Ctrl+T`;
+- click a `Work` header to expand it in place and click again to collapse it;
+  dragging from the same row still selects text;
+- inspect the latest compact group with `Alt+I`, temporarily show all groups with
+  `Alt+O` (then restore individual folds), or open the complete transcript with
+  `Ctrl+T`;
+- keep completed work compact while a multi-command exploration is running, with
+  the current command visible beneath the summary;
 - coalesce background terminals and collaborator fleets into lifecycle cards;
 - reduce noisy successful agent output and condense hook/session-start rows;
 - derive the user-facing `codex-quiet` version from the Cargo package version.

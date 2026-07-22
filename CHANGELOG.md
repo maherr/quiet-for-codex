@@ -6,8 +6,9 @@
 
 - App-owned alternate-screen transcript with a fixed bottom composer, retained
   scrolling, mouse selection, clipboard copy, resize reflow, and replay.
-- Failure-safe, outcome-first `Work` groups with `Alt+I` inspection and `Alt+O`
-  expansion. Failed and action-required operations remain fully visible.
+- Failure-safe, outcome-first `Work` groups with per-group click expansion,
+  `Alt+I` inspection, temporary `Alt+O` show-all, and compact live progress.
+  Failed, streamed, and action-required operations remain fully visible.
 - Source-backed lifecycle cards for background terminals and collaborator fleets.
 - Cargo-derived Quiet display versions across the CLI and TUI.
 
