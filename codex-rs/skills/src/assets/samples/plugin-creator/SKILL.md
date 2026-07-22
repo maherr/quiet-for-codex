@@ -111,7 +111,7 @@ See `references/installing-and-updating.md` for the expected cachebuster and rei
   name is already taken and you need to seed a different new marketplace file.
 - Do not use `--marketplace-name` to rename an existing marketplace file in place. If the file
   already exists, its top-level `name` must already match.
-- If the user specifies a different marketplace path, treat that marketplace as needing explicit installation via `codex plugin marketplace add`.
+- If the user specifies a different marketplace path, treat that marketplace as needing explicit installation via `codex-quiet plugin marketplace add`.
 - Prefer `scripts/read_marketplace_name.py` when you need the marketplace name from any
   `marketplace.json` file. With no argument it reads the default personal marketplace; with an
   explicit path it works for repo/team marketplaces too.
@@ -201,24 +201,17 @@ See `references/installing-and-updating.md` for the expected cachebuster and rei
 - For updates to an existing local plugin during development, do not hand-edit marketplace config
   or `marketplace.json`. Use the update flow documented in
   `references/installing-and-updating.md` and `scripts/update_plugin_cachebuster.py`.
-- Do not tell the user to run `codex plugin marketplace add` for the default personal-marketplace
+- Do not tell the user to run `codex-quiet plugin marketplace add` for the default personal-marketplace
   flow. That command is for explicit non-default marketplace configuration, not for the standard
   `~/.agents/plugins/marketplace.json` path.
 - If the user provided a non-default `--marketplace-path`, make sure that marketplace is installed
-  before giving reinstall instructions. Use `codex plugin marketplace add <path-to-marketplace-root>`
+  before giving reinstall instructions. Use `codex-quiet plugin marketplace add <path-to-marketplace-root>`
   when that explicit marketplace has not been configured yet.
-- When the workflow created or updated a marketplace-backed plugin, end the final user-facing
-  response with a short Codex app handoff. Say `To view this in the Codex app:` and write
-  `View <normalized plugin name>` and `Share <normalized plugin name>` as Markdown links, not raw
-  URLs or code spans.
-- The View deeplink uses `codex://plugins/<normalized plugin name>?marketplacePath=<absolute marketplace.json path>`.
-  The Share deeplink uses the same URL with `&mode=share`.
-- Replace the placeholders with the real normalized plugin name and absolute `marketplace.json`
-  path from the scaffolded plugin. URL-encode the path segment and query value when needed.
-- Do not add `pluginName` or `hostId` query parameters to these deeplinks. Codex derives both after
-  the user clicks the link.
-- Do not emit the `View <normalized plugin name>` or `Share <normalized plugin name>` links when no marketplace entry was
-  created or updated.
+- When the workflow creates or updates a marketplace-backed plugin, end the final user-facing
+  response with the normalized plugin name, marketplace path, and a reminder to start a new Quiet
+  thread so the updated plugin is loaded.
+- Do not emit stock Codex Desktop deep links. Quiet for Codex deliberately does not hand sessions or
+  plugin workflows to the stock Codex Desktop app.
 
 ## Reference to exact spec sample
 

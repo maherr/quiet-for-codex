@@ -7,3 +7,5 @@ Copyright (c) 2023-2025 The Ratatui Developers
 
 This unofficial fork includes modifications by maherr for quieter TUI rendering.
 Those modifications are not official OpenAI releases.
+The current fork base and categories of modification are documented in
+FORK_CHANGES.md; git history is the authoritative per-file record.

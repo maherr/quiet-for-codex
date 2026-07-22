@@ -1,0 +1,3 @@
+# Match the stable effective workspace style without its nightly-only
+# imports_granularity warning for every individually checked file.
+edition = "2024"

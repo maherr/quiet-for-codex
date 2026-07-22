@@ -1,0 +1,16 @@
+Quiet for Codex Rust dependency licenses
+
+This report was generated from the locked Cargo dependency graph by cargo-about.
+
+{{#each licenses}}
+================================================================================
+{{{name}}} ({{id}})
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

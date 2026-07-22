@@ -11,6 +11,7 @@ use crate::legacy_core::config::Config;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
 use crate::version::CODEX_CLI_DISPLAY_VERSION;
+use crate::version::CODEX_CLI_PRODUCT_NAME;
 use chrono::DateTime;
 use chrono::Local;
 use codex_app_server_protocol::AskForApproval;
@@ -714,7 +715,7 @@ impl HistoryCell for StatusHistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(vec![
             Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
-            Span::from("OpenAI Codex").bold(),
+            Span::from(CODEX_CLI_PRODUCT_NAME).bold(),
             Span::from(" ").dim(),
             Span::from(format!("({CODEX_CLI_DISPLAY_VERSION})")).dim(),
         ]));
@@ -732,7 +733,7 @@ impl HistoryCell for StatusHistoryCell {
                 (None, None) => "ChatGPT".to_string(),
             },
             StatusAccountDisplay::ApiKey => {
-                "API key configured (run codex login to use ChatGPT)".to_string()
+                "API key configured (run codex-quiet login to use ChatGPT)".to_string()
             }
         });
 

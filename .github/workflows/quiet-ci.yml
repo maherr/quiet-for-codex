@@ -1,0 +1,234 @@
+name: Quiet CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "tui/quiet-*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quiet-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  quality:
+    name: Format, packaging, and TUI tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+          targets: x86_64-unknown-linux-gnu
+      - name: Check Rust formatting
+        run: python3 scripts/ci/check_quiet_rustfmt.py
+      - name: Test release tooling
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/check_embedded_skill_identity.py
+          python3 scripts/codex_package/test_ripgrep.py
+          python3 scripts/release/test_generate_v8_notices.py
+          python3 scripts/release/test_prepare_v8_artifacts.py
+          python3 scripts/release/test_finalize_quiet_package.py
+          python3 scripts/release/test_install_sh.py
+          python3 scripts/release/test_release_workflow.py
+          python3 -m py_compile \
+            scripts/ci/check_embedded_skill_identity.py \
+            scripts/ci/check_quiet_rustfmt.py \
+            scripts/codex_package/test_ripgrep.py \
+            scripts/release/finalize_quiet_package.py \
+            scripts/release/generate_v8_notices.py \
+            scripts/release/prepare_v8_artifacts.py \
+            scripts/release/smoke_quiet_package.py \
+            scripts/release/test_generate_v8_notices.py \
+            scripts/release/test_prepare_v8_artifacts.py \
+            scripts/release/test_install_sh.py \
+            scripts/release/test_release_workflow.py
+          sh -n scripts/release/install.sh
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+      - name: Run TUI library tests
+        working-directory: codex-rs
+        run: cargo test --locked --target x86_64-unknown-linux-gnu -p codex-tui --lib
+      - name: Run privacy, identity, and hidden-command regressions
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-feedback --lib \
+            quiet_feedback_uploads_are_disabled
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-app-server --lib \
+            quiet_feedback_upload_api_stays_disabled
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-tui --lib \
+            feedback_command_reports_uploads_disabled
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-tui --lib \
+            quiet_commands_are_hidden_from_command_popup
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-exec --lib \
+            exec_summary_uses_quiet_identity_and_exact_build_version
+      - name: Run fork-safety CLI tests
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-cli --bin codex \
+            quiet_build_does_not_register_desktop_app_subcommand
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-cli --bin codex \
+            release_list_includes_prerelease_channel
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-cli --test update
+      - name: Black-box daemon safety routes
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo build --locked --target x86_64-unknown-linux-gnu \
+            -p codex-cli --bin codex
+          quiet="target/x86_64-unknown-linux-gnu/debug/codex"
+          disabled_message="daemon-managed app-server routes are disabled in Quiet for Codex because the upstream implementation installs and updates stock Codex"
+          routes=(
+            "app-server daemon bootstrap"
+            "app-server daemon start"
+            "app-server daemon stop"
+            "app-server daemon restart"
+            "app-server daemon enable-remote-control"
+            "app-server daemon disable-remote-control"
+            "app-server daemon pid-update-loop"
+            "app-server daemon version"
+            "remote-control"
+            "remote-control start"
+            "remote-control stop"
+            "remote-control pair"
+          )
+          export CODEX_HOME="$RUNNER_TEMP/quiet-daemon-safety-codex-home"
+          mkdir -p "$CODEX_HOME"
+          for route in "${routes[@]}"; do
+            read -r -a route_args <<< "$route"
+            set +e
+            output="$("$quiet" "${route_args[@]}" 2>&1)"
+            status=$?
+            set -e
+            if (( status == 0 )); then
+              echo "Disabled route unexpectedly succeeded: $route" >&2
+              exit 1
+            fi
+            if [[ "$output" != *"$disabled_message"* ]]; then
+              echo "Disabled route did not return the Quiet safety error: $route" >&2
+              printf '%s\n' "$output" >&2
+              exit 1
+            fi
+          done
+      - name: Run missing-zsh fallback test
+        working-directory: codex-rs
+        run: |
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-core \
+            session_new_falls_back_when_zsh_fork_enabled_without_packaged_zsh
+      - name: Run login fork-safety tests
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-login \
+            streamlined_success_page_does_not_handoff_to_the_stock_desktop_app
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-app-server --test all \
+            login_account_chatgpt_ignores_stock_desktop_success_page_request
+
+  platform-check:
+    name: Check ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+      - name: Configure MSVC
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+      - name: Check main and code-mode host binaries
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
+          cargo check --locked --release --target "${{ matrix.target }}" \
+            --bin codex \
+            --bin codex-code-mode-host
+      - name: Test macOS command-popup snapshot
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          cargo test --locked --target "${{ matrix.target }}" \
+            -p codex-tui --lib \
+            default_command_popup_items_snapshot
+      - name: Parse PowerShell installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($path in @("scripts/release/install.ps1", "scripts/release/test_install_ps1.ps1")) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$path`: $($_.Message)" }
+              exit 1
+            }
+          }
+      - name: Test PowerShell installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/release/test_install_ps1.ps1
+      - name: Test installer in Windows PowerShell 5.1
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $legacy = Get-Command powershell.exe -ErrorAction SilentlyContinue
+          if ($null -eq $legacy) {
+            throw "Windows PowerShell 5.1 is unavailable on this runner."
+          }
+          & $legacy.Source -NoProfile -ExecutionPolicy Bypass -File scripts/release/test_install_ps1.ps1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows PowerShell 5.1 installer smoke failed."
+          }

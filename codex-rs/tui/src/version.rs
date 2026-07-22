@@ -1,10 +1,18 @@
-/// The current Codex CLI version as embedded at compile time.
-pub const CODEX_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The public Quiet release version, including a prerelease suffix when set by
+/// the release workflow. Local/source builds fall back to the upstream Cargo
+/// workspace version.
+pub const CODEX_CLI_VERSION: &str = match option_env!("CODEX_QUIET_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 /// Local fork display label for user-facing TUI surfaces.
 ///
-/// Keep `CODEX_CLI_VERSION` unchanged for protocol/update logic. The Quiet
-/// label is derived from the same Cargo workspace version so an upstream
-/// update cannot leave one user-facing surface on the previous version.
+/// Protocol-facing crates retain the upstream Cargo version. These constants
+/// identify the public Quiet build on user-facing TUI surfaces.
 pub const CODEX_CLI_DISPLAY_NAME: &str = "codex-quiet";
-pub const CODEX_CLI_DISPLAY_VERSION: &str = concat!("codex-quiet ", env!("CARGO_PKG_VERSION"));
+pub const CODEX_CLI_DISPLAY_VERSION: &str = match option_env!("CODEX_QUIET_DISPLAY_VERSION") {
+    Some(version) => version,
+    None => concat!("codex-quiet ", env!("CARGO_PKG_VERSION")),
+};
+pub const CODEX_CLI_PRODUCT_NAME: &str = "Quiet for Codex";

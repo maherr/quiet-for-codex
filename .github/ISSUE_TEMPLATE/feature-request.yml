@@ -1,0 +1,47 @@
+name: Quiet for Codex feature request
+description: Propose a focused improvement to the Quiet fork
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. General agent, model, API, IDE, app, or cloud features belong in the upstream OpenAI Codex project. This tracker focuses on Quiet terminal behavior, portability, packaging, and fork maintenance.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing Quiet for Codex issues.
+          required: true
+        - label: This request is specific to the Quiet fork or its distribution.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the concrete workflow or failure, not only the requested control.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain how it should work, including keyboard, mouse, terminal, or platform details when relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and upstream relationship
+      description: Note workarounds, related upstream issues, and why a fork-specific change is appropriate.
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation idea
+      description: Describe a snapshot, regression test, or platform smoke test that would prove the feature works.

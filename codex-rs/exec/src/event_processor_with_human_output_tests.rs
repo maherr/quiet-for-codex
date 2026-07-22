@@ -22,10 +22,22 @@ use pretty_assertions::assert_eq;
 use super::EventProcessorWithHumanOutput;
 use super::config_summary_entries;
 use super::final_message_from_turn_items;
+use super::quiet_exec_display_version;
 use super::reasoning_text;
 use super::should_print_final_message_to_stdout;
 use super::should_print_final_message_to_tty;
 use crate::event_processor::EventProcessor;
+
+#[test]
+fn exec_summary_uses_quiet_identity_and_exact_build_version() {
+    let display_version = quiet_exec_display_version();
+
+    assert!(display_version.starts_with("codex-quiet "));
+    assert!(!display_version.contains("OpenAI Codex"));
+    if let Some(version) = option_env!("CODEX_QUIET_VERSION") {
+        assert!(display_version.ends_with(version));
+    }
+}
 
 #[test]
 fn suppresses_final_stdout_message_when_both_streams_are_terminals() {

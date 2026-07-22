@@ -2371,6 +2371,7 @@ dependencies = [
  "predicates",
  "pretty_assertions",
  "regex-lite",
+ "semver",
  "serde",
  "serde_json",
  "sqlx",
