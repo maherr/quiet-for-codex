@@ -62,7 +62,8 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
       - name: Run TUI library tests
-        run: bash scripts/ci/run_quiet_tui_tests.sh
+        working-directory: codex-rs
+        run: cargo test --locked --target x86_64-unknown-linux-gnu -p codex-tui --lib -- --test-threads=1
       - name: Run privacy, identity, and hidden-command regressions
         working-directory: codex-rs
         run: |

@@ -160,6 +160,9 @@ where
     pub viewport_area: Rect,
     /// Last known size of the terminal. Used to detect if the internal buffers have to be resized.
     pub last_known_screen_size: Size,
+    /// Fixed backend size used by test terminals that must not query a real TTY.
+    #[cfg(test)]
+    test_screen_size: Option<Size>,
     /// Last known position of the cursor. Used to find the new area when the viewport is inlined
     /// and the terminal resized.
     pub last_known_cursor_pos: Position,
@@ -240,6 +243,8 @@ where
                 /*height*/ 0,
             ),
             last_known_screen_size: screen_size,
+            #[cfg(test)]
+            test_screen_size: None,
             last_known_cursor_pos: cursor_pos,
             visible_history_rows: 0,
         }
@@ -251,7 +256,10 @@ where
         screen_size: Size,
         cursor_pos: Position,
     ) -> Self {
-        Self::with_screen_size_and_cursor_position(backend, screen_size, cursor_pos)
+        let mut terminal =
+            Self::with_screen_size_and_cursor_position(backend, screen_size, cursor_pos);
+        terminal.test_screen_size = Some(screen_size);
+        terminal
     }
 
     /// Get a Frame object which provides a consistent view into the terminal state for rendering.
@@ -548,8 +556,12 @@ where
         self.current = 1 - self.current;
     }
 
-    /// Queries the real size of the backend.
+    /// Returns the effective terminal size.
     pub fn size(&self) -> io::Result<Size> {
+        #[cfg(test)]
+        if let Some(screen_size) = self.test_screen_size {
+            return Ok(screen_size);
+        }
         self.backend.size()
     }
 }
@@ -760,11 +772,13 @@ mod tests {
     use ratatui::backend::WindowSize;
     use ratatui::layout::Rect;
     use ratatui::style::Style;
+    use std::cell::Cell as CounterCell;
 
     struct CaptureBackend {
         output: Vec<u8>,
         size: Size,
         cursor: Position,
+        size_calls: CounterCell<usize>,
     }
 
     impl CaptureBackend {
@@ -773,6 +787,7 @@ mod tests {
                 output: Vec::new(),
                 size: Size { width, height },
                 cursor: Position { x: 0, y: 0 },
+                size_calls: CounterCell::new(0),
             }
         }
 
@@ -846,6 +861,7 @@ mod tests {
         }
 
         fn size(&self) -> io::Result<Size> {
+            self.size_calls.set(self.size_calls.get() + 1);
             Ok(self.size)
         }
 
@@ -859,6 +875,22 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn test_terminal_size_uses_fixed_size_without_querying_backend() {
+        let fixed_size = Size {
+            width: 80,
+            height: 24,
+        };
+        let terminal = Terminal::with_screen_size_and_cursor_position_for_test(
+            CaptureBackend::new(/*width*/ 120, /*height*/ 50),
+            fixed_size,
+            Position { x: 0, y: 0 },
+        );
+
+        assert_eq!(terminal.size().expect("fixed test size"), fixed_size);
+        assert_eq!(terminal.backend().size_calls.get(), 0);
     }
 
     #[test]
