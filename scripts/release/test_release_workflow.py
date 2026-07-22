@@ -309,13 +309,21 @@ class ReleaseWorkflowTests(unittest.TestCase):
         ]
         self.assertIn("- verify", build_needs)
 
-    def test_full_tui_suites_are_serialized(self) -> None:
+    def test_full_tui_suites_are_serialized_and_file_backed(self) -> None:
         command = (
             "cargo test --locked --target x86_64-unknown-linux-gnu "
             "-p codex-tui --lib -- --test-threads=1"
         )
-        self.assertEqual(self.quiet_ci.count(command), 1)
-        self.assertEqual(self.workflow.count(command), 1)
+        for workflow in (self.quiet_ci, self.workflow):
+            tui_step = workflow.split(
+                "      - name: Run TUI library tests\n", 1
+            )[1].split("      - name:", 1)[0]
+            self.assertEqual(tui_step.count(command), 1)
+            self.assertEqual(tui_step.count('> "$log" 2>&1'), 1)
+            for bounded_tail in ('tail -c 262144 "$log"', 'tail -c 16384 "$log"'):
+                self.assertEqual(tui_step.count(bounded_tail), 1)
+            for status_guard in ("status=$?", 'exit "$status"'):
+                self.assertEqual(tui_step.count(status_guard), 1)
 
     def test_quiet_ci_runs_targeted_fork_safety_tests(self) -> None:
         for test_name in (
