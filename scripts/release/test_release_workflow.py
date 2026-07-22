@@ -290,6 +290,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "exec_summary_uses_quiet_identity_and_exact_build_version",
         ):
             self.assertIn(required_check, verify_job)
+
         identity_test = verify_job.index(
             "exec_summary_uses_quiet_identity_and_exact_build_version"
         )
@@ -307,6 +308,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
             0
         ]
         self.assertIn("- verify", build_needs)
+
+    def test_full_tui_suites_are_serialized(self) -> None:
+        command = (
+            "cargo test --locked --target x86_64-unknown-linux-gnu "
+            "-p codex-tui --lib -- --test-threads=1"
+        )
+        self.assertEqual(self.quiet_ci.count(command), 1)
+        self.assertEqual(self.workflow.count(command), 1)
 
     def test_quiet_ci_runs_targeted_fork_safety_tests(self) -> None:
         for test_name in (
