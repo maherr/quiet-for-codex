@@ -1,97 +1,76 @@
-## Contributing
+# Contributing
 
-**External contributions are by invitation only**
+Quiet for Codex accepts focused community contributions. This document applies to
+the unofficial fork at `maherr/quiet-for-codex`, not to the upstream OpenAI
+repository.
 
-At this time, the Codex team does not accept unsolicited code contributions.
+## Before opening a change
 
-If you would like to propose a new feature or a change in behavior, please open an issue describing the proposal or upvote an existing enhancement request. We prioritize new features based on community feedback, alignment with our roadmap, and consistency across all Codex surfaces (CLI, IDE extensions, web, etc.).
+1. Search existing issues and pull requests.
+2. For a bug, confirm whether it reproduces in the latest Quiet for Codex beta
+   and in the matching upstream Codex CLI release.
+3. Open an issue before a large behavior change. Small fixes and documentation
+   corrections can go directly to a pull request.
+4. Keep the change inside the fork's scope: terminal usability, retained
+   history, compact activity presentation, platform portability, packaging,
+   tests, and supporting documentation.
 
-If you encounter a bug, please open a bug report or verify that an existing report already covers the issue. If you would like to help, we encourage you to contribute by sharing analysis, reproduction details, root-cause hypotheses, or a high-level outline of a potential fix directly in the issue thread.
+Issues that reproduce unchanged upstream should usually be reported to
+[`openai/codex`](https://github.com/openai/codex/issues). Link the upstream issue
+from a Quiet issue if the fork needs a temporary compatibility fix.
 
-The Codex team may invite an external contributor to submit a pull request when:
+## Development workflow
 
-- the problem is well understood,
-- the proposed approach aligns with the team’s intended solution, and
-- the issue is deemed high-impact and high-priority.
+Create a topic branch from `main`, keep commits focused, and explain the user
+impact in the pull request.
 
-Pull requests that have not been explicitly invited by a member of the Codex team will be closed without review.
+The Rust workspace lives in `codex-rs`:
 
-**Why we do not generally accept external code contributions**
+```shell
+cd codex-rs
+cargo build --bin codex
+```
 
-In the past, the Codex team accepted external pull requests for bug fixes. While we appreciated the effort and engagement from the community, this model did not scale well.
+For Rust changes, follow the repository's `AGENTS.md` instructions. The usual
+minimum validation is:
 
-Many contributions were made without full visibility into the architectural context, system-level constraints, or near-term roadmap considerations that guide Codex development. Others focused on issues that were low priority or affected a very small subset of users. Reviewing and iterating on these PRs often took more time than implementing the fix directly, and diverted attention from higher-priority work.
+```shell
+just fmt
+just fix -p <crate-you-touched>
+just test -p <crate-you-touched>
+```
 
-The most valuable contributions consistently came from community members who demonstrated deep understanding of a problem domain. That expertise is most helpful when shared early -- through detailed bug reports, analysis, and design discussion in issues. Identifying the right solution is typically the hard part; implementing it is comparatively straightforward with the help of Codex itself.
+TUI changes must include or update relevant `insta` snapshots. Review every
+changed snapshot rather than accepting them blindly. Platform-specific fixes
+should include a regression test where the behavior can be exercised in CI.
 
-For these reasons, we focus external contributions on discussion, analysis, and feedback, and reserve code changes for cases where a targeted invitation makes sense.
+Documentation-only changes do not require a Rust build.
 
-### Development workflow
+## Pull request checklist
 
-If you are invited by a Codex team member to contribute a PR, here is the recommended development workflow.
+- State the problem and the behavior after the change.
+- Identify the operating systems and terminals tested.
+- List the exact validation commands and results.
+- Add tests for behavior changes.
+- Update README, support, install, or configuration documentation when user
+  behavior changes.
+- Keep upstream behavior intact unless the divergence is deliberate and
+  documented in `FORK_CHANGES.md`.
+- Do not include credentials, private session data, user prompts, proprietary
+  source code, or personal information in fixtures or screenshots.
 
-- Create a _topic branch_ from `main` - e.g. `feat/interactive-prompt`.
-- Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
-- Ensure your change is free of lint warnings and test failures.
+## Licensing
 
-### Guidance for invited code contributions
+The fork does not use OpenAI's contributor invitation process or CLA bot. By
+submitting a contribution, you agree that it may be distributed under this
+repository's [Apache License 2.0](../LICENSE), and you represent that you have
+the right to submit it under those terms.
 
-1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
-2. **Add or update tests.** A bug fix should generally come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
-3. **Document behavior.** If your change affects user-facing behavior, update the README, inline help (`codex --help`), or relevant example projects.
-4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
+Retain existing copyright, license, and attribution notices. New dependencies
+must have a license compatible with the repository and must be represented in
+the third-party notice process used by release artifacts.
 
-### Model metadata updates
+## Conduct
 
-When a change updates model catalogs or model metadata (`/models` payloads, presets, or fixtures):
-
-- Set `input_modalities` explicitly for any model that does not support images.
-- Keep compatibility defaults in mind: omitted `input_modalities` currently implies text + image support.
-- Ensure client surfaces that accept images (for example, TUI paste/attach) consume the same capability signal.
-- Add/update tests that cover unsupported-image behavior and warning paths.
-
-### Opening a pull request (by invitation only)
-
-- Fill in the PR template (or include similar information) - **What? Why? How?**
-- Include a link to a bug report or enhancement request in the issue tracker
-- Run **all** checks locally. Use the root `just` helpers so you stay consistent with the rest of the workspace: `just fmt`, `just fix -p <crate>` for the crate you touched, and the relevant tests (e.g., `just test -p codex-tui` or `just test` if you need a full sweep). CI failures that could have been caught locally slow down the process.
-- Make sure your branch is up-to-date with `main` and that you have resolved merge conflicts.
-- Mark the PR as **Ready for review** only when you believe it is in a merge-able state.
-
-### Review process
-
-1. One maintainer will be assigned as a primary reviewer.
-2. If your invited PR introduces scope or behavior that was not previously discussed and approved, we may close the PR.
-3. We may ask for changes. Please do not take this personally. We value the work, but we also value consistency and long-term maintainability.
-4. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
-
-### Community values
-
-- **Be kind and inclusive.** Treat others with respect; we follow the [Contributor Covenant](https://www.contributor-covenant.org/).
-- **Assume good intent.** Written communication is hard - err on the side of generosity.
-- **Teach & learn.** If you spot something confusing, open an issue or discussion with suggestions or clarifications.
-
-### Getting help
-
-If you run into problems setting up the project, would like feedback on an idea, or just want to say _hi_ - please open a Discussion topic or jump into the relevant issue. We are happy to help.
-
-Together we can make Codex CLI an incredible tool. **Happy hacking!** :rocket:
-
-### Contributor license agreement (CLA)
-
-All contributors **must** accept the CLA. The process is lightweight:
-
-1. Open your pull request.
-2. Paste the following comment (or reply `recheck` if you've signed before):
-
-   ```text
-   I have read the CLA Document and I hereby sign the CLA
-   ```
-
-3. The CLA-Assistant bot records your signature in the repo and marks the status check as passed.
-
-No special Git commands, email attachments, or commit footers required.
-
-### Security & responsible AI
-
-Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly.
+Be specific, technical, and respectful. Harassment, personal attacks, and
+publication of private data are not accepted.

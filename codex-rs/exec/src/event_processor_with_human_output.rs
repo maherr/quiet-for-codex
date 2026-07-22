@@ -214,8 +214,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         prompt: &str,
         session_configured_event: &SessionConfiguredEvent,
     ) {
-        const VERSION: &str = env!("CARGO_PKG_VERSION");
-        eprintln!("OpenAI Codex v{VERSION}\n--------");
+        eprintln!("{}\n--------", quiet_exec_display_version());
         for (key, value) in config_summary_entries(config, session_configured_event) {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
@@ -414,6 +413,16 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             );
         }
     }
+}
+
+fn quiet_exec_display_version() -> String {
+    if let Some(display_version) = option_env!("CODEX_QUIET_DISPLAY_VERSION") {
+        return display_version.to_string();
+    }
+    if let Some(version) = option_env!("CODEX_QUIET_VERSION") {
+        return format!("codex-quiet {version}");
+    }
+    format!("codex-quiet {}", env!("CARGO_PKG_VERSION"))
 }
 
 fn config_summary_entries(

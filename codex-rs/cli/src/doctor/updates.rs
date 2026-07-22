@@ -10,6 +10,7 @@ use std::path::Path;
 
 use codex_core::config::Config;
 use codex_install_context::InstallContext;
+#[cfg(test)]
 use codex_install_context::InstallMethod;
 use serde::Deserialize;
 
@@ -22,8 +23,8 @@ use super::npm_global_root_check;
 use super::run_command;
 
 const VERSION_FILE_NAME: &str = "version.json";
-const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
-const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
+const GITHUB_RELEASES_URL: &str =
+    "https://api.github.com/repos/maherr/quiet-for-codex/releases?per_page=20";
 
 /// Builds the update-health row for the current installation.
 ///
@@ -88,10 +89,17 @@ pub(super) fn updates_check(config: &Config) -> DoctorCheck {
     match fetch_latest_version(&install_context) {
         Ok(latest_version) => {
             details.push(format!("latest version: {latest_version}"));
-            if is_newer(&latest_version, env!("CARGO_PKG_VERSION")) == Some(true) {
-                details.push("latest version status: newer version is available".to_string());
-            } else {
-                details.push("latest version status: current version is not older".to_string());
+            match is_newer(&latest_version, crate::CODEX_QUIET_VERSION) {
+                Some(true) => {
+                    details.push("latest version status: newer version is available".to_string())
+                }
+                Some(false) => {
+                    details.push("latest version status: current version is not older".to_string())
+                }
+                None => details.push(
+                    "latest version status: release label cannot be compared automatically"
+                        .to_string(),
+                ),
             }
         }
         Err(err) => {
@@ -130,47 +138,18 @@ fn push_cached_version_details(details: &mut Vec<String>, version_file: &Path) {
 }
 
 fn update_action_label(context: &InstallContext) -> &'static str {
-    match &context.method {
-        InstallMethod::Npm => "npm install -g @openai/codex",
-        InstallMethod::Bun => "bun install -g @openai/codex",
-        InstallMethod::Pnpm => "pnpm add -g @openai/codex",
-        InstallMethod::Brew => "brew upgrade --cask codex",
-        InstallMethod::Standalone { .. } => "standalone installer",
-        InstallMethod::Other => "manual or unknown",
-    }
+    let _ = context;
+    "manual GitHub release"
 }
 
 fn fetch_latest_version(context: &InstallContext) -> Result<String, String> {
-    match &context.method {
-        InstallMethod::Brew => fetch_homebrew_cask_version(),
-        InstallMethod::Npm
-        | InstallMethod::Bun
-        | InstallMethod::Pnpm
-        | InstallMethod::Standalone { .. }
-        | InstallMethod::Other => fetch_latest_github_release_version(),
-    }
+    let _ = context;
+    fetch_latest_github_release_version()
 }
 
 fn fetch_latest_github_release_version() -> Result<String, String> {
-    #[derive(Deserialize)]
-    struct ReleaseInfo {
-        tag_name: String,
-    }
-
-    let info = http_get_json::<ReleaseInfo>(GITHUB_LATEST_RELEASE_URL)?;
-    info.tag_name
-        .strip_prefix("rust-v")
-        .map(str::to_string)
-        .ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
-}
-
-fn fetch_homebrew_cask_version() -> Result<String, String> {
-    #[derive(Deserialize)]
-    struct HomebrewCaskInfo {
-        version: String,
-    }
-
-    http_get_json::<HomebrewCaskInfo>(HOMEBREW_CASK_API_URL).map(|info| info.version)
+    let releases = http_get_json::<Vec<GithubReleaseInfo>>(GITHUB_RELEASES_URL)?;
+    latest_quiet_version(releases)
 }
 
 fn http_get_json<T>(url: &str) -> Result<T, String>
@@ -188,12 +167,8 @@ fn is_newer(latest: &str, current: &str) -> Option<bool> {
     }
 }
 
-fn parse_version(value: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = value.trim().split('.');
-    let major = parts.next()?.parse::<u64>().ok()?;
-    let minor = parts.next()?.parse::<u64>().ok()?;
-    let patch = parts.next()?.parse::<u64>().ok()?;
-    Some((major, minor, patch))
+fn parse_version(value: &str) -> Option<semver::Version> {
+    semver::Version::parse(value.trim()).ok()
 }
 
 #[derive(Deserialize)]
@@ -205,6 +180,18 @@ struct VersionInfo {
     dismissed_version: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct GithubReleaseInfo {
+    tag_name: String,
+}
+
+fn latest_quiet_version(releases: Vec<GithubReleaseInfo>) -> Result<String, String> {
+    releases
+        .into_iter()
+        .find_map(|info| info.tag_name.strip_prefix("quiet-v").map(str::to_string))
+        .ok_or_else(|| "no Quiet for Codex release was found".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,7 +200,10 @@ mod tests {
     fn is_newer_compares_plain_semver() {
         assert_eq!(is_newer("1.2.4", "1.2.3"), Some(true));
         assert_eq!(is_newer("1.2.3", "1.2.4"), Some(false));
-        assert_eq!(is_newer("1.2.3-beta.1", "1.2.2"), None);
+        assert_eq!(is_newer("1.2.3-beta.1", "1.2.2"), Some(true));
+        assert_eq!(is_newer("1.2.3-beta.2", "1.2.3-beta.1"), Some(true));
+        assert_eq!(is_newer("1.2.3-beta.1", "1.2.3-beta.1"), Some(false));
+        assert_eq!(is_newer("not-a-version", "1.2.3"), None);
     }
 
     #[test]
@@ -223,21 +213,33 @@ mod tests {
                 method: InstallMethod::Npm,
                 package_layout: None,
             }),
-            "npm install -g @openai/codex"
+            "manual GitHub release"
         );
         assert_eq!(
             update_action_label(&InstallContext {
                 method: InstallMethod::Pnpm,
                 package_layout: None,
             }),
-            "pnpm add -g @openai/codex"
+            "manual GitHub release"
         );
         assert_eq!(
             update_action_label(&InstallContext {
                 method: InstallMethod::Other,
                 package_layout: None,
             }),
-            "manual or unknown"
+            "manual GitHub release"
+        );
+    }
+
+    #[test]
+    fn release_list_includes_prerelease_channel() {
+        let releases: Vec<GithubReleaseInfo> = serde_json::from_str(
+            r#"[{"tag_name":"unrelated-v1"},{"tag_name":"quiet-v0.145.0-beta.1"}]"#,
+        )
+        .expect("release list should parse");
+        assert_eq!(
+            latest_quiet_version(releases).as_deref(),
+            Ok("0.145.0-beta.1")
         );
     }
 }

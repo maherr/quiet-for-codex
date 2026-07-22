@@ -7,8 +7,8 @@ use super::conversation_events::normalize_conversation_event;
 use super::resize_reflow::trailing_run_start;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
-use crate::app_server_session::ForkGoalContinuation;
 use crate::app_event::ConversationOrigin;
+use crate::app_server_session::ForkGoalContinuation;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
 #[cfg(target_os = "windows")]
@@ -615,9 +615,6 @@ impl App {
             }
             AppEvent::OpenUrlInBrowser { url } => {
                 self.open_url_in_browser(url);
-            }
-            AppEvent::OpenDesktopThread { thread_id } => {
-                self.open_desktop_thread(thread_id);
             }
             AppEvent::PetSelected { pet_id } => {
                 self.handle_pet_selected(tui, pet_id);

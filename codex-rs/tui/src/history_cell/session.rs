@@ -362,7 +362,7 @@ impl SessionHeaderHistoryCell {
 }
 
 fn codex_version_label(version: &str) -> String {
-    if version == crate::version::CODEX_CLI_DISPLAY_VERSION {
+    if version.starts_with("codex-quiet ") {
         version.to_string()
     } else {
         format!("v{version}")
@@ -377,11 +377,11 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ OpenAI Codex (vX)" for packaged builds or
-        // ">_ OpenAI Codex (label)" for local source forks.
+        // Title line rendered inside the box with the fork product name and
+        // either a packaged version or a local source label.
         let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
-            Span::from("OpenAI Codex").bold(),
+            Span::from(crate::version::CODEX_CLI_PRODUCT_NAME).bold(),
             Span::from(" ").dim(),
             Span::from(format!("({})", codex_version_label(self.version))).dim(),
         ];
@@ -448,7 +448,11 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let mut lines = vec![
-            Line::from(format!("OpenAI Codex (v{})", self.version)),
+            Line::from(format!(
+                "{} ({})",
+                crate::version::CODEX_CLI_PRODUCT_NAME,
+                codex_version_label(self.version)
+            )),
             Line::from(format!(
                 "model: {}{}",
                 self.model,
@@ -494,7 +498,11 @@ impl HistoryCell for SessionHeaderHistoryCell {
                 let directory =
                     self.format_directory(Some(inner_width.saturating_sub(dir_prefix_width)));
                 let mut semantic_lines = vec![
-                    format!("OpenAI Codex (v{})", self.version),
+                    format!(
+                        "{} ({})",
+                        crate::version::CODEX_CLI_PRODUCT_NAME,
+                        codex_version_label(self.version)
+                    ),
                     String::new(),
                     format!("model: {model} /model to change"),
                     format!("directory: {directory}"),
@@ -510,5 +518,18 @@ impl HistoryCell for SessionHeaderHistoryCell {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod quiet_version_label_tests {
+    use super::codex_version_label;
+
+    #[test]
+    fn quiet_version_is_not_prefixed_as_an_upstream_semver() {
+        assert_eq!(
+            codex_version_label("codex-quiet 0.145.0-beta.1"),
+            "codex-quiet 0.145.0-beta.1"
+        );
     }
 }

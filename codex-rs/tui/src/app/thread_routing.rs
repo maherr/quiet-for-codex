@@ -148,7 +148,9 @@ impl App {
     /// navigation both follow what the user is actually looking at, not whichever thread most
     /// recently began switching.
     pub(super) fn current_displayed_thread_id(&self) -> Option<ThreadId> {
-        self.chat_widget.active_thread_id.or(self.chat_widget.thread_id())
+        self.chat_widget
+            .active_thread_id
+            .or(self.chat_widget.thread_id())
     }
 
     pub(super) fn ignore_same_thread_resume(

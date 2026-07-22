@@ -1,8 +1,21 @@
-# External (non-OpenAI) Pull Request Requirements
+### What
 
-External code contributions are by invitation only. Please read the dedicated "Contributing" markdown file for details:
-https://github.com/openai/codex/blob/main/docs/contributing.md
+Describe the change and its user-visible effect.
 
-If your PR conforms to our contribution guidelines, replace this text with a detailed and high quality description of your changes.
+### Why
 
-Include a link to a bug report or enhancement request.
+Explain the problem this solves. Link the related issue when one exists.
+
+### Validation
+
+List the exact checks run and their results. Include operating system,
+architecture, and terminal for platform-sensitive TUI changes.
+
+### Scope
+
+- [ ] I kept this change focused on Quiet for Codex.
+- [ ] I added or updated tests for behavior changes.
+- [ ] I reviewed any changed TUI snapshots.
+- [ ] I updated public documentation when behavior changed.
+- [ ] I did not include credentials, private session data, or personal data.
+- [ ] I preserved applicable license and attribution notices.

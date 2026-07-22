@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Upstream OpenAI Codex issue
+    url: https://github.com/openai/codex/issues
+    about: Use this when the bug reproduces unchanged in the matching official Codex CLI release.
+  - name: Private security report
+    url: https://github.com/maherr/quiet-for-codex/security/advisories/new
+    about: Report fork-specific vulnerabilities privately. Do not open a public security issue.
+  - name: OpenAI account and service support
+    url: https://help.openai.com/
+    about: Use official support for accounts, billing, subscriptions, model access, and service availability.

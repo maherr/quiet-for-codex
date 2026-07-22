@@ -22,10 +22,11 @@ impl UpdateAvailableHistoryCell {
         let update_instruction = if let Some(update_action) = self.update_action {
             format!("Run {} to update.", update_action.command_str())
         } else {
-            "See https://github.com/openai/codex for installation options.".to_string()
+            "See https://github.com/maherr/quiet-for-codex/releases for installation options."
+                .to_string()
         };
         format!(
-            "Update available! {CODEX_CLI_VERSION} -> {}\n{update_instruction}\n\nSee full release notes:\nhttps://github.com/openai/codex/releases/latest",
+            "Update available! {CODEX_CLI_VERSION} -> {}\n{update_instruction}\n\nSee full release notes:\nhttps://github.com/maherr/quiet-for-codex/releases",
             self.latest_version
         )
     }
@@ -40,7 +41,9 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 "See ",
-                "https://github.com/openai/codex".cyan().underlined(),
+                "https://github.com/maherr/quiet-for-codex/releases"
+                    .cyan()
+                    .underlined(),
                 " for installation options."
             ]
         };
@@ -55,7 +58,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             update_instruction,
             "",
             "See full release notes:",
-            "https://github.com/openai/codex/releases/latest"
+            "https://github.com/maherr/quiet-for-codex/releases"
                 .cyan()
                 .underlined(),
         ];
@@ -72,7 +75,8 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         let update_instruction = if let Some(update_action) = self.update_action {
             format!("Run {} to update.", update_action.command_str())
         } else {
-            "See https://github.com/openai/codex for installation options.".to_string()
+            "See https://github.com/maherr/quiet-for-codex/releases for installation options."
+                .to_string()
         };
         vec![
             Line::from("Update available!"),
@@ -80,7 +84,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             Line::from(update_instruction),
             Line::from(""),
             Line::from("See full release notes:"),
-            Line::from("https://github.com/openai/codex/releases/latest"),
+            Line::from("https://github.com/maherr/quiet-for-codex/releases"),
         ]
     }
 

@@ -1,0 +1,112 @@
+name: Quiet for Codex bug
+description: Report a bug in the Quiet TUI, installer, or release package
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. Use the OpenAI Codex tracker if the same bug reproduces unchanged in the matching official release. Never post credentials, private prompts, session contents, or proprietary source code.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing Quiet for Codex issues.
+          required: true
+        - label: I tested the latest Quiet for Codex beta or explained why I could not.
+          required: true
+        - label: I removed secrets and private data from this report.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Quiet for Codex version
+      description: Paste the output of `codex-quiet --version`.
+      placeholder: codex-quiet 0.145.0-beta.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation method
+      options:
+        - Unix installer
+        - PowerShell installer
+        - Manual release archive
+        - Built from source
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      description: On macOS or Linux, paste `uname -mprs`. On Windows, include the Windows version and whether the machine is x64 or arm64.
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal and multiplexer
+      description: Include versions and note tmux, zellij, screen, an IDE terminal, Windows Terminal, or WSL2.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: screen_mode
+    attributes:
+      label: TUI screen mode
+      options:
+        - Retained alternate screen
+        - Inline mode with --no-alt-screen
+        - Both modes
+        - Not applicable
+    validations:
+      required: true
+
+  - type: dropdown
+    id: upstream
+    attributes:
+      label: Does it reproduce in the matching official Codex CLI release?
+      options:
+        - No, Quiet for Codex only
+        - Yes
+        - Not tested
+        - Not applicable
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest repeatable sequence. Use placeholder paths and data.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the exact error or visible result. Text is preferred over screenshots.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Include relevant config with secrets removed, frequency, and any workaround.

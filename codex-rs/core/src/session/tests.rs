@@ -5079,7 +5079,7 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
 }
 
 #[tokio::test]
-async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
+async fn session_new_falls_back_when_zsh_fork_enabled_without_packaged_zsh() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
     config
@@ -5148,7 +5148,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         /*bundled_skills_enabled*/ true,
     ));
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
-    let result = Session::new(
+    let session = Session::new(
         session_configuration,
         Arc::clone(&config),
         /*user_instructions*/ None,
@@ -5180,14 +5180,10 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
-    .await;
+    .await
+    .expect("missing packaged zsh should fall back to the user's shell");
 
-    let err = match result {
-        Ok(_) => panic!("expected startup to fail"),
-        Err(err) => err,
-    };
-    let msg = format!("{err:#}");
-    assert!(msg.contains("zsh fork feature enabled, but no packaged zsh fork is available"));
+    assert_eq!(session.user_shell().as_ref(), &default_user_shell());
 }
 
 async fn build_initial_context(

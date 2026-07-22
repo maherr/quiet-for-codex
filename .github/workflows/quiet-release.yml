@@ -1,0 +1,581 @@
+name: Quiet release
+
+on:
+  push:
+    tags:
+      - "quiet-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing quiet-v tag to package
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_TARGET_DIR: ${{ github.workspace }}/.cargo-target
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "none"
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      commit: ${{ steps.tag.outputs.commit }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - name: Validate tag and upstream version
+        id: tag
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="$REQUESTED_TAG"
+          if [[ ! "$tag" =~ ^quiet-v([0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*)$ ]]; then
+            echo "Invalid Quiet release tag: $tag" >&2
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}"
+          cargo_version="$(python3 -c 'import tomllib; print(tomllib.load(open("codex-rs/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          if [[ "${version%%-*}" != "$cargo_version" ]]; then
+            echo "Tag base ${version%%-*} does not match Cargo version $cargo_version" >&2
+            exit 1
+          fi
+          changelog_version="$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          headings = [
+              line
+              for line in Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+              if line.startswith("## ") and line != "## Unreleased"
+          ]
+          if not headings:
+              raise SystemExit("CHANGELOG.md has no released heading")
+          match = re.fullmatch(
+              r"## ([0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*) - [0-9]{4}-[0-9]{2}-[0-9]{2}",
+              headings[0],
+          )
+          if match is None:
+              raise SystemExit(f"first released CHANGELOG heading is not canonical: {headings[0]}")
+          print(match.group(1))
+          PY
+          )"
+          if [[ "$version" != "$changelog_version" ]]; then
+            echo "Tag version $version does not match first released CHANGELOG version $changelog_version" >&2
+            exit 1
+          fi
+          upstream_base="25af12f7e61572b0bc18ddb1008be543b91519b0"
+          if ! git merge-base --is-ancestor "$upstream_base" HEAD; then
+            echo "Documented upstream base $upstream_base is not an ancestor of the release." >&2
+            echo "Refusing a root, squash, or history rewrite that breaks fork provenance." >&2
+            exit 1
+          fi
+          remote_refs="$(git ls-remote --exit-code origin \
+            "refs/tags/$tag" "refs/tags/$tag^{}" "refs/heads/main")"
+          direct_ref="refs/tags/$tag"
+          peeled_ref="refs/tags/$tag^{}"
+          main_ref="refs/heads/main"
+          direct_commit="$(awk -v ref="$direct_ref" '$2 == ref { sha = $1 } END { print sha }' <<< "$remote_refs")"
+          peeled_commit="$(awk -v ref="$peeled_ref" '$2 == ref { sha = $1 } END { print sha }' <<< "$remote_refs")"
+          main_commit="$(awk -v ref="$main_ref" '$2 == ref { sha = $1 } END { print sha }' <<< "$remote_refs")"
+          commit="${peeled_commit:-$direct_commit}"
+          if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve $tag to a peeled commit SHA" >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$commit" ]]; then
+            echo "The remote tag moved while validation was starting; refusing the release" >&2
+            exit 1
+          fi
+          if [[ "$commit" != "$main_commit" ]]; then
+            echo "Release tag must identify the current public main tip." >&2
+            echo "Tag commit $commit, main commit ${main_commit:-missing}." >&2
+            exit 1
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "commit=$commit"
+          } >> "$GITHUB_OUTPUT"
+      - name: Refuse an existing release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A release for $TAG already exists. Published assets are immutable." >&2
+            echo "Create a new numbered prerelease tag by incrementing beta.N before retrying." >&2
+            exit 1
+          fi
+
+  verify:
+    name: Verify tagged fork
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+          targets: x86_64-unknown-linux-gnu
+      - name: Check Rust formatting
+        run: python3 scripts/ci/check_quiet_rustfmt.py
+      - name: Test release tooling
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/check_embedded_skill_identity.py
+          python3 scripts/codex_package/test_ripgrep.py
+          python3 scripts/release/test_generate_v8_notices.py
+          python3 scripts/release/test_prepare_v8_artifacts.py
+          python3 scripts/release/test_finalize_quiet_package.py
+          python3 scripts/release/test_install_sh.py
+          python3 scripts/release/test_release_workflow.py
+          python3 -m py_compile \
+            scripts/ci/check_embedded_skill_identity.py \
+            scripts/ci/check_quiet_rustfmt.py \
+            scripts/codex_package/test_ripgrep.py \
+            scripts/release/finalize_quiet_package.py \
+            scripts/release/generate_v8_notices.py \
+            scripts/release/prepare_v8_artifacts.py \
+            scripts/release/smoke_quiet_package.py \
+            scripts/release/test_generate_v8_notices.py \
+            scripts/release/test_prepare_v8_artifacts.py \
+            scripts/release/test_install_sh.py \
+            scripts/release/test_release_workflow.py
+          sh -n scripts/release/install.sh
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+      - name: Run TUI library tests
+        working-directory: codex-rs
+        run: cargo test --locked --target x86_64-unknown-linux-gnu -p codex-tui --lib
+      - name: Run privacy, identity, and hidden-command regressions
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-feedback --lib \
+            quiet_feedback_uploads_are_disabled
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-app-server --lib \
+            quiet_feedback_upload_api_stays_disabled
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-tui --lib \
+            feedback_command_reports_uploads_disabled
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-tui --lib \
+            quiet_commands_are_hidden_from_command_popup
+          CODEX_QUIET_VERSION="${{ needs.validate.outputs.version }}" \
+          CODEX_QUIET_DISPLAY_VERSION="codex-quiet ${{ needs.validate.outputs.version }}" \
+            cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-exec --lib \
+            exec_summary_uses_quiet_identity_and_exact_build_version
+      - name: Run fork-safety CLI tests
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-cli --bin codex \
+            quiet_build_does_not_register_desktop_app_subcommand
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-cli --bin codex \
+            release_list_includes_prerelease_channel
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-cli --test update
+      - name: Run missing-zsh fallback test
+        working-directory: codex-rs
+        run: |
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-core \
+            session_new_falls_back_when_zsh_fork_enabled_without_packaged_zsh
+      - name: Run login fork-safety tests
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-login \
+            streamlined_success_page_does_not_handoff_to_the_stock_desktop_app
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-app-server --test all \
+            login_account_chatgpt_ignores_stock_desktop_success_page_request
+      - name: Black-box daemon safety routes
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo build --locked --target x86_64-unknown-linux-gnu \
+            -p codex-cli --bin codex
+          quiet="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/debug/codex"
+          disabled_message="daemon-managed app-server routes are disabled in Quiet for Codex because the upstream implementation installs and updates stock Codex"
+          routes=(
+            "app-server daemon bootstrap"
+            "app-server daemon start"
+            "app-server daemon stop"
+            "app-server daemon restart"
+            "app-server daemon enable-remote-control"
+            "app-server daemon disable-remote-control"
+            "app-server daemon pid-update-loop"
+            "app-server daemon version"
+            "remote-control"
+            "remote-control start"
+            "remote-control stop"
+            "remote-control pair"
+          )
+          export CODEX_HOME="$RUNNER_TEMP/quiet-daemon-safety-codex-home"
+          mkdir -p "$CODEX_HOME"
+          for route in "${routes[@]}"; do
+            read -r -a route_args <<< "$route"
+            set +e
+            output="$("$quiet" "${route_args[@]}" 2>&1)"
+            status=$?
+            set -e
+            if (( status == 0 )); then
+              echo "Disabled route unexpectedly succeeded: $route" >&2
+              exit 1
+            fi
+            if [[ "$output" != *"$disabled_message"* ]]; then
+              echo "Disabled route did not return the Quiet safety error: $route" >&2
+              printf '%s\n' "$output" >&2
+              exit 1
+            fi
+          done
+
+  licenses:
+    name: Generate dependency licenses
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - name: Install pinned cargo-about
+        run: cargo install --locked cargo-about --version 0.9.1 --features cli
+      - name: Generate complete Rust dependency license report
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          mkdir -p ../license-dist
+          cargo about generate \
+            --workspace \
+            --locked \
+            --fail \
+            --config ../scripts/release/about.toml \
+            --output-file ../license-dist/RUST_DEPENDENCY_LICENSES.txt \
+            ../scripts/release/about.hbs
+          test "$(wc -c < ../license-dist/RUST_DEPENDENCY_LICENSES.txt)" -ge 10000
+      - name: Generate pinned V8 and rusty_v8 notice report
+        run: |
+          set -euo pipefail
+          python3 scripts/release/generate_v8_notices.py \
+            --output license-dist/V8_RUSTY_V8_NOTICES.txt
+          test "$(wc -c < license-dist/V8_RUSTY_V8_NOTICES.txt)" -ge 100000
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: quiet-release-licenses
+          path: |
+            license-dist/RUST_DEPENDENCY_LICENSES.txt
+            license-dist/V8_RUSTY_V8_NOTICES.txt
+          if-no-files-found: error
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs:
+      - validate
+      - licenses
+      - verify
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      CODEX_QUIET_VERSION: ${{ needs.validate.outputs.version }}
+      CODEX_QUIET_DISPLAY_VERSION: codex-quiet ${{ needs.validate.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            extension: tar.gz
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            extension: tar.gz
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            extension: tar.gz
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            extension: tar.gz
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            extension: zip
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            extension: zip
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: quiet-release-licenses
+          path: ${{ runner.temp }}/quiet-licenses
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+      - name: Configure MSVC
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+      - name: Install Zig
+        if: runner.os == 'Linux'
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+      - name: Install musl build tools
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          APT_UPDATE_ARGS: -o Acquire::Retries=3
+          APT_INSTALL_ARGS: --no-install-recommends
+        run: bash .github/scripts/install-musl-build-tools.sh
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+      - name: Build and hash bundled bubblewrap
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target "${{ matrix.target }}" --bin bwrap
+          bwrap="$CARGO_TARGET_DIR/${{ matrix.target }}/release/bwrap"
+          strip --strip-debug --strip-unneeded "$bwrap"
+          digest="$(sha256sum "$bwrap" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=$digest" >> "$GITHUB_ENV"
+          echo "QUIET_BWRAP_BIN=$bwrap" >> "$GITHUB_ENV"
+      - name: Build canonical package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          python_bin=python3
+          if ! command -v "$python_bin" >/dev/null 2>&1; then
+            python_bin=python
+          fi
+          package_dir="$RUNNER_TEMP/quiet-package"
+          args=(
+            scripts/build_codex_package.py
+            --target "$TARGET"
+            --cargo-profile release
+            --package-dir "$package_dir"
+            --zsh-manifest scripts/release/no-zsh.json
+            --force
+          )
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            args+=(--bwrap-bin "$QUIET_BWRAP_BIN")
+          fi
+          if [[ "$TARGET" == "x86_64-pc-windows-msvc" ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
+          "$python_bin" "${args[@]}"
+      - name: Strip Unix release executables
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/quiet-package"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            strip -S -x \
+              "$package_dir/bin/codex" \
+              "$package_dir/bin/codex-code-mode-host"
+          else
+            strip --strip-debug --strip-unneeded \
+              "$package_dir/bin/codex" \
+              "$package_dir/bin/codex-code-mode-host"
+          fi
+      - name: Finalize, launch-test, and archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          EXTENSION: ${{ matrix.extension }}
+        run: |
+          set -euo pipefail
+          python_bin=python3
+          if ! command -v "$python_bin" >/dev/null 2>&1; then
+            python_bin=python
+          fi
+          package_dir="$RUNNER_TEMP/quiet-package"
+          mkdir -p dist
+          archive="dist/codex-quiet-$VERSION-$TARGET.$EXTENSION"
+          "$python_bin" scripts/release/finalize_quiet_package.py \
+            --package-dir "$package_dir" \
+            --archive-output "$archive" \
+            --version "$VERSION" \
+            --target "$TARGET" \
+            --rust-licenses "$RUNNER_TEMP/quiet-licenses/RUST_DEPENDENCY_LICENSES.txt" \
+            --v8-notices "$RUNNER_TEMP/quiet-licenses/V8_RUSTY_V8_NOTICES.txt" \
+            --force
+          "$python_bin" scripts/release/smoke_quiet_package.py \
+            "$archive" \
+            --target "$TARGET" \
+            --version "$VERSION"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            pwsh -NoProfile -File scripts/release/test_install_ps1.ps1 \
+              -ArchivePath "$archive" \
+              -Version "$VERSION"
+          else
+            QUIET_INSTALL_TEST_ARCHIVE="$archive" \
+              QUIET_INSTALL_TEST_VERSION="$VERSION" \
+              "$python_bin" scripts/release/test_install_sh.py
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: quiet-release-${{ matrix.target }}
+          path: dist/codex-quiet-*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: quiet-release-*
+          merge-multiple: true
+          path: dist
+      - name: Write checksums and release notes
+        shell: bash
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          expected=(
+            "codex-quiet-$VERSION-x86_64-unknown-linux-musl.tar.gz"
+            "codex-quiet-$VERSION-aarch64-unknown-linux-musl.tar.gz"
+            "codex-quiet-$VERSION-x86_64-apple-darwin.tar.gz"
+            "codex-quiet-$VERSION-aarch64-apple-darwin.tar.gz"
+            "codex-quiet-$VERSION-x86_64-pc-windows-msvc.zip"
+            "codex-quiet-$VERSION-aarch64-pc-windows-msvc.zip"
+          )
+          for archive in "${expected[@]}"; do
+            if [[ ! -s "dist/$archive" ]]; then
+              echo "Missing or empty release archive: $archive" >&2
+              exit 1
+            fi
+          done
+          mapfile -t actual < <(find dist -maxdepth 1 -type f -name 'codex-quiet-*' -printf '%f\n' | sort)
+          mapfile -t wanted < <(printf '%s\n' "${expected[@]}" | sort)
+          if [[ "${actual[*]}" != "${wanted[*]}" ]]; then
+            echo "Release archive set does not match the six expected targets" >&2
+            printf 'Expected: %s\n' "${wanted[*]}" >&2
+            printf 'Actual:   %s\n' "${actual[*]}" >&2
+            exit 1
+          fi
+          (
+            cd dist
+            sha256sum "${expected[@]}" | sort -k2 > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+          {
+            printf '%s\n' 'Quiet for Codex is an unofficial community fork of OpenAI Codex CLI.'
+            printf '%s\n' ''
+            printf '%s\n' 'This beta includes native packages for Linux, macOS, and Windows on x86_64 and arm64.'
+            printf '%s\n' 'The macOS and Windows binaries are unsigned. Review the repository security notes before installing.'
+            printf '%s\n' ''
+            printf 'Source tag: %s\n' "$TAG"
+            printf 'Source commit: %s\n' "$COMMIT"
+          } > RELEASE_NOTES.md
+      - name: Publish immutable release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          remote_refs="$(git ls-remote --exit-code \
+            "https://github.com/$GITHUB_REPOSITORY.git" \
+            "refs/tags/$TAG" "refs/tags/$TAG^{}" "refs/heads/main")"
+          direct_ref="refs/tags/$TAG"
+          peeled_ref="refs/tags/$TAG^{}"
+          main_ref="refs/heads/main"
+          direct_commit="$(awk -v ref="$direct_ref" '$2 == ref { sha = $1 } END { print sha }' <<< "$remote_refs")"
+          peeled_commit="$(awk -v ref="$peeled_ref" '$2 == ref { sha = $1 } END { print sha }' <<< "$remote_refs")"
+          main_commit="$(awk -v ref="$main_ref" '$2 == ref { sha = $1 } END { print sha }' <<< "$remote_refs")"
+          remote_commit="${peeled_commit:-$direct_commit}"
+          if [[ "$remote_commit" != "$EXPECTED_COMMIT" ]]; then
+            echo "Release tag identity changed after validation." >&2
+            echo "Expected $EXPECTED_COMMIT, found ${remote_commit:-missing}." >&2
+            exit 1
+          fi
+          if [[ "$main_commit" != "$EXPECTED_COMMIT" ]]; then
+            echo "Public main moved after validation; refusing to publish installers from a different source revision." >&2
+            echo "Expected $EXPECTED_COMMIT, found ${main_commit:-missing}." >&2
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A release for $TAG already exists. Published assets are immutable." >&2
+            echo "Create a new numbered prerelease tag by incrementing beta.N before retrying." >&2
+            exit 1
+          fi
+          assets=(
+            "dist/codex-quiet-$VERSION-x86_64-unknown-linux-musl.tar.gz"
+            "dist/codex-quiet-$VERSION-aarch64-unknown-linux-musl.tar.gz"
+            "dist/codex-quiet-$VERSION-x86_64-apple-darwin.tar.gz"
+            "dist/codex-quiet-$VERSION-aarch64-apple-darwin.tar.gz"
+            "dist/codex-quiet-$VERSION-x86_64-pc-windows-msvc.zip"
+            "dist/codex-quiet-$VERSION-aarch64-pc-windows-msvc.zip"
+            "dist/SHA256SUMS"
+          )
+          gh release create "$TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Quiet for Codex ${TAG#quiet-v}" \
+            --notes-file RELEASE_NOTES.md \
+            --prerelease \
+            --latest=false
+          published_immutable="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+            --jq '.immutable')"
+          if [[ "$published_immutable" != "true" ]]; then
+            echo "Published release is not immutable. Repository release immutability must be enabled manually before launch." >&2
+            exit 1
+          fi

@@ -37,7 +37,7 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     );
     anyhow::ensure!(
         auth.get_account_id().is_some(),
-        "ChatGPT account ID not available, please re-run `codex login`"
+        "ChatGPT account ID not available, please re-run `codex-quiet login`"
     );
 
     // Make direct HTTP request to ChatGPT backend API with the token
@@ -94,7 +94,7 @@ pub(crate) async fn chatgpt_post_request_with_timeout<
     );
     anyhow::ensure!(
         auth.get_account_id().is_some(),
-        "ChatGPT account ID not available, please re-run codex login"
+        "ChatGPT account ID not available, please re-run codex-quiet login"
     );
 
     let url = format!(

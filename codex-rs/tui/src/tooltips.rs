@@ -3,6 +3,8 @@ use codex_protocol::account::PlanType;
 use lazy_static::lazy_static;
 use rand::Rng;
 
+use crate::version::CODEX_CLI_DISPLAY_NAME;
+
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
 
@@ -27,7 +29,7 @@ lazy_static! {
             if line.is_empty() || line.starts_with('#') {
                 return false;
             }
-            if !IS_MACOS && !IS_WINDOWS && line.contains("codex app") {
+            if !desktop_app_promos_enabled() && line.contains("codex app") {
                 return false;
             }
             true
@@ -74,7 +76,7 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>, fast_mode_enabled: bool) -> Op
                 return Some(FREE_GO_TOOLTIP.to_string());
             }
             _ => {
-                let tooltip = if IS_MACOS {
+                let tooltip = if IS_MACOS && desktop_app_promos_enabled() {
                     OTHER_TOOLTIP
                 } else {
                     OTHER_TOOLTIP_NON_MAC
@@ -88,11 +90,15 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>, fast_mode_enabled: bool) -> Op
 }
 
 fn paid_app_tooltip() -> Option<&'static str> {
-    if IS_MACOS || IS_WINDOWS {
+    if desktop_app_promos_enabled() && (IS_MACOS || IS_WINDOWS) {
         Some(APP_TOOLTIP)
     } else {
         None
     }
+}
+
+fn desktop_app_promos_enabled() -> bool {
+    CODEX_CLI_DISPLAY_NAME != "codex-quiet"
 }
 
 /// Paid users spend most startup sessions in a dedicated promo slot rather than the
@@ -122,6 +128,7 @@ fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
 
 pub(crate) mod announcement {
     use crate::tooltips::ANNOUNCEMENT_TIP_URL;
+    use crate::version::CODEX_CLI_DISPLAY_NAME;
     use crate::version::CODEX_CLI_VERSION;
     use chrono::NaiveDate;
     use chrono::Utc;
@@ -135,14 +142,21 @@ pub(crate) mod announcement {
     static ANNOUNCEMENT_TIP: OnceLock<Option<String>> = OnceLock::new();
     const CURRENT_OS: TargetOs = TargetOs::current();
 
+    pub(crate) fn remote_announcements_enabled() -> bool {
+        CODEX_CLI_DISPLAY_NAME != "codex-quiet"
+    }
+
     /// Prewarm the cache of the announcement tip.
     pub(crate) fn prewarm() {
+        if !remote_announcements_enabled() {
+            return;
+        }
         let _ = thread::spawn(|| ANNOUNCEMENT_TIP.get_or_init(init_announcement_tip_in_thread));
     }
 
     /// Fetch the announcement tip, return None if the prewarm is not done yet.
     pub(crate) fn fetch_announcement_tip(plan: Option<PlanType>) -> Option<String> {
-        if CODEX_CLI_VERSION.trim() == "0.0.0" {
+        if !remote_announcements_enabled() || CODEX_CLI_VERSION.trim() == "0.0.0" {
             return None;
         }
 
@@ -330,6 +344,7 @@ pub(crate) mod announcement {
 mod tests {
     use super::*;
     use crate::tooltips::announcement::parse_announcement_tip_toml;
+    use crate::tooltips::announcement::remote_announcements_enabled;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
@@ -337,6 +352,18 @@ mod tests {
     fn random_tooltip_returns_some_tip_when_available() {
         let mut rng = StdRng::seed_from_u64(42);
         assert!(pick_tooltip(&mut rng).is_some());
+    }
+
+    #[test]
+    fn quiet_build_disables_upstream_remote_announcements() {
+        assert!(!remote_announcements_enabled());
+    }
+
+    #[test]
+    fn quiet_build_disables_desktop_app_promos() {
+        assert!(!desktop_app_promos_enabled());
+        assert!(TOOLTIPS.iter().all(|tip| !tip.contains("codex app")));
+        assert_eq!(paid_app_tooltip(), None);
     }
 
     #[test]

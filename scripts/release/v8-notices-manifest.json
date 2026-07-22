@@ -1,0 +1,480 @@
+{
+  "schemaVersion": 1,
+  "licenseDirectory": "licenses/v8",
+  "lockedInputs": {
+    "rustCrate": {
+      "name": "v8",
+      "version": "149.2.0",
+      "checksum": "46dccf61a364b61bbaac70a8ba64a1a1006e87123b7d62eaeec999a3ba31ecdb",
+      "url": "https://static.crates.io/crates/v8/v8-149.2.0.crate",
+      "lockFile": "codex-rs/Cargo.lock"
+    },
+    "rustyV8Source": {
+      "tag": "v149.2.0",
+      "commit": "5d0e31ea6bf67f4559faa759b91e22bc3f1cd696",
+      "sourceUrl": "https://github.com/denoland/rusty_v8/tree/5d0e31ea6bf67f4559faa759b91e22bc3f1cd696"
+    },
+    "v8Source": {
+      "tag": "14.9.207.2",
+      "commit": "64e3c08f8fbde9e391a490087b317b3c5365f1ba",
+      "sourceUrl": "https://github.com/v8/v8/tree/64e3c08f8fbde9e391a490087b317b3c5365f1ba",
+      "archiveIntegrity": "sha256-tflbZE5srqal6leMxJjK/ZQtwpF96OMGJ6avd5lice4="
+    },
+    "unixArtifactBuild": {
+      "tag": "rusty-v8-v149.2.0",
+      "commit": "1e1b8ed914d7b4aec4d987ffaf3d1c3e97f3fa4d",
+      "sourceUrl": "https://github.com/openai/codex/tree/1e1b8ed914d7b4aec4d987ffaf3d1c3e97f3fa4d",
+      "releaseUrl": "https://github.com/openai/codex/releases/tag/rusty-v8-v149.2.0"
+    },
+    "artifacts": [
+      {
+        "target": "x86_64-unknown-linux-musl",
+        "provider": "OpenAI Codex source build",
+        "url": "https://github.com/openai/codex/releases/download/rusty-v8-v149.2.0/librusty_v8_release_x86_64-unknown-linux-musl.a.gz",
+        "sha256": "232a860a60790dc59af99e360e1f3b2ba882c8a1aaaeb055a2a482eddbce8c70",
+        "bindingUrl": "https://github.com/openai/codex/releases/download/rusty-v8-v149.2.0/src_binding_release_x86_64-unknown-linux-musl.rs",
+        "bindingSha256": "5db3ec0783531d12862a3f38dd5a679273550e67962260b81f07e612a68a0c24"
+      },
+      {
+        "target": "aarch64-unknown-linux-musl",
+        "provider": "OpenAI Codex source build",
+        "url": "https://github.com/openai/codex/releases/download/rusty-v8-v149.2.0/librusty_v8_release_aarch64-unknown-linux-musl.a.gz",
+        "sha256": "889155b099a2eac05a13175994257ef3a6140201bb411b74b50333f42b608717",
+        "bindingUrl": "https://github.com/openai/codex/releases/download/rusty-v8-v149.2.0/src_binding_release_aarch64-unknown-linux-musl.rs",
+        "bindingSha256": "5db3ec0783531d12862a3f38dd5a679273550e67962260b81f07e612a68a0c24"
+      },
+      {
+        "target": "x86_64-apple-darwin",
+        "provider": "OpenAI Codex source build",
+        "url": "https://github.com/openai/codex/releases/download/rusty-v8-v149.2.0/librusty_v8_release_x86_64-apple-darwin.a.gz",
+        "sha256": "5b9e56155de4bf7121f82ad03ff13dffd787037102159b4218df936a95b672c4",
+        "bindingUrl": "https://github.com/openai/codex/releases/download/rusty-v8-v149.2.0/src_binding_release_x86_64-apple-darwin.rs",
+        "bindingSha256": "f0d0b199ec80f647b4fab01bc71947947588b6571eb11c08f946b8d8748c400b"
+      },
+      {
+        "target": "aarch64-apple-darwin",
+        "provider": "OpenAI Codex source build",
+        "url": "https://github.com/openai/codex/releases/download/rusty-v8-v149.2.0/librusty_v8_release_aarch64-apple-darwin.a.gz",
+        "sha256": "933b12ecdeb4b15150a69724810e8298d19b5a117070e016a55afb60929b2b5a",
+        "bindingUrl": "https://github.com/openai/codex/releases/download/rusty-v8-v149.2.0/src_binding_release_aarch64-apple-darwin.rs",
+        "bindingSha256": "f0d0b199ec80f647b4fab01bc71947947588b6571eb11c08f946b8d8748c400b"
+      },
+      {
+        "target": "x86_64-pc-windows-msvc",
+        "provider": "denoland rusty_v8 release",
+        "url": "https://github.com/denoland/rusty_v8/releases/download/v149.2.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
+        "sha256": "12b5a791b54e92f748738ad8d0d12dad8d281a2d836638ad1aa6678e3b855d9a",
+        "bindingCratePath": "gen/src_binding_release_x86_64-pc-windows-msvc.rs",
+        "bindingSha256": "62b8cd7abc0e7ce5fdfcd1030bf576d2506b0e2099769225234d26bca7688fdc"
+      },
+      {
+        "target": "aarch64-pc-windows-msvc",
+        "provider": "denoland rusty_v8 release",
+        "url": "https://github.com/denoland/rusty_v8/releases/download/v149.2.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+        "sha256": "923f2b6ccdc14526b814e171e34c9aafd7969f12304948857c6696d022f0fb3c",
+        "bindingCratePath": "gen/src_binding_release_aarch64-pc-windows-msvc.rs",
+        "bindingSha256": "62b8cd7abc0e7ce5fdfcd1030bf576d2506b0e2099769225234d26bca7688fdc"
+      }
+    ]
+  },
+  "requiredPins": [
+    {
+      "path": "MODULE.bazel",
+      "literals": [
+        "bazel_dep(name = \"v8\", version = \"14.9.207.2\")",
+        "integrity = \"sha256-tflbZE5srqal6leMxJjK/ZQtwpF96OMGJ6avd5lice4=\"",
+        "sha256 = \"46dccf61a364b61bbaac70a8ba64a1a1006e87123b7d62eaeec999a3ba31ecdb\"",
+        "https://static.crates.io/crates/v8/v8-149.2.0.crate",
+        "commit = \"99457fa555797f8c5ac3c076ca288d8481d3b23a\"",
+        "commit = \"8f11bb1d4438d0239d0dfc1bd9456a9f31629dda\"",
+        "commit = \"cb952785ccee13811f293f3c419958d1e3ddafbf\"",
+        "sha256 = \"923f2b6ccdc14526b814e171e34c9aafd7969f12304948857c6696d022f0fb3c\"",
+        "sha256 = \"12b5a791b54e92f748738ad8d0d12dad8d281a2d836638ad1aa6678e3b855d9a\""
+      ]
+    },
+    {
+      "path": "MODULE.bazel.lock",
+      "literals": [
+        "\"abseil-cpp\": \"20250814.1\"",
+        "\"https://bcr.bazel.build/modules/abseil-cpp/20250814.1/source.json\"",
+        "\"v8_149.2.0\""
+      ]
+    },
+    {
+      "path": "patches/v8_module_deps.patch",
+      "literals": [
+        "bazel_dep(name = \"abseil-cpp\", version = \"20250814.0\")",
+        "commit = \"a86a32e67b8d1384b33f8fa48c83a6079b86f8cd\"",
+        "sha256 = \"e14a33089712b681d74d94e2a11362643bd7d769ae8f7e7caefe955f57f7eacd\"",
+        "sha256 = \"0180de81a1dd48a87b8c0442ffa81734f3db91a7350914107a449935124e3c6f\"",
+        "commit = \"beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44\"",
+        "commit = \"3d2de1816307bac63c16a297e8c4dc501b4076df\"",
+        "sha256 = \"7e0be78b8318e8bdbf6fa545d2ecb4c90f947df03f7aadc42c1967f019e63343\""
+      ]
+    },
+    {
+      "path": "third_party/v8/rusty_v8_149_2_0.sha256",
+      "literals": [
+        "923f2b6ccdc14526b814e171e34c9aafd7969f12304948857c6696d022f0fb3c  rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+        "12b5a791b54e92f748738ad8d0d12dad8d281a2d836638ad1aa6678e3b855d9a  rusty_v8_release_x86_64-pc-windows-msvc.lib.gz"
+      ]
+    },
+    {
+      "path": ".github/actions/setup-rusty-v8/action.yml",
+      "literals": [
+        "prepare_v8_artifacts.py",
+        "--github-env \"${GITHUB_ENV}\""
+      ]
+    }
+  ],
+  "components": [
+    {
+      "name": "rusty_v8",
+      "version": "149.2.0",
+      "scope": "Rust bindings linked into the Quiet for Codex executable",
+      "declaredLicense": "MIT",
+      "commit": "5d0e31ea6bf67f4559faa759b91e22bc3f1cd696",
+      "sourceUrl": "https://github.com/denoland/rusty_v8/tree/5d0e31ea6bf67f4559faa759b91e22bc3f1cd696",
+      "licenseFiles": [
+        {
+          "path": "rusty_v8-LICENSE",
+          "sourcePath": "LICENSE",
+          "sourceUrl": "https://github.com/denoland/rusty_v8/blob/5d0e31ea6bf67f4559faa759b91e22bc3f1cd696/LICENSE",
+          "sha256": "1c6356fb751d45f0c53093ebf8a7f5e580e802f51999178e19d60f3ec39e147d"
+        }
+      ]
+    },
+    {
+      "name": "V8 JavaScript engine and V8 source-tree notices",
+      "version": "14.9.207.2",
+      "scope": "Runtime engine plus conservatively included source-tree, test, and build notices",
+      "declaredLicense": "BSD-3-Clause and separately identified third-party terms",
+      "commit": "64e3c08f8fbde9e391a490087b317b3c5365f1ba",
+      "sourceUrl": "https://github.com/v8/v8/tree/64e3c08f8fbde9e391a490087b317b3c5365f1ba",
+      "licenseFiles": [
+        {
+          "path": "v8-LICENSE",
+          "sourcePath": "LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/LICENSE",
+          "sha256": "6ab33af8774a0f396ee3aeeb761e3229057682d6f9fa7f572e390c2cb3a6e509"
+        },
+        {
+          "path": "v8-LICENSE.fdlibm",
+          "sourcePath": "LICENSE.fdlibm",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/LICENSE.fdlibm",
+          "sha256": "e7115e18444dae09d17f361ddc365fb1d342640fe500796209c63f7c80dfae10"
+        },
+        {
+          "path": "v8-LICENSE.strongtalk",
+          "sourcePath": "LICENSE.strongtalk",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/LICENSE.strongtalk",
+          "sha256": "6a585a9f466654abc8fc0829d56b1bc987e3a073d31faa03bba37d33640a23cd"
+        },
+        {
+          "path": "v8-LICENSE.v8",
+          "sourcePath": "LICENSE.v8",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/LICENSE.v8",
+          "sha256": "4af93c12062c58058378de2397dc1c92bbff9ddfb1d583a01c84127557ce97ca"
+        },
+        {
+          "path": "v8-test_js-perf-test_SixSpeed_LICENSE.sixspeed",
+          "sourcePath": "test/js-perf-test/SixSpeed/LICENSE.sixspeed",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/test/js-perf-test/SixSpeed/LICENSE.sixspeed",
+          "sha256": "f915aef5cdb93903ae8850c4a1efb638ee1195b1380b6e446a583c1d0eef3ff7"
+        },
+        {
+          "path": "v8-test_mjsunit_third_party_object-keys_LICENSE",
+          "sourcePath": "test/mjsunit/third_party/object-keys/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/test/mjsunit/third_party/object-keys/LICENSE",
+          "sha256": "b5e27ca8c92bf5748046345e3c5621a97542abd931ad5870b2057c4e20e2ece8"
+        },
+        {
+          "path": "v8-test_mjsunit_third_party_regexp-pcre_LICENSE",
+          "sourcePath": "test/mjsunit/third_party/regexp-pcre/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/test/mjsunit/third_party/regexp-pcre/LICENSE",
+          "sha256": "f55e9e4ba1ce2ae3b0f21577d9dfd3cea376123cb69e444b891f2f0fc1f9069a"
+        },
+        {
+          "path": "v8-test_wasm-js_third_party_LICENSE.testharness",
+          "sourcePath": "test/wasm-js/third_party/LICENSE.testharness",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/test/wasm-js/third_party/LICENSE.testharness",
+          "sha256": "5a7b465d39b5e018bc40cc34162176269f7c476989cb4dbcf0ec0b81701545a7"
+        },
+        {
+          "path": "v8-third_party_colorama_LICENSE",
+          "sourcePath": "third_party/colorama/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/colorama/LICENSE",
+          "sha256": "15137d6c822e3ab097093a33c3a39a9df699f373f6438867ad534ff60762a947"
+        },
+        {
+          "path": "v8-third_party_fp16_LICENSE",
+          "sourcePath": "third_party/fp16/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/fp16/LICENSE",
+          "sha256": "c91377adafa2f498211a4fe017788e20c38892124673860f068f2919c289193d"
+        },
+        {
+          "path": "v8-third_party_glibc_LICENSE",
+          "sourcePath": "third_party/glibc/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/glibc/LICENSE",
+          "sha256": "b634ab5640e258563c536e658cad87080553df6f34f62269a21d554844e58bfe"
+        },
+        {
+          "path": "v8-third_party_highway_LICENSE",
+          "sourcePath": "third_party/highway/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/highway/LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        },
+        {
+          "path": "v8-third_party_inspector_protocol_LICENSE",
+          "sourcePath": "third_party/inspector_protocol/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/inspector_protocol/LICENSE",
+          "sha256": "450ebb9e9e50c2809d9ca581931fc8946d8d5aa0c8c35aae9ac471342fe4a88e"
+        },
+        {
+          "path": "v8-third_party_jsoncpp_LICENSE",
+          "sourcePath": "third_party/jsoncpp/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/jsoncpp/LICENSE",
+          "sha256": "76c45ece83a26117f86f4e349e7df118708e061e87225328fb478ce1e8b3eb86"
+        },
+        {
+          "path": "v8-third_party_rapidhash-v8_LICENSE",
+          "sourcePath": "third_party/rapidhash-v8/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/rapidhash-v8/LICENSE",
+          "sha256": "db672df7faf793fbe28b8074fdd10822363e1525816b45c9627754885de842b0"
+        },
+        {
+          "path": "v8-third_party_re2_LICENSE",
+          "sourcePath": "third_party/re2/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/re2/LICENSE",
+          "sha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449"
+        },
+        {
+          "path": "v8-third_party_siphash_LICENSE",
+          "sourcePath": "third_party/siphash/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/siphash/LICENSE",
+          "sha256": "36ffd9dc085d529a7e60e1276d73ae5a030b020313e6c5408593a6ae2af39673"
+        },
+        {
+          "path": "v8-third_party_utf8-decoder_LICENSE",
+          "sourcePath": "third_party/utf8-decoder/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/utf8-decoder/LICENSE",
+          "sha256": "3f712e5fbdfdbd5ee7d9b8c8152580220df55de47f4eba2f26c95c4de19ad096"
+        },
+        {
+          "path": "v8-third_party_v8_builtins_LICENSE",
+          "sourcePath": "third_party/v8/builtins/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/v8/builtins/LICENSE",
+          "sha256": "b9a6d9320b8f2693e8d41e496ce56caadacaddcca9be2a64a61749278f425cf2"
+        },
+        {
+          "path": "v8-third_party_v8_codegen_LICENSE",
+          "sourcePath": "third_party/v8/codegen/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/v8/codegen/LICENSE",
+          "sha256": "17e4f539024be2749ee729d1e2f01d24cef12ece8c9bf18e91a4349be29c80bf"
+        },
+        {
+          "path": "v8-third_party_valgrind_LICENSE",
+          "sourcePath": "third_party/valgrind/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/valgrind/LICENSE",
+          "sha256": "ebf25b8ce59c9e8883acd1ca75b6fc121937ca034f666c4077d2be739d2e1622"
+        },
+        {
+          "path": "v8-third_party_vtune_LICENSE",
+          "sourcePath": "third_party/vtune/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/vtune/LICENSE",
+          "sha256": "02aea3ade0c02470335987f7d93ffaed877bcefc8414a416e2e548665bb0bfd0"
+        },
+        {
+          "path": "v8-third_party_wasm-api_LICENSE",
+          "sourcePath": "third_party/wasm-api/LICENSE",
+          "sourceUrl": "https://github.com/v8/v8/blob/64e3c08f8fbde9e391a490087b317b3c5365f1ba/third_party/wasm-api/LICENSE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        }
+      ]
+    },
+    {
+      "name": "Abseil C++",
+      "version": "20250814.1",
+      "scope": "V8 runtime dependency selected by the Bazel module lock",
+      "declaredLicense": "Apache-2.0",
+      "commit": "d38452e1ee03523a208362186fd42248ff2609f6",
+      "sourceUrl": "https://github.com/abseil/abseil-cpp/tree/d38452e1ee03523a208362186fd42248ff2609f6",
+      "licenseFiles": [
+        {
+          "path": "abseil-LICENSE",
+          "sourcePath": "LICENSE",
+          "sourceUrl": "https://github.com/abseil/abseil-cpp/blob/d38452e1ee03523a208362186fd42248ff2609f6/LICENSE",
+          "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747"
+        }
+      ]
+    },
+    {
+      "name": "Highway",
+      "version": "1.2.0",
+      "scope": "V8 runtime dependency pinned by the V8 module patch",
+      "declaredLicense": "Apache-2.0",
+      "commit": "457c891775a7397bdb0376bb1031e6e027af1c48",
+      "sourceUrl": "https://github.com/google/highway/tree/457c891775a7397bdb0376bb1031e6e027af1c48",
+      "licenseFiles": [
+        {
+          "path": "highway-LICENSE",
+          "sourcePath": "LICENSE",
+          "sourceUrl": "https://github.com/google/highway/blob/457c891775a7397bdb0376bb1031e6e027af1c48/LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ]
+    },
+    {
+      "name": "fast_float",
+      "version": "8.0.2",
+      "scope": "V8 runtime dependency pinned by the V8 module patch",
+      "declaredLicense": "Apache-2.0 OR BSL-1.0 OR MIT",
+      "commit": "50a80a73ab2ab256ba1c3bf86923ddd8b4202bc7",
+      "sourceUrl": "https://github.com/fastfloat/fast_float/tree/50a80a73ab2ab256ba1c3bf86923ddd8b4202bc7",
+      "licenseFiles": [
+        {
+          "path": "fast_float-LICENSE-APACHE",
+          "sourcePath": "LICENSE-APACHE",
+          "sourceUrl": "https://github.com/fastfloat/fast_float/blob/50a80a73ab2ab256ba1c3bf86923ddd8b4202bc7/LICENSE-APACHE",
+          "sha256": "097a889aa954d04e088b790b10a4014d6189561d0a6013935a73ce3d4ddaaf06"
+        },
+        {
+          "path": "fast_float-LICENSE-BOOST",
+          "sourcePath": "LICENSE-BOOST",
+          "sourceUrl": "https://github.com/fastfloat/fast_float/blob/50a80a73ab2ab256ba1c3bf86923ddd8b4202bc7/LICENSE-BOOST",
+          "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+        },
+        {
+          "path": "fast_float-LICENSE-MIT",
+          "sourcePath": "LICENSE-MIT",
+          "sourceUrl": "https://github.com/fastfloat/fast_float/blob/50a80a73ab2ab256ba1c3bf86923ddd8b4202bc7/LICENSE-MIT",
+          "sha256": "e562f3f974ced7e69dd1db77b820b36bcf8f30377f1aa105723fba449c53c4e6"
+        }
+      ]
+    },
+    {
+      "name": "simdutf",
+      "version": "7.7.0",
+      "scope": "V8 runtime dependency pinned by the V8 module patch",
+      "declaredLicense": "Apache-2.0 OR MIT",
+      "commit": "94fb52ea0219cb37092d8ae294b4702bacf5d8df",
+      "sourceUrl": "https://github.com/simdutf/simdutf/tree/94fb52ea0219cb37092d8ae294b4702bacf5d8df",
+      "licenseFiles": [
+        {
+          "path": "simdutf-LICENSE-APACHE",
+          "sourcePath": "LICENSE-APACHE",
+          "sourceUrl": "https://github.com/simdutf/simdutf/blob/94fb52ea0219cb37092d8ae294b4702bacf5d8df/LICENSE-APACHE",
+          "sha256": "3d34610fc6b5e1b0bfe4e2f36171c2d62c28ef05cb8d704f5a0073be41a43b3d"
+        },
+        {
+          "path": "simdutf-LICENSE-MIT",
+          "sourcePath": "LICENSE-MIT",
+          "sourceUrl": "https://github.com/simdutf/simdutf/blob/94fb52ea0219cb37092d8ae294b4702bacf5d8df/LICENSE-MIT",
+          "sha256": "fc8dbc04e03ad4efc08a647ffe7f995b811a95bc04c0e85a56d5277c6593fa5f"
+        }
+      ]
+    },
+    {
+      "name": "Dragonbox",
+      "version": "beeeef91cf6f",
+      "scope": "V8 runtime dependency pinned by exact commit",
+      "declaredLicense": "Apache-2.0 WITH LLVM-exception OR BSL-1.0",
+      "commit": "beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44",
+      "sourceUrl": "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox/+/beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44",
+      "licenseFiles": [
+        {
+          "path": "dragonbox-LICENSE-Apache2-LLVM",
+          "sourcePath": "LICENSE-Apache2-LLVM",
+          "sourceUrl": "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox/+/beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44/LICENSE-Apache2-LLVM?format=TEXT",
+          "sha256": "9e45e856bedccee9f67254082ca11851d954de2fed7448c4bed19ad9aab99a91"
+        },
+        {
+          "path": "dragonbox-LICENSE-Boost",
+          "sourcePath": "LICENSE-Boost",
+          "sourceUrl": "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox/+/beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44/LICENSE-Boost?format=TEXT",
+          "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+        }
+      ]
+    },
+    {
+      "name": "FP16",
+      "version": "3d2de1816307",
+      "scope": "V8 runtime dependency pinned by exact commit",
+      "declaredLicense": "MIT",
+      "commit": "3d2de1816307bac63c16a297e8c4dc501b4076df",
+      "sourceUrl": "https://chromium.googlesource.com/external/github.com/Maratyszcza/FP16/+/3d2de1816307bac63c16a297e8c4dc501b4076df",
+      "licenseFiles": [
+        {
+          "path": "fp16-LICENSE",
+          "sourcePath": "LICENSE",
+          "sourceUrl": "https://chromium.googlesource.com/external/github.com/Maratyszcza/FP16/+/3d2de1816307bac63c16a297e8c4dc501b4076df/LICENSE?format=TEXT",
+          "sha256": "17e4f539024be2749ee729d1e2f01d24cef12ece8c9bf18e91a4349be29c80bf"
+        }
+      ]
+    },
+    {
+      "name": "ICU",
+      "version": "a86a32e67b8d",
+      "scope": "V8 runtime dependency pinned by exact commit",
+      "declaredLicense": "Unicode-3.0 and bundled third-party terms",
+      "commit": "a86a32e67b8d1384b33f8fa48c83a6079b86f8cd",
+      "sourceUrl": "https://chromium.googlesource.com/chromium/deps/icu/+/a86a32e67b8d1384b33f8fa48c83a6079b86f8cd",
+      "licenseFiles": [
+        {
+          "path": "icu-LICENSE",
+          "sourcePath": "LICENSE",
+          "sourceUrl": "https://chromium.googlesource.com/chromium/deps/icu/+/a86a32e67b8d1384b33f8fa48c83a6079b86f8cd/LICENSE?format=TEXT",
+          "sha256": "451167c55c0fa447cc2d5632714f5e3c567fe4f1e1badefab2c1333852198aca"
+        }
+      ]
+    },
+    {
+      "name": "libc++",
+      "version": "99457fa55579",
+      "scope": "Custom C++ runtime used by source-built rusty_v8 artifacts",
+      "declaredLicense": "Apache-2.0 WITH LLVM-exception and bundled third-party terms",
+      "commit": "99457fa555797f8c5ac3c076ca288d8481d3b23a",
+      "sourceUrl": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx/+/99457fa555797f8c5ac3c076ca288d8481d3b23a",
+      "licenseFiles": [
+        {
+          "path": "libcxx-LICENSE.TXT",
+          "sourcePath": "LICENSE.TXT",
+          "sourceUrl": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx/+/99457fa555797f8c5ac3c076ca288d8481d3b23a/LICENSE.TXT?format=TEXT",
+          "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+        }
+      ]
+    },
+    {
+      "name": "libc++abi",
+      "version": "8f11bb1d4438",
+      "scope": "Custom C++ ABI runtime used by source-built rusty_v8 artifacts",
+      "declaredLicense": "Apache-2.0 WITH LLVM-exception and bundled third-party terms",
+      "commit": "8f11bb1d4438d0239d0dfc1bd9456a9f31629dda",
+      "sourceUrl": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxxabi/+/8f11bb1d4438d0239d0dfc1bd9456a9f31629dda",
+      "licenseFiles": [
+        {
+          "path": "libcxxabi-LICENSE.TXT",
+          "sourcePath": "LICENSE.TXT",
+          "sourceUrl": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxxabi/+/8f11bb1d4438d0239d0dfc1bd9456a9f31629dda/LICENSE.TXT?format=TEXT",
+          "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c"
+        }
+      ]
+    },
+    {
+      "name": "LLVM libc",
+      "version": "cb952785ccee",
+      "scope": "C runtime support used by source-built rusty_v8 artifacts",
+      "declaredLicense": "Apache-2.0 WITH LLVM-exception and bundled third-party terms",
+      "commit": "cb952785ccee13811f293f3c419958d1e3ddafbf",
+      "sourceUrl": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc/+/cb952785ccee13811f293f3c419958d1e3ddafbf",
+      "licenseFiles": [
+        {
+          "path": "llvm-libc-LICENSE.TXT",
+          "sourcePath": "LICENSE.TXT",
+          "sourceUrl": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc/+/cb952785ccee13811f293f3c419958d1e3ddafbf/LICENSE.TXT?format=TEXT",
+          "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47"
+        }
+      ]
+    }
+  ]
+}

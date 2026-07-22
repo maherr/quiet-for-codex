@@ -1289,4 +1289,13 @@ mod tests {
         assert!(body.contains("Contact your workspace administrator"));
         assert!(!body.contains("missing_codex_entitlement"));
     }
+
+    #[test]
+    fn streamlined_success_page_does_not_handoff_to_the_stock_desktop_app() {
+        let page = include_str!("assets/success.html");
+
+        assert!(page.contains("signed in and may close this tab"));
+        assert!(!page.contains("codex://"));
+        assert!(!page.contains("Open Codex"));
+    }
 }

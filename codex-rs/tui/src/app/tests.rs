@@ -1948,15 +1948,14 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(
-            std::iter::from_fn(|| app_event_rx.try_recv().ok())
-                .any(|event| matches!(
-                    event,
-                    AppEvent::CodexOp(Op::UserTurn { .. })
-                        | AppEvent::ConversationOp {
-                            op: Op::UserTurn { .. },
-                            ..
-                        }
-                ))
+            std::iter::from_fn(|| app_event_rx.try_recv().ok()).any(|event| matches!(
+                event,
+                AppEvent::CodexOp(Op::UserTurn { .. })
+                    | AppEvent::ConversationOp {
+                        op: Op::UserTurn { .. },
+                        ..
+                    }
+            ))
         );
 
         app.select_agent_thread(&mut tui, &mut app_server, child_thread_ids[1])
@@ -6103,7 +6102,7 @@ fn session_start_error_surfaces_archived_guidance_without_rollout_path() {
         thread_id,
     };
     let expected = format!(
-        "session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."
+        "session {thread_id} is archived. Run `codex-quiet unarchive {thread_id}` to unarchive it first."
     );
 
     for action in ["resume", "fork"] {
@@ -7981,7 +7980,7 @@ async fn chat_widget_op_keeps_its_origin_thread_after_focus_moves() {
         panic!("expected conversation-scoped op");
     };
     assert_eq!(target.thread_id, origin_thread_id);
-    assert!(matches!(op, Op::Compact { .. }));
+    assert!(matches!(op, Op::Compact));
 }
 
 #[tokio::test]

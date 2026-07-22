@@ -1,17 +1,18 @@
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
+#[cfg(test)]
 use std::collections::btree_map::Entry;
+#[cfg(test)]
 use std::fs;
 use std::io::Write;
 use std::io::{self};
+#[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use anyhow::Result;
-use anyhow::anyhow;
 use codex_login::AuthEnvTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -38,11 +39,10 @@ pub const CODEX_APP_DIRECTORY_CACHE_ATTACHMENT_FILENAME: &str = "codex-app-direc
 /// Filename used for the Windows sandbox log feedback attachment.
 pub const WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME: &str = "windows-sandbox.log";
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
-const SENTRY_DSN: &str =
-    "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
-const UPLOAD_TIMEOUT_SECS: u64 = 10;
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
 const MAX_FEEDBACK_TAGS: usize = 64;
+
+pub const QUIET_FEEDBACK_UPLOAD_DISABLED_MESSAGE: &str = "feedback uploads are disabled in Quiet for Codex; report issues at https://github.com/maherr/quiet-for-codex/issues";
 
 /// Structured request/auth fields that should be attached to feedback uploads.
 pub struct FeedbackRequestTags<'a> {
@@ -345,6 +345,9 @@ impl RingBuffer {
     }
 }
 
+// The buffered fields are retained for protocol compatibility with upstream
+// callers, even though Quiet rejects every network feedback upload.
+#[allow(dead_code)]
 pub struct FeedbackSnapshot {
     bytes: Vec<u8>,
     tags: BTreeMap<String, String>,
@@ -358,14 +361,14 @@ pub struct FeedbackAttachmentPath {
     pub attachment_filename_override: Option<String>,
 }
 
-/// In-memory attachment to include in a feedback upload.
+/// In-memory attachment retained for feedback protocol compatibility.
 ///
 /// Use this for generated diagnostics that should not be materialized on disk,
 /// such as the redacted doctor report. File-backed artifacts should use
 /// `FeedbackAttachmentPath` so upload-time read failures can be logged and
 /// skipped independently.
 pub struct FeedbackAttachment {
-    /// Attachment filename shown in Sentry and in the feedback consent UI.
+    /// Attachment filename shown in the feedback consent UI.
     pub filename: String,
     /// Optional MIME type for consumers that render or classify attachments.
     pub content_type: Option<String>,
@@ -373,11 +376,11 @@ pub struct FeedbackAttachment {
     pub buffer: Vec<u8>,
 }
 
-/// Inputs that control one feedback upload to Sentry.
+/// Legacy inputs retained for feedback protocol compatibility.
 ///
-/// The caller is responsible for applying any user-consent gate before setting
-/// `include_logs` or passing diagnostic attachments. This type only describes
-/// what to upload once that decision has been made.
+/// Quiet for Codex rejects every network feedback upload. These fields remain
+/// so app-server protocol consumers receive an explicit error instead of a
+/// compatibility break.
 pub struct FeedbackUploadOptions<'a> {
     pub classification: &'a str,
     pub reason: Option<&'a str>,
@@ -412,78 +415,12 @@ impl FeedbackSnapshot {
         self.feedback_diagnostics.attachment_text()
     }
 
-    /// Upload feedback to Sentry with optional attachments.
-    pub fn upload_feedback(&self, options: FeedbackUploadOptions<'_>) -> Result<()> {
-        use std::str::FromStr;
-        use std::sync::Arc;
-
-        use sentry::Client;
-        use sentry::ClientOptions;
-        use sentry::protocol::Envelope;
-        use sentry::protocol::EnvelopeItem;
-        use sentry::protocol::Event;
-        use sentry::protocol::Level;
-        use sentry::transports::DefaultTransportFactory;
-        use sentry::types::Dsn;
-
-        // Build Sentry client
-        let client = Client::from_config(ClientOptions {
-            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {e}"))?),
-            transport: Some(Arc::new(DefaultTransportFactory {})),
-            ..Default::default()
-        });
-
-        let tags = self.upload_tags(
-            options.classification,
-            options.reason,
-            options.tags,
-            options.session_source.as_ref(),
-        );
-
-        let level = match options.classification {
-            "bug" | "bad_result" | "safety_check" => Level::Error,
-            _ => Level::Info,
-        };
-
-        let mut envelope = Envelope::new();
-        let title = format!(
-            "[{}]: Codex session {}",
-            display_classification(options.classification),
-            self.thread_id
-        );
-
-        let mut event = Event {
-            level,
-            message: Some(title.clone()),
-            tags,
-            ..Default::default()
-        };
-        if let Some(r) = options.reason {
-            use sentry::protocol::Exception;
-            use sentry::protocol::Values;
-
-            event.exception = Values::from(vec![Exception {
-                ty: title,
-                value: Some(r.to_string()),
-                ..Default::default()
-            }]);
-        }
-        envelope.add_item(EnvelopeItem::Event(event));
-
-        for attachment in self.feedback_attachments(
-            options.include_logs,
-            options.extra_attachments,
-            options.extra_attachment_paths,
-            options.logs_override,
-        ) {
-            envelope.add_item(EnvelopeItem::Attachment(attachment));
-        }
-
-        client.send_envelope(envelope);
-        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
-        Ok(())
+    /// Quiet never uploads feedback or logs to the upstream OpenAI endpoint.
+    pub fn upload_feedback(&self, _options: FeedbackUploadOptions<'_>) -> Result<()> {
+        anyhow::bail!(QUIET_FEEDBACK_UPLOAD_DISABLED_MESSAGE)
     }
 
+    #[cfg(test)]
     fn upload_tags(
         &self,
         classification: &str,
@@ -533,6 +470,7 @@ impl FeedbackSnapshot {
         tags
     }
 
+    #[cfg(test)]
     fn feedback_attachments(
         &self,
         include_logs: bool,
@@ -612,16 +550,6 @@ impl FeedbackSnapshot {
         }
 
         attachments
-    }
-}
-
-fn display_classification(classification: &str) -> String {
-    match classification {
-        "bug" => "Bug".to_string(),
-        "bad_result" => "Bad result".to_string(),
-        "good_result" => "Good result".to_string(),
-        "safety_check" => "Safety check".to_string(),
-        _ => "Other".to_string(),
     }
 }
 
@@ -705,6 +633,25 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
+
+    #[test]
+    fn quiet_feedback_uploads_are_disabled() {
+        let snapshot = CodexFeedback::new().snapshot(/*session_id*/ None);
+        let error = snapshot
+            .upload_feedback(FeedbackUploadOptions {
+                classification: "bug",
+                reason: Some("must remain local"),
+                tags: None,
+                include_logs: true,
+                extra_attachments: &[],
+                extra_attachment_paths: &[],
+                session_source: None,
+                logs_override: Some(b"private log".to_vec()),
+            })
+            .expect_err("Quiet must reject every feedback upload");
+
+        assert_eq!(error.to_string(), QUIET_FEEDBACK_UPLOAD_DISABLED_MESSAGE);
+    }
 
     #[test]
     fn ring_buffer_drops_front_when_full() {

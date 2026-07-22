@@ -5,8 +5,10 @@ use codex_utils_cli::ApprovalModeCliArg;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
 
+use crate::version::CODEX_CLI_VERSION;
+
 #[derive(Parser, Clone, Debug)]
-#[command(version = concat!("codex-quiet ", env!("CARGO_PKG_VERSION")))]
+#[command(name = "codex-quiet", version = CODEX_CLI_VERSION)]
 pub struct Cli {
     /// Optional user prompt to start the session.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
@@ -16,7 +18,7 @@ pub struct Cli {
     #[arg(long = "strict-config", default_value_t = false)]
     pub strict_config: bool,
 
-    // Internal controls set by the top-level `codex resume` subcommand.
+    // Internal controls set by the top-level `codex-quiet resume` subcommand.
     // These are not exposed as user flags on the base `codex` command.
     #[clap(skip)]
     pub resume_picker: bool,
@@ -25,7 +27,7 @@ pub struct Cli {
     pub resume_last: bool,
 
     /// Internal: resume a specific recorded session by id (UUID). Set by the
-    /// top-level `codex resume <SESSION_ID>` wrapper; not exposed as a public flag.
+    /// top-level `codex-quiet resume <SESSION_ID>` wrapper; not exposed as a public flag.
     #[clap(skip)]
     pub resume_session_id: Option<String>,
 

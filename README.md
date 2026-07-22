@@ -1,109 +1,133 @@
-## codex-quiet
+# Quiet for Codex
 
-This is an unofficial fork of OpenAI Codex CLI. It is not an official OpenAI
-release and is not endorsed by OpenAI.
+Quiet for Codex is an independent, community-maintained fork of the OpenAI Codex
+CLI with a calmer terminal interface. It keeps the composer anchored, makes
+long tool runs easier to scan, and preserves normal terminal selection and
+scrolling.
 
-The current fork branch is based on upstream `rust-v0.145.0` and changes TUI
-presentation only:
+> [!IMPORTANT]
+> Quiet for Codex is unofficial. It is not an OpenAI product, is not endorsed by
+> OpenAI, and does not present OpenAI branding as its own. The names OpenAI and
+> Codex identify the upstream project and compatible service; they do not imply
+> sponsorship.
 
-- keep the composer pinned to the bottom in an app-owned alternate screen;
-- retain terminal-style scroll, selection, copy, resize, and replay behavior;
-- display successful work as outcome-first `▸ Work` groups while leaving failures
-  and action-required results expanded;
-- click a `Work` header to expand it in place and click again to collapse it;
-  dragging from the same row still selects text;
-- inspect the latest compact group with `Alt+I`, temporarily show all groups with
-  `Alt+O` (then restore individual folds), or open the complete transcript with
-  `Ctrl+T`;
-- keep completed work compact while a multi-command exploration is running, with
-  the current command visible beneath the summary;
-- coalesce background terminals and collaborator fleets into lifecycle cards;
-- reduce noisy successful agent output and condense hook/session-start rows;
-- derive the user-facing `codex-quiet` version from the Cargo package version.
+The current beta is based on upstream [`rust-v0.145.0`](https://github.com/openai/codex/releases/tag/rust-v0.145.0).
 
-Use `--no-alt-screen` or set `tui.alternate_screen = "never"` to keep the
-original inline terminal mode. Submitted-paste folding is intentionally not
-part of this fork.
+## What changes
 
-Build from source:
+- The composer stays pinned to the bottom in an app-owned alternate screen.
+- Successful commands collapse into outcome-first `▸ Work` groups. Failures
+  and results that need action stay expanded.
+- A `Work` header expands in place when clicked and collapses when clicked
+  again. Dragging from the row still selects text.
+- Background terminals and collaborator fleets render as compact lifecycle
+  cards.
+- The current command remains visible during long multi-command exploration.
+- Terminal scrolling, resize reflow, mouse selection, copying, and transcript
+  replay work inside retained history.
+- Noisy successful output and routine hook rows take less space.
 
-```shell
-cd codex-rs
-cargo build --release --bin codex
-```
+The retained-interface changes are concentrated in the Rust TUI. Except for the
+fork-safety divergences documented in [Fork changes](FORK_CHANGES.md),
+configuration, sessions, tools, and compatible service access track the
+corresponding upstream Codex CLI release. Binary beta packages omit the
+experimental patched-zsh backend; if that upstream feature is enabled in shared
+configuration, Quiet falls back to the normal user shell.
 
-The upstream OpenAI README follows.
+## Install
 
----
+Quiet for Codex installs beside the official CLI as `codex-quiet`. It does not
+replace or remove a `codex` command you already have.
 
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-<p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-</p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
-
----
-
-## Quickstart
-
-### Installing and running Codex CLI
-
-Run the following on Mac or Linux to install Codex CLI:
+### macOS or Linux
 
 ```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.1/scripts/release/install.sh | sh
 ```
 
-Run the following on Windows to install Codex CLI:
+### Windows PowerShell
+
+```powershell
+& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.1/scripts/release/install.ps1)))
+```
+
+The installers select the matching archive from the newest Quiet for Codex
+entry on the
+[GitHub releases page](https://github.com/maherr/quiet-for-codex/releases),
+verify its published SHA-256 checksum, and install a user-local command. See
+[Installing and building](docs/install.md) for manual installation, exact
+paths, checksum verification, and source builds.
+
+Release binaries are not yet Apple-notarized or Windows code-signed. See the
+[platform notes](SUPPORT.md#unsigned-beta-binaries) before installing on those
+systems.
+
+## Run
 
 ```shell
-powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
+codex-quiet
 ```
 
-Codex CLI can also be installed via the following package managers:
+Quiet for Codex uses the same `~/.codex` directory as upstream, so an existing
+login, configuration, sessions, and project trust settings remain available.
+The executable and update channel stay separate from the official CLI.
+
+Use the inline terminal mode if an alternate screen does not work well in your
+terminal:
 
 ```shell
-# Install using npm
-npm install -g @openai/codex
+codex-quiet --no-alt-screen
 ```
 
-```shell
-# Install using Homebrew
-brew install --cask codex
+You can also set this permanently:
+
+```toml
+[tui]
+alternate_screen = "never"
 ```
 
-Then simply run `codex` to get started.
+### Quiet controls
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+| Control | Action |
+| --- | --- |
+| Click a `Work` header | Expand or collapse that group |
+| `Alt+I` | Inspect the latest compact group |
+| `Alt+O` | Temporarily show all groups, then restore individual folds |
+| `Ctrl+T` | Open the complete transcript |
+| Mouse drag | Select source text for copying |
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+## Platform status
 
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+Linux x86_64 and macOS on Apple Silicon receive real-machine smoke tests for
+this beta. Other published targets have narrower validation. Native Windows is
+supported as a beta target, not only through WSL2. See [Support](SUPPORT.md) for
+the exact matrix and what each tier means.
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+No release is claimed to support every Linux distribution, CPU architecture,
+terminal emulator, or enterprise policy. If your platform is outside the
+matrix, building from source may still work.
 
-</details>
+## Authentication and safety
 
-### Using Codex with your ChatGPT plan
+Quiet for Codex connects to the same services as the upstream CLI. Sign-in,
+subscription eligibility, API billing, model availability, and data handling
+are governed by the applicable OpenAI terms and account settings. Refer to the
+[official authentication documentation](https://developers.openai.com/codex/auth)
+and [agent approvals and security documentation](https://developers.openai.com/codex/agent-approvals-security)
+for those service-level details.
 
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Business, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
+Security reports about the fork should follow [SECURITY.md](SECURITY.md).
 
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
+## Contributing
 
-## Docs
+Bug reports, terminal compatibility reports, documentation fixes, and focused
+pull requests are welcome. Read [Contributing](docs/contributing.md) before
+opening a change. Fork-specific changes and the upstream boundary are recorded
+in [Fork changes](FORK_CHANGES.md).
 
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
+## License and attribution
 
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+The repository is distributed under the [Apache License 2.0](LICENSE). It is a
+modified work based on OpenAI's Codex CLI. Original notices are preserved in
+[NOTICE](NOTICE), and bundled components are indexed in
+[THIRD_PARTY.md](THIRD_PARTY.md).

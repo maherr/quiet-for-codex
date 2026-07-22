@@ -82,7 +82,7 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
-            SlashCommand::Feedback => "send logs to maintainers",
+            SlashCommand::Feedback => "disabled in Quiet for Codex",
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
@@ -247,7 +247,7 @@ impl SlashCommand {
         match self {
             SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
             SlashCommand::Copy => !cfg!(target_os = "android"),
-            SlashCommand::App => cfg!(any(target_os = "macos", target_os = "windows")),
+            SlashCommand::App | SlashCommand::Feedback => false,
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }
@@ -295,6 +295,16 @@ mod tests {
         assert!(SlashCommand::Raw.available_in_side_conversation());
         assert!(SlashCommand::Raw.supports_inline_args());
         assert!(SlashCommand::App.available_during_task());
+    }
+
+    #[test]
+    fn quiet_build_hides_desktop_app_handoff() {
+        assert!(!SlashCommand::App.is_visible());
+        assert!(
+            super::built_in_slash_commands()
+                .iter()
+                .all(|(_, command)| *command != SlashCommand::App)
+        );
     }
 
     #[test]

@@ -74,7 +74,9 @@ impl UpdateAction {
 
 #[cfg(not(debug_assertions))]
 pub fn get_update_action() -> Option<UpdateAction> {
-    UpdateAction::from_install_context(InstallContext::current())
+    // Quiet is distributed beside the official Codex CLI. Reusing an official
+    // npm, Homebrew, or standalone updater would replace Quiet with stock Codex.
+    None
 }
 
 #[cfg(test)]

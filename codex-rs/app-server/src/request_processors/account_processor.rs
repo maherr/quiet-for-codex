@@ -16,8 +16,6 @@ const ACCOUNT_WORKSPACE_MESSAGES_FETCH_TIMEOUT: Duration =
 // Login overrides are intentionally available only in debug builds.
 #[cfg(debug_assertions)]
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
-#[cfg(debug_assertions)]
-const LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_DEV_OPEN_APP_URL";
 
 enum ActiveLogin {
     Browser {
@@ -273,26 +271,15 @@ impl AccountRequestProcessor {
                     .await;
             }
             LoginAccountParams::Chatgpt {
-                app_brand,
                 codex_streamlined_login,
-                use_hosted_login_success_page,
+                ..
             } => {
-                let login_success_page = if use_hosted_login_success_page {
-                    let app_brand = match app_brand.unwrap_or_default() {
-                        LoginAppBrand::Codex => LoginSuccessPageBrand::Codex,
-                        LoginAppBrand::Chatgpt => LoginSuccessPageBrand::Chatgpt,
-                    };
-                    LoginSuccessPage::Hosted {
-                        url: CODEX_OPEN_APP_URL.parse().map_err(|err| {
-                            internal_error(format!("invalid Codex open app URL: {err}"))
-                        })?,
-                        app_brand,
-                    }
-                } else {
-                    LoginSuccessPage::default()
-                };
-                self.login_chatgpt_v2(request_id, codex_streamlined_login, login_success_page)
-                    .await;
+                self.login_chatgpt_v2(
+                    request_id,
+                    codex_streamlined_login,
+                    LoginSuccessPage::default(),
+                )
+                .await;
             }
             LoginAccountParams::ChatgptDeviceCode => {
                 self.login_chatgpt_device_code_v2(request_id).await;
@@ -474,14 +461,6 @@ impl AccountRequestProcessor {
                 && !issuer.trim().is_empty()
             {
                 opts.issuer = issuer;
-            }
-            if let LoginSuccessPage::Hosted { url, .. } = &mut opts.login_success_page
-                && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)
-                && !open_app_url.trim().is_empty()
-            {
-                *url = open_app_url
-                    .parse()
-                    .map_err(|err| internal_error(format!("invalid Codex open app URL: {err}")))?;
             }
             opts
         };

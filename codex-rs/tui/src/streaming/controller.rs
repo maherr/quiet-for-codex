@@ -202,11 +202,7 @@ impl StreamCore {
     /// its source-backed cell performs the canonical render.
     fn finalize_remaining(
         &mut self,
-    ) -> (
-        Vec<HyperlinkLine>,
-        String,
-        Option<StreamSelectionFragment>,
-    ) {
+    ) -> (Vec<HyperlinkLine>, String, Option<StreamSelectionFragment>) {
         let source = self.state.collector.finalize_and_take_source();
         if self.surface.is_retained() {
             return (Vec::new(), source, None);
@@ -290,11 +286,7 @@ impl StreamCore {
             .selection_projection_cache
             .get_or_init(|| self.build_selection_projection())
             .as_ref()?;
-        Self::selection_fragment_from_projection(
-            selection,
-            rendered_range,
-            self.render.lines.len(),
-        )
+        Self::selection_fragment_from_projection(selection, rendered_range, self.render.lines.len())
     }
 
     fn selection_fragment_from_projection(

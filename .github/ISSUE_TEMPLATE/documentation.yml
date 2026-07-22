@@ -1,0 +1,39 @@
+name: Documentation issue
+description: Report missing, incorrect, or confusing Quiet for Codex documentation
+labels:
+  - documentation
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Type
+      options:
+        - Missing documentation
+        - Incorrect documentation
+        - Confusing documentation
+        - Broken command or link
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Location
+      description: Link the page or name the file and section.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Explain what a reader would misunderstand or be unable to do.
+    validations:
+      required: true
+
+  - type: textarea
+    id: correction
+    attributes:
+      label: Suggested correction
+      description: Optional. A focused pull request is also welcome.

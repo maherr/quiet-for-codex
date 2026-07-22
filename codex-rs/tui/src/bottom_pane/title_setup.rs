@@ -91,7 +91,7 @@ pub(crate) enum TerminalTitleItem {
 impl TerminalTitleItem {
     pub(crate) fn description(self) -> &'static str {
         match self {
-            TerminalTitleItem::AppName => "Codex app name",
+            TerminalTitleItem::AppName => "Quiet for Codex app name",
             TerminalTitleItem::Project => "Project name (falls back to current directory name)",
             TerminalTitleItem::CurrentDir => "Current working directory",
             TerminalTitleItem::Spinner => {

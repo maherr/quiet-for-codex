@@ -141,6 +141,7 @@ async fn status_surface_preview_lines_hardcoded_only_snapshot() {
             StatusLineItem::ApprovalMode,
         ],
         &[
+            TerminalTitleItem::AppName,
             TerminalTitleItem::Thread,
             TerminalTitleItem::GitBranch,
             TerminalTitleItem::TaskProgress,
@@ -332,6 +333,7 @@ async fn terminal_title_setup_popup_live_only_snapshot() {
 async fn terminal_title_setup_popup_hardcoded_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.tui_terminal_title = Some(vec![
+        "app-name".to_string(),
         "thread-title".to_string(),
         "git-branch".to_string(),
         "task-progress".to_string(),

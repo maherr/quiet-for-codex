@@ -3155,7 +3155,7 @@ fn session_header_selection_excludes_border_and_hidden_directory_text() {
     let text = selectable_text(&cell, /*width*/ 32, HistoryRenderMode::Rich)
         .expect("session header should be selectable");
 
-    assert!(text.starts_with("OpenAI Codex (vtest)\n\nmodel: gpt-5 high fast /model to change"));
+    assert!(text.starts_with("Quiet for Codex (vtest)\n\nmodel: gpt-5 high fast /model to change"));
     assert!(text.contains("\ndirectory: "));
     assert!(text.contains('…'));
     assert!(!text.contains('╭'));

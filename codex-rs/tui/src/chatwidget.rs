@@ -699,7 +699,7 @@ pub(crate) struct ChatWidget {
     // Runtime metrics accumulated across delta snapshots for the active turn.
     turn_runtime_metrics: RuntimeMetricsSummary,
     last_rendered_width: std::cell::Cell<Option<usize>>,
-    // Feedback sink for /feedback
+    // Legacy feedback plumbing retained for app-server protocol compatibility.
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,

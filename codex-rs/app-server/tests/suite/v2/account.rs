@@ -66,7 +66,6 @@ use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const LOGIN_ISSUER_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
-const LOGIN_OPEN_APP_URL_ENV_VAR: &str = "CODEX_APP_SERVER_DEV_OPEN_APP_URL";
 const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
 const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
 const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
@@ -2193,7 +2192,7 @@ async fn login_account_chatgpt_uses_debug_oauth_overrides() -> Result<()> {
 #[tokio::test]
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
-async fn login_account_chatgpt_redirects_to_hosted_success_page() -> Result<()> {
+async fn login_account_chatgpt_ignores_stock_desktop_success_page_request() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
     let mock_server = MockServer::start().await;
@@ -2209,13 +2208,7 @@ async fn login_account_chatgpt_redirects_to_hosted_success_page() -> Result<()> 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .with_env_overrides(&[
-            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
-            (
-                LOGIN_OPEN_APP_URL_ENV_VAR,
-                Some("http://localhost:3000/codex/open-app"),
-            ),
-        ])
+        .with_env_overrides(&[(LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str()))])
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -2255,10 +2248,10 @@ async fn login_account_chatgpt_redirects_to_hosted_success_page() -> Result<()> 
         .await?;
 
     assert_eq!(response.status(), 302);
-    assert_eq!(
-        response.headers()["location"].to_str()?,
-        "http://localhost:3000/codex/open-app?source=login&app_brand=chatgpt"
-    );
+    let location = Url::parse(response.headers()["location"].to_str()?)?;
+    assert_eq!(location.host_str(), Some("localhost"));
+    assert_eq!(location.path(), "/success");
+    assert!(!location.as_str().contains("/codex/open-app"));
     Ok(())
 }
 

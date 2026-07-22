@@ -36,7 +36,6 @@ pub(super) fn survives_conversation_retirement(event: &AppEvent) -> bool {
         | AppEvent::SetThreadGoalStatus { .. }
         | AppEvent::ClearThreadGoal { .. }
         | AppEvent::OpenUrlInBrowser { .. }
-        | AppEvent::OpenDesktopThread { .. }
         | AppEvent::UpdateFeatureFlags { .. }
         | AppEvent::UpdateMemorySettings { .. }
         | AppEvent::ResetMemories

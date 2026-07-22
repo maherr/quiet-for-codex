@@ -3,9 +3,6 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
-use codex_app_server_daemon::BootstrapOptions as AppServerBootstrapOptions;
-use codex_app_server_daemon::LifecycleCommand as AppServerLifecycleCommand;
-use codex_app_server_daemon::RemoteControlMode as AppServerRemoteControlMode;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
@@ -31,7 +28,6 @@ use codex_state::memories_db_path;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
-use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::ProfileV2Name;
@@ -44,10 +40,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use supports_color::Stream;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-mod app_cmd;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-mod desktop_app;
 mod doctor;
 mod exec_server_telemetry;
 mod marketplace_cmd;
@@ -88,20 +80,28 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
 
-/// Codex CLI
+/// Public Quiet release identity. Protocol-facing crates retain the upstream
+/// Cargo workspace version.
+pub(crate) const CODEX_QUIET_VERSION: &str = match option_env!("CODEX_QUIET_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
+/// Quiet for Codex CLI
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
 #[derive(Debug, Parser)]
 #[clap(
     author,
-    version = concat!("codex-quiet ", env!("CARGO_PKG_VERSION")),
-    // If a sub‑command is given, ignore requirements of the default args.
+    name = "codex-quiet",
+    version = CODEX_QUIET_VERSION,
+    // If a sub-command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
-    // The executable is sometimes invoked via a platform‑specific name like
+    // The executable is sometimes invoked via a platform-specific name like
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `codex` command name that users run.
-    bin_name = "codex",
-    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
+    // the side-by-side `codex-quiet` command name that users run.
+    bin_name = "codex-quiet",
+    override_usage = "codex-quiet [OPTIONS] [PROMPT]\n       codex-quiet [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -148,16 +148,13 @@ enum Subcommand {
     AppServer(AppServerCommand),
 
     /// [experimental] Manage the app-server daemon with remote control enabled.
+    #[clap(hide = true)]
     RemoteControl(RemoteControlCommand),
-
-    /// Launch the Desktop app (opens the app installer if missing).
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    App(app_cmd::AppCommand),
 
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
-    /// Update Codex to the latest version.
+    /// Show where to get the latest Quiet for Codex release.
     Update,
 
     /// Diagnose local Codex installation, config, auth, and runtime health.
@@ -463,13 +460,13 @@ struct LoginCommand {
 
     #[arg(
         long = "with-api-key",
-        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
+        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex-quiet login --with-api-key`)"
     )]
     with_api_key: bool,
 
     #[arg(
         long = "with-access-token",
-        help = "Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`)"
+        help = "Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN | codex-quiet login --with-access-token`)"
     )]
     with_access_token: bool,
 
@@ -591,6 +588,7 @@ struct ExecServerCommand {
 #[allow(clippy::enum_variant_names)]
 enum AppServerSubcommand {
     /// Manage the local app-server daemon.
+    #[clap(hide = true)]
     Daemon(AppServerDaemonCommand),
 
     /// Proxy stdio bytes to the running app-server control socket.
@@ -728,7 +726,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     lines
 }
 
-/// Handle the app exit and print the results. Optionally run the update action.
+/// Handle the app exit and print the results.
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     let is_fatal = match &exit_info.exit_reason {
         ExitReason::Fatal(message) => {
@@ -738,7 +736,6 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
         ExitReason::UserRequested => false,
     };
 
-    let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
     for line in format_exit_messages(exit_info, color_enabled) {
         println!("{line}");
@@ -747,72 +744,13 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
         std::io::stdout().flush()?;
         std::process::exit(1);
     }
-    if let Some(action) = update_action {
-        run_update_action(action)?;
-    }
-    Ok(())
-}
-
-/// Run the update action and print the result.
-fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
-    println!();
-    let cmd_str = action.command_str();
-    println!("Updating Codex via `{cmd_str}`...");
-
-    let status = {
-        #[cfg(windows)]
-        {
-            if action == UpdateAction::StandaloneWindows {
-                let (cmd, args) = action.command_args();
-                // Run the standalone PowerShell installer with PowerShell
-                // itself. Routing this through `cmd.exe /C` would parse
-                // PowerShell metacharacters like `|` before PowerShell sees
-                // the installer command.
-                std::process::Command::new(cmd).args(args).status()?
-            } else {
-                // On Windows, run via cmd.exe so .CMD/.BAT are correctly resolved (PATHEXT semantics).
-                std::process::Command::new("cmd")
-                    .args(["/C", &cmd_str])
-                    .status()?
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            let (cmd, args) = action.command_args();
-            let command_path = crate::wsl_paths::normalize_for_wsl(cmd);
-            let normalized_args: Vec<String> = args
-                .iter()
-                .map(crate::wsl_paths::normalize_for_wsl)
-                .collect();
-            std::process::Command::new(&command_path)
-                .args(&normalized_args)
-                .status()?
-        }
-    };
-    if !status.success() {
-        anyhow::bail!("`{cmd_str}` failed with status {status}");
-    }
-    println!("\n🎉 Update ran successfully! Please restart Codex.");
     Ok(())
 }
 
 fn run_update_command() -> anyhow::Result<()> {
-    #[cfg(debug_assertions)]
-    {
-        anyhow::bail!(
-            "`codex update` is not available in debug builds. Install a release build of Codex to use this command."
-        );
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        let Some(action) = codex_tui::get_update_action() else {
-            anyhow::bail!(
-                "Could not detect the Codex installation method. Please update manually: https://developers.openai.com/codex/cli/"
-            );
-        };
-        run_update_action(action)
-    }
+    anyhow::bail!(
+        "Quiet for Codex never invokes stock Codex update channels. Download a Quiet release from https://github.com/maherr/quiet-for-codex/releases"
+    )
 }
 
 fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
@@ -1150,41 +1088,9 @@ async fn cli_main(
                     )
                     .await?;
                 }
-                Some(AppServerSubcommand::Daemon(daemon_cli)) => match daemon_cli.subcommand {
-                    AppServerDaemonSubcommand::Start => {
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Start).await?;
-                    }
-                    AppServerDaemonSubcommand::Bootstrap(bootstrap_cli) => {
-                        let output =
-                            codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
-                                remote_control_enabled: bootstrap_cli.remote_control,
-                            })
-                            .await?;
-                        println!("{}", serde_json::to_string(&output)?);
-                    }
-                    AppServerDaemonSubcommand::Restart => {
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
-                    }
-                    AppServerDaemonSubcommand::EnableRemoteControl => {
-                        print_app_server_remote_control_output(AppServerRemoteControlMode::Enabled)
-                            .await?;
-                    }
-                    AppServerDaemonSubcommand::DisableRemoteControl => {
-                        print_app_server_remote_control_output(
-                            AppServerRemoteControlMode::Disabled,
-                        )
-                        .await?;
-                    }
-                    AppServerDaemonSubcommand::Stop => {
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Stop).await?;
-                    }
-                    AppServerDaemonSubcommand::Version => {
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Version).await?;
-                    }
-                    AppServerDaemonSubcommand::PidUpdateLoop => {
-                        codex_app_server_daemon::run_pid_update_loop().await?;
-                    }
-                },
+                Some(AppServerSubcommand::Daemon(_)) => {
+                    anyhow::bail!(quiet_daemon_disabled_message());
+                }
                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {
                     let socket_path = match proxy_cli.socket_path {
                         Some(socket_path) => socket_path,
@@ -1217,28 +1123,8 @@ async fn cli_main(
                 }
             }
         }
-        Some(Subcommand::RemoteControl(remote_control_cli)) => {
-            let subcommand_name = remote_control_cli.subcommand_name();
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                subcommand_name,
-            )?;
-            remote_control_cmd::run(
-                remote_control_cli,
-                arg0_paths.clone(),
-                root_config_overrides,
-            )
-            .await?;
-        }
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        Some(Subcommand::App(app_cli)) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "app",
-            )?;
-            app_cmd::run_app(app_cli).await?;
+        Some(Subcommand::RemoteControl(_)) => {
+            anyhow::bail!(quiet_daemon_disabled_message());
         }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
@@ -1365,7 +1251,7 @@ async fn cli_main(
                         .await;
                     } else if login_cli.api_key.is_some() {
                         eprintln!(
-                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex-quiet login --with-api-key`."
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
@@ -1484,7 +1370,7 @@ async fn cli_main(
             #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
             {
                 let _ = loader_overrides;
-                anyhow::bail!("`codex sandbox` is not supported on this operating system");
+                anyhow::bail!("`codex-quiet sandbox` is not supported on this operating system");
             }
         }
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
@@ -1669,7 +1555,7 @@ fn profile_v2_for_subcommand<'a>(
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex delete`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and `codex-quiet mcp`: `codex-quiet`, `codex-quiet exec`, `codex-quiet review`, `codex-quiet resume`, `codex-quiet archive`, `codex-quiet delete`, `codex-quiet unarchive`, `codex-quiet fork`, `codex-quiet mcp`, `codex-quiet sandbox`, and `codex-quiet debug prompt-input`."
         ),
     }
 }
@@ -1751,7 +1637,7 @@ async fn load_exec_server_remote_auth_provider(
 
     let auth = load_exec_server_remote_auth(
         config,
-        "remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY",
+        "remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex-quiet login` or set CODEX_API_KEY",
     )
     .await?;
 
@@ -2063,12 +1949,12 @@ fn reject_remote_mode_for_subcommand(
 ) -> anyhow::Result<()> {
     if let Some(remote) = remote {
         anyhow::bail!(
-            "`--remote {remote}` is only supported for interactive TUI commands, not `codex {subcommand}`"
+            "`--remote {remote}` is only supported for interactive TUI commands, not `codex-quiet {subcommand}`"
         );
     }
     if remote_auth_token_env.is_some() {
         anyhow::bail!(
-            "`--remote-auth-token-env` is only supported for interactive TUI commands, not `codex {subcommand}`"
+            "`--remote-auth-token-env` is only supported for interactive TUI commands, not `codex-quiet {subcommand}`"
         );
     }
     Ok(())
@@ -2124,8 +2010,6 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::RemoteControl(remote_control)) => Some(remote_control.subcommand_name()),
         Some(Subcommand::Mcp(_)) => Some("mcp"),
         Some(Subcommand::Plugin(_)) => Some("plugin"),
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        Some(Subcommand::App(_)) => Some("app"),
         Some(Subcommand::Login(_)) => Some("login"),
         Some(Subcommand::Logout(_)) => Some("logout"),
         Some(Subcommand::Completion(_)) => Some("completion"),
@@ -2159,7 +2043,7 @@ fn reject_strict_config_for_unsupported_subcommand(
     subcommand: &str,
 ) -> anyhow::Result<()> {
     if strict_config {
-        anyhow::bail!("`--strict-config` is not supported for `codex {subcommand}`");
+        anyhow::bail!("`--strict-config` is not supported for `codex-quiet {subcommand}`");
     }
     Ok(())
 }
@@ -2199,18 +2083,8 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
     }
 }
 
-async fn print_app_server_daemon_output(command: AppServerLifecycleCommand) -> anyhow::Result<()> {
-    let output = codex_app_server_daemon::run(command).await?;
-    println!("{}", serde_json::to_string(&output)?);
-    Ok(())
-}
-
-async fn print_app_server_remote_control_output(
-    mode: AppServerRemoteControlMode,
-) -> anyhow::Result<()> {
-    let output = codex_app_server_daemon::set_remote_control(mode).await?;
-    println!("{}", serde_json::to_string(&output)?);
-    Ok(())
+fn quiet_daemon_disabled_message() -> &'static str {
+    "daemon-managed app-server routes are disabled in Quiet for Codex because the upstream implementation installs and updates stock Codex"
 }
 
 fn read_remote_auth_token_from_env_var_with<F>(
@@ -2361,7 +2235,7 @@ fn confirm(prompt: &str) -> std::io::Result<bool> {
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
-/// Build the final `TuiCli` for a `codex resume` invocation.
+/// Build the final `TuiCli` for a `codex-quiet resume` invocation.
 fn finalize_resume_interactive(
     mut interactive: TuiCli,
     root_config_overrides: CliConfigOverrides,
@@ -2489,7 +2363,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
 
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
-    let name = "codex";
+    let name = "codex-quiet";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 
@@ -2833,6 +2707,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn quiet_build_does_not_register_desktop_app_subcommand() {
+        let command = MultitoolCli::command();
+        assert!(
+            command
+                .get_subcommands()
+                .all(|subcommand| subcommand.get_name() != "app")
+        );
+    }
+
     fn help_from_args(args: &[&str]) -> String {
         let err = MultitoolCli::try_parse_from(args).expect_err("help should short-circuit");
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
@@ -2843,15 +2727,15 @@ mod tests {
     fn plugin_marketplace_help_uses_plugin_namespace() {
         let help = help_from_args(&["codex", "plugin", "marketplace", "--help"]);
         assert!(
-            help.contains("Usage: codex plugin marketplace [OPTIONS] <COMMAND>"),
+            help.contains("Usage: codex-quiet plugin marketplace [OPTIONS] <COMMAND>"),
             "{help}"
         );
 
         for (subcommand, usage) in [
-            ("add", "Usage: codex plugin marketplace add"),
-            ("list", "Usage: codex plugin marketplace list"),
-            ("upgrade", "Usage: codex plugin marketplace upgrade"),
-            ("remove", "Usage: codex plugin marketplace remove"),
+            ("add", "Usage: codex-quiet plugin marketplace add"),
+            ("list", "Usage: codex-quiet plugin marketplace list"),
+            ("upgrade", "Usage: codex-quiet plugin marketplace upgrade"),
+            ("remove", "Usage: codex-quiet plugin marketplace remove"),
         ] {
             let help = help_from_args(&["codex", "plugin", "marketplace", subcommand, "--help"]);
             assert!(help.contains(usage), "{help}");
@@ -3167,7 +3051,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
+                "To continue this session, run codex-quiet resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]
         );
@@ -3184,7 +3068,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
+                "To continue this session, run codex-quiet resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]
         );
@@ -3212,7 +3096,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume, then select my-thread (123e4567-e89b-12d3-a456-426614174000)".to_string(),
+                "To continue this session, run codex-quiet resume, then select my-thread (123e4567-e89b-12d3-a456-426614174000)".to_string(),
             ]
         );
     }
@@ -3540,7 +3424,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "`--strict-config` is not supported for `codex mcp`"
+            "`--strict-config` is not supported for `codex-quiet mcp`"
         );
 
         let cli = MultitoolCli::try_parse_from(["codex", "--strict-config", "remote-control"])
@@ -3553,7 +3437,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "`--strict-config` is not supported for `codex remote-control`"
+            "`--strict-config` is not supported for `codex-quiet remote-control`"
         );
     }
 
@@ -3569,7 +3453,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "`--strict-config` is not supported for `codex app-server proxy`"
+            "`--strict-config` is not supported for `codex-quiet app-server proxy`"
         );
     }
 
