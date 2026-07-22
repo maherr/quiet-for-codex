@@ -552,7 +552,7 @@ where
         self.current = 1 - self.current;
     }
 
-    /// Queries the real size of the backend.
+    /// Returns the effective terminal size.
     pub fn size(&self) -> io::Result<Size> {
         #[cfg(test)]
         if let Some(size) = self.screen_size_override {
@@ -983,6 +983,23 @@ mod tests {
         alpha
         beta
         ");
+    }
+
+    #[test]
+    fn test_terminal_size_uses_fixed_size_without_querying_backend() {
+        let fixed_size = Size {
+            width: 80,
+            height: 24,
+        };
+        let terminal = Terminal::with_screen_size_and_cursor_position_for_test(
+            CaptureBackend::new(/*width*/ 120, /*height*/ 50),
+            fixed_size,
+            Position { x: 0, y: 0 },
+        );
+
+        assert_eq!(terminal.size().expect("fixed test size"), fixed_size);
+        assert_eq!(terminal.backend().size_call_count.get(), 0);
+
     }
 
     #[test]
