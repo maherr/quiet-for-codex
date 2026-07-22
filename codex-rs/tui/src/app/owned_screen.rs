@@ -3,6 +3,8 @@
 //! The owned mode keeps committed conversation cells in a retained viewport and reserves the
 //! bottom of every frame for the composer. Inline mode continues to use terminal scrollback.
 
+use std::collections::HashSet;
+
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -33,6 +35,8 @@ pub(super) struct OwnedScreen {
     viewport: ConversationViewport,
     source_cells: Vec<Arc<dyn HistoryCell>>,
     compact_tool_groups: bool,
+    expanded_tool_groups: HashSet<compact_tool_groups::CompactToolGroupId>,
+    pending_tool_group_click: Option<compact_tool_groups::CompactToolGroupId>,
     replay_in_progress: bool,
     last_pane_area: Rect,
     last_conversation_area: Rect,
@@ -55,6 +59,8 @@ impl OwnedScreen {
             ),
             source_cells: Vec::new(),
             compact_tool_groups: chat_widget.history_render_mode() == HistoryRenderMode::Rich,
+            expanded_tool_groups: HashSet::new(),
+            pending_tool_group_click: None,
             replay_in_progress: false,
             last_pane_area: Rect::default(),
             last_conversation_area: Rect::default(),
@@ -67,7 +73,17 @@ impl OwnedScreen {
         cells: Vec<Arc<dyn HistoryCell>>,
         compact_tool_groups: bool,
     ) {
-        let projected = compact_tool_groups::project_owned_cells(&cells, compact_tool_groups);
+        let valid_groups = compact_tool_groups::compact_tool_group_ids(&cells);
+        self.expanded_tool_groups
+            .retain(|group| valid_groups.contains(group));
+        if !compact_tool_groups {
+            self.pending_tool_group_click = None;
+        }
+        let projected = compact_tool_groups::project_owned_cells_with_expanded(
+            &cells,
+            compact_tool_groups,
+            &self.expanded_tool_groups,
+        );
         self.source_cells = cells;
         self.compact_tool_groups = compact_tool_groups;
         self.viewport.replace_cells(projected);
@@ -90,25 +106,28 @@ impl OwnedScreen {
         let previous_run_start =
             compact_tool_groups::trailing_compact_tool_run_start(&self.source_cells);
         let previous_run = &self.source_cells[previous_run_start..];
-        let previous_projection_count =
-            compact_tool_groups::project_owned_cells(previous_run, /*compact*/ true).len();
+        let previous_projection_count = compact_tool_groups::project_owned_cells_with_expanded(
+            previous_run,
+            /*compact*/ true,
+            &self.expanded_tool_groups,
+        )
+        .len();
 
         self.source_cells.push(cell);
         let next_run_start =
             compact_tool_groups::trailing_compact_tool_run_start(&self.source_cells);
         if next_run_start == self.source_cells.len() {
-            let cell = self
-                .source_cells
-                .last()
-                .expect("a pushed source cell must be present")
-                .clone();
+            let Some(cell) = self.source_cells.last().cloned() else {
+                return;
+            };
             self.viewport.push_cell(cell);
             return;
         }
 
-        let projected_tail = compact_tool_groups::project_owned_cells(
+        let projected_tail = compact_tool_groups::project_owned_cells_with_expanded(
             &self.source_cells[next_run_start..],
             /*compact*/ true,
+            &self.expanded_tool_groups,
         );
         self.viewport
             .replace_tail(previous_projection_count, projected_tail);
@@ -142,9 +161,19 @@ impl OwnedScreen {
         self.viewport
             .set_render_mode(chat_widget.history_render_mode());
         let active_key = chat_widget.active_cell_render_key();
+        let compact_live_tail = self.compact_tool_groups;
         self.viewport
             .sync_live_tail(conversation_area.width, active_key, |width| {
-                chat_widget.active_cell_display_snapshots(width)
+                let mut snapshots = chat_widget.active_cell_display_snapshots(width)?;
+                if compact_live_tail
+                    && let Some(cell) = chat_widget.primary_active_cell()
+                    && let Some(compact) =
+                        compact_tool_groups::compact_active_exec_snapshot(cell, width)
+                    && let Some(primary) = snapshots.first_mut()
+                {
+                    *primary = compact;
+                }
+                Some(snapshots)
             });
         let now = Instant::now();
         let selection_autoscroll_active =
@@ -189,6 +218,7 @@ impl OwnedScreen {
 
     fn handle_mouse_scroll(&mut self, event: MouseScrollEvent) -> bool {
         if self.viewport.selection_is_active() {
+            self.pending_tool_group_click = None;
             self.viewport.handle_selection_mouse_scroll(
                 self.last_conversation_area,
                 event.direction,
@@ -218,20 +248,42 @@ impl OwnedScreen {
         } else {
             position
         };
-        self.viewport.begin_selection(conversation_area, position)
+        self.pending_tool_group_click = self.compact_tool_group_header_at(position);
+        let started = self.viewport.begin_selection(conversation_area, position);
+        if !started {
+            self.pending_tool_group_click = None;
+        }
+        started
     }
 
     fn update_selection(&mut self, position: Position) -> bool {
+        self.pending_tool_group_click = None;
         self.viewport
             .update_selection(self.last_conversation_area, position)
     }
 
     fn finish_selection(&mut self, position: Position) -> Option<String> {
-        self.viewport
-            .finish_selection(self.last_conversation_area, position)
+        let released_group = self.compact_tool_group_header_at(position);
+        let pressed_group = self.pending_tool_group_click.take();
+        // Capture the resolved offset before finish_selection applies any deferred tool updates.
+        // A deferred append may switch the pager back to its bottom sentinel, while a fold click
+        // must keep the clicked header anchored at its current screen row.
+        let scroll_offset = self.viewport.scroll_offset();
+        let selected = self
+            .viewport
+            .finish_selection(self.last_conversation_area, position);
+        if selected.is_none()
+            && pressed_group.is_some()
+            && pressed_group == released_group
+            && let Some(group) = pressed_group
+        {
+            self.toggle_tool_group(group, scroll_offset);
+        }
+        selected
     }
 
     fn cancel_selection(&mut self) {
+        self.pending_tool_group_click = None;
         self.viewport.cancel_selection();
     }
 
@@ -242,6 +294,44 @@ impl OwnedScreen {
     fn clear_last_render_areas(&mut self) {
         self.last_pane_area = Rect::default();
         self.last_conversation_area = Rect::default();
+    }
+
+    fn compact_tool_group_header_at(
+        &mut self,
+        position: Position,
+    ) -> Option<compact_tool_groups::CompactToolGroupId> {
+        if !self.compact_tool_groups {
+            return None;
+        }
+        let hit = self
+            .viewport
+            .committed_cell_hit(self.last_conversation_area, position)?;
+        let cell = self.viewport.committed_cell(hit.index)?;
+        compact_tool_groups::compact_tool_group_header_id(
+            cell.as_ref(),
+            self.last_conversation_area.width,
+            hit.row_within_cell,
+        )
+    }
+
+    fn toggle_tool_group(
+        &mut self,
+        group: compact_tool_groups::CompactToolGroupId,
+        scroll_offset: usize,
+    ) -> bool {
+        if !self.compact_tool_groups
+            || !compact_tool_groups::compact_tool_group_ids(&self.source_cells).contains(&group)
+        {
+            return false;
+        }
+        if !self.expanded_tool_groups.insert(group) {
+            self.expanded_tool_groups.remove(&group);
+        }
+        let cells = self.source_cells.clone();
+        self.replace_source_cells(cells, /*compact_tool_groups*/ true);
+        self.viewport
+            .preserve_scroll_offset_through_next_render(scroll_offset);
+        true
     }
 }
 

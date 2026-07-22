@@ -5,6 +5,7 @@ use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::time::Duration;
@@ -15,6 +16,7 @@ use super::*;
 use crate::app_event::PaneSlot;
 use crate::chatwidget::tests::constructor::make_chatwidget_for_pane;
 use crate::chatwidget::tests::constructor::make_chatwidget_for_pane_with_sender;
+use crate::chatwidget::tests::helpers::set_active_cell;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::new_active_exec_command;
@@ -176,6 +178,72 @@ fn completed_read_exec(call_id: &str, name: &str) -> Box<dyn HistoryCell> {
         Duration::from_millis(10),
     ));
     Box::new(cell)
+}
+
+fn active_exploring_exec_cell() -> Box<dyn HistoryCell> {
+    let first_command = vec!["cat".to_string(), "app.rs".to_string()];
+    let mut cell = new_active_exec_command(
+        "active-read-1".to_string(),
+        first_command.clone(),
+        vec![ParsedCommand::Read {
+            cmd: first_command.join(" "),
+            name: "app.rs".to_string(),
+            path: "app.rs".into(),
+        }],
+        ExecCommandSource::Agent,
+        /*interaction_input*/ None,
+        /*animations_enabled*/ false,
+    );
+    assert!(cell.complete_call(
+        "active-read-1",
+        CommandOutput::new(/*exit_code*/ 0, String::new()),
+        Duration::from_millis(10),
+    ));
+    let second_command = vec!["cat".to_string(), "lib.rs".to_string()];
+    assert!(cell.add_call(
+        "active-read-2".to_string(),
+        second_command.clone(),
+        vec![ParsedCommand::Read {
+            cmd: second_command.join(" "),
+            name: "lib.rs".to_string(),
+            path: "lib.rs".into(),
+        }],
+        ExecCommandSource::Agent,
+        /*interaction_input*/ None,
+    ));
+    Box::new(cell)
+}
+
+fn buffer_text(buffer: &Buffer, area: Rect) -> String {
+    let mut rows = Vec::new();
+    for y in area.y..area.bottom() {
+        let mut row = String::new();
+        for x in area.x..area.right() {
+            row.push_str(buffer[(x, y)].symbol());
+        }
+        rows.push(row.trim_end().to_string());
+    }
+    rows.join("\n")
+}
+
+fn projected_cell_text(app: &App, index: usize, width: u16) -> String {
+    app.chat_widget
+        .owned_screen
+        .as_ref()
+        .expect("owned screen")
+        .viewport
+        .committed_cell(index)
+        .expect("projected cell")
+        .display_lines(width)
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[tokio::test]
@@ -1337,6 +1405,435 @@ async fn owned_tool_groups_toggle_between_compact_expanded_and_raw_projections()
         1,
         "rich mode should restore grouping"
     );
+}
+
+#[tokio::test]
+async fn clicking_work_header_expands_and_collapses_without_losing_sources() {
+    let mut app = app_with_owned_parent().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    app.insert_history_cell(&mut tui, completed_read_exec("read-1", "app.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("read-2", "lib.rs"));
+    let _collapsed = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+
+    assert!(projected_cell_text(&app, 0, 80).starts_with("▸ Work"));
+    assert!(
+        app.handle_owned_screen_mouse_primary(&mut tui, primary_press(/*column*/ 0, /*row*/ 0),)
+    );
+    let _pressed_collapsed_header = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(
+            MousePrimaryEventKind::Release,
+            /*column*/ 0,
+            /*row*/ 0,
+        ),
+    ));
+
+    let screen = app.chat_widget.owned_screen.as_ref().expect("owned screen");
+    assert_eq!(screen.viewport.committed_cell_count(), 3);
+    assert!(projected_cell_text(&app, 0, 80).starts_with("▾ Work"));
+    assert!(projected_cell_text(&app, 1, 80).contains("app.rs"));
+    assert!(projected_cell_text(&app, 2, 80).contains("lib.rs"));
+
+    let expanded = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    assert_snapshot!("owned_screen_click_expanded_work_group", expanded.backend());
+    assert!(
+        app.handle_owned_screen_mouse_primary(&mut tui, primary_press(/*column*/ 0, /*row*/ 0),)
+    );
+    let _pressed_expanded_header = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(
+            MousePrimaryEventKind::Release,
+            /*column*/ 0,
+            /*row*/ 0,
+        ),
+    ));
+
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .viewport
+            .committed_cell_count(),
+        1
+    );
+    assert!(projected_cell_text(&app, 0, 80).starts_with("▸ Work"));
+}
+
+#[tokio::test]
+async fn work_header_click_survives_a_tool_completion_between_press_and_release() {
+    let mut app = app_with_owned_parent().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    app.insert_history_cell(&mut tui, completed_read_exec("read-1", "app.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("read-2", "lib.rs"));
+    let _collapsed = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+
+    assert!(
+        app.handle_owned_screen_mouse_primary(&mut tui, primary_press(/*column*/ 0, /*row*/ 0),)
+    );
+    app.insert_history_cell(&mut tui, completed_read_exec("read-3", "main.rs"));
+    let _pressed_with_deferred_completion =
+        render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(
+            MousePrimaryEventKind::Release,
+            /*column*/ 0,
+            /*row*/ 0,
+        ),
+    ));
+
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .viewport
+            .committed_cell_count(),
+        4
+    );
+    assert!(projected_cell_text(&app, 0, 80).starts_with("▾ Work"));
+    assert!(projected_cell_text(&app, 3, 80).contains("main.rs"));
+}
+
+#[tokio::test]
+async fn wrapped_work_header_rows_are_clickable() {
+    let mut app = app_with_owned_parent().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    app.insert_history_cell(
+        &mut tui,
+        completed_read_exec("read-1", "a-very-long-file-name.rs"),
+    );
+    app.insert_history_cell(
+        &mut tui,
+        completed_read_exec("read-2", "another-very-long-file-name.rs"),
+    );
+    let _collapsed = render_app(&mut app, /*width*/ 34, /*height*/ 12);
+    assert!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .viewport
+            .committed_cell(0)
+            .expect("Work header")
+            .display_lines(/*width*/ 34)
+            .len()
+            > 1
+    );
+
+    assert!(
+        app.handle_owned_screen_mouse_primary(&mut tui, primary_press(/*column*/ 2, /*row*/ 1),)
+    );
+    let _pressed = render_app(&mut app, /*width*/ 34, /*height*/ 12);
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(
+            MousePrimaryEventKind::Release,
+            /*column*/ 2,
+            /*row*/ 1,
+        ),
+    ));
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .viewport
+            .committed_cell_count(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn side_pane_work_click_changes_only_the_clicked_pane() {
+    let mut app = app_with_owned_side().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    app.insert_history_cell(&mut tui, completed_read_exec("parent-1", "parent-a.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("parent-2", "parent-b.rs"));
+    assert!(app.chat_widget.focus(PaneSlot::Side));
+    app.insert_history_cell(&mut tui, completed_read_exec("side-1", "side-a.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("side-2", "side-b.rs"));
+    assert!(app.chat_widget.focus(PaneSlot::Parent));
+    let _collapsed = render_app(&mut app, /*width*/ 120, /*height*/ 14);
+    let side_area = app
+        .chat_widget
+        .by_slot(PaneSlot::Side)
+        .and_then(|pane| pane.owned_screen.as_ref())
+        .expect("side owned screen")
+        .last_conversation_area;
+
+    assert!(
+        app.handle_owned_screen_mouse_primary(&mut tui, primary_press(side_area.x, side_area.y),)
+    );
+    let _focused_side = render_app(&mut app, /*width*/ 120, /*height*/ 14);
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(MousePrimaryEventKind::Release, side_area.x, side_area.y),
+    ));
+
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+    assert_eq!(
+        app.chat_widget
+            .by_slot(PaneSlot::Parent)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("parent owned screen")
+            .viewport
+            .committed_cell_count(),
+        1
+    );
+    assert_eq!(
+        app.chat_widget
+            .by_slot(PaneSlot::Side)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("side owned screen")
+            .viewport
+            .committed_cell_count(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn expanding_tall_work_group_keeps_header_anchored_across_a_pre_render_commit() {
+    let mut app = app_with_owned_parent().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    for index in 0..8 {
+        app.insert_history_cell(
+            &mut tui,
+            completed_read_exec(&format!("read-{index}"), &format!("file-{index}.rs")),
+        );
+    }
+    let collapsed = render_app(&mut app, /*width*/ 80, /*height*/ 8);
+    assert!(
+        buffer_text(
+            collapsed.backend().buffer(),
+            Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 1
+            ),
+        )
+        .starts_with("▸ Work")
+    );
+
+    assert!(
+        app.handle_owned_screen_mouse_primary(&mut tui, primary_press(/*column*/ 0, /*row*/ 0),)
+    );
+    let _pressed = render_app(&mut app, /*width*/ 80, /*height*/ 8);
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(
+            MousePrimaryEventKind::Release,
+            /*column*/ 0,
+            /*row*/ 0,
+        ),
+    ));
+
+    // Exercise the Release -> redraw race: extending the same group must not restore bottom-follow.
+    app.insert_history_cell(&mut tui, completed_read_exec("read-8", "file-8.rs"));
+    let expanded = render_app(&mut app, /*width*/ 80, /*height*/ 8);
+    assert!(
+        buffer_text(
+            expanded.backend().buffer(),
+            Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 1
+            ),
+        )
+        .starts_with("▾ Work")
+    );
+}
+
+#[tokio::test]
+async fn dragging_from_work_header_selects_without_toggling() {
+    let mut app = app_with_owned_parent().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    app.insert_history_cell(&mut tui, completed_read_exec("read-1", "app.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("read-2", "lib.rs"));
+    let _collapsed = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+
+    assert!(
+        app.handle_owned_screen_mouse_primary(&mut tui, primary_press(/*column*/ 0, /*row*/ 0),)
+    );
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(
+            MousePrimaryEventKind::Drag,
+            /*column*/ 6,
+            /*row*/ 0
+        ),
+    ));
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(
+            MousePrimaryEventKind::Release,
+            /*column*/ 6,
+            /*row*/ 0,
+        ),
+    ));
+
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .viewport
+            .committed_cell_count(),
+        1
+    );
+    assert!(projected_cell_text(&app, 0, 80).starts_with("▸ Work"));
+}
+
+#[tokio::test]
+async fn per_group_expansion_survives_show_all_raw_mode_and_a_growing_tool_tail() {
+    let mut app = app_with_owned_parent().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    app.insert_history_cell(&mut tui, completed_read_exec("read-1", "app.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("read-2", "lib.rs"));
+    let _collapsed = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    assert!(
+        app.handle_owned_screen_mouse_primary(&mut tui, primary_press(/*column*/ 0, /*row*/ 0),)
+    );
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(
+            MousePrimaryEventKind::Release,
+            /*column*/ 0,
+            /*row*/ 0,
+        ),
+    ));
+
+    app.toggle_compact_tool_groups_expanded(&mut tui)
+        .expect("temporarily show all Work groups");
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .viewport
+            .committed_cell_count(),
+        2
+    );
+    app.toggle_compact_tool_groups_expanded(&mut tui)
+        .expect("restore individual Work folds");
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .viewport
+            .committed_cell_count(),
+        3
+    );
+    assert!(projected_cell_text(&app, 0, 80).starts_with("▾ Work"));
+
+    app.apply_raw_output_mode(&mut tui, /*enabled*/ true, /*notify*/ false);
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .viewport
+            .committed_cell_count(),
+        2
+    );
+    app.apply_raw_output_mode(&mut tui, /*enabled*/ false, /*notify*/ false);
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .viewport
+            .committed_cell_count(),
+        3
+    );
+
+    app.insert_history_cell(&mut tui, completed_read_exec("read-3", "main.rs"));
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .viewport
+            .committed_cell_count(),
+        4
+    );
+    assert!(projected_cell_text(&app, 0, 80).starts_with("▾ Work"));
+    assert!(projected_cell_text(&app, 3, 80).contains("main.rs"));
+}
+
+#[tokio::test]
+async fn replacing_sources_prunes_expanded_ids_even_while_showing_all() {
+    let mut app = app_with_owned_parent().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    app.insert_history_cell(&mut tui, completed_read_exec("old-1", "old-a.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("old-2", "old-b.rs"));
+    let _collapsed = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    assert!(
+        app.handle_owned_screen_mouse_primary(&mut tui, primary_press(/*column*/ 0, /*row*/ 0),)
+    );
+    let _pressed = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(
+            MousePrimaryEventKind::Release,
+            /*column*/ 0,
+            /*row*/ 0,
+        ),
+    ));
+
+    let replacement: Vec<Arc<dyn HistoryCell>> = vec![
+        Arc::from(completed_read_exec("new-1", "new-a.rs")),
+        Arc::from(completed_read_exec("new-2", "new-b.rs")),
+    ];
+    let screen = app.chat_widget.owned_screen.as_mut().expect("owned screen");
+    screen.replace_source_cells(replacement.clone(), /*compact_tool_groups*/ false);
+    assert!(screen.expanded_tool_groups.is_empty());
+    screen.replace_source_cells(replacement, /*compact_tool_groups*/ true);
+
+    assert_eq!(screen.viewport.committed_cell_count(), 1);
+    assert!(
+        screen
+            .viewport
+            .committed_cell(0)
+            .expect("replacement Work group")
+            .display_lines(/*width*/ 80)[0]
+            .spans[0]
+            .content
+            .starts_with('▸')
+    );
+}
+
+#[tokio::test]
+async fn live_work_summary_respects_expand_all_and_reuses_the_same_active_revision() {
+    let mut app = app_with_owned_parent().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    set_active_cell(&mut app.chat_widget, active_exploring_exec_cell());
+
+    let compact = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    let compact_text = buffer_text(compact.backend().buffer(), compact.backend().buffer().area);
+    assert!(compact_text.contains("• Work: read app.rs"));
+    assert!(compact_text.contains("└ Running: cat lib.rs"));
+
+    app.toggle_compact_tool_groups_expanded(&mut tui)
+        .expect("expand all Work groups");
+    let expanded = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    let expanded_text = buffer_text(
+        expanded.backend().buffer(),
+        expanded.backend().buffer().area,
+    );
+    assert!(!expanded_text.contains("• Work: read app.rs"));
+    assert!(expanded_text.contains("• Exploring"));
+    assert!(expanded_text.contains("Read file app.rs, lib.rs"));
+
+    app.toggle_compact_tool_groups_expanded(&mut tui)
+        .expect("restore folded Work groups");
+    let compact_again = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    let compact_again_text = buffer_text(
+        compact_again.backend().buffer(),
+        compact_again.backend().buffer().area,
+    );
+    assert!(compact_again_text.contains("• Work: read app.rs"));
+    assert!(compact_again_text.contains("└ Running: cat lib.rs"));
 }
 
 #[tokio::test]
