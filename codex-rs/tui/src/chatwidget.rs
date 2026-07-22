@@ -1989,6 +1989,10 @@ impl ChatWidget {
         (!lines.is_empty()).then_some(lines)
     }
 
+    pub(crate) fn primary_active_cell(&self) -> Option<&dyn HistoryCell> {
+        self.transcript.active_cell.as_deref()
+    }
+
     /// Returns the active history cells prepared for the application-owned viewport.
     ///
     /// Each item retains its own selection projection and stream-continuation state so the
