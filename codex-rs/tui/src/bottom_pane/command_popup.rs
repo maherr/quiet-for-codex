@@ -391,23 +391,22 @@ mod tests {
         );
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
-    fn app_command_popup_snapshot() {
+    fn quiet_commands_are_hidden_from_command_popup() {
         let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
-        popup.on_composer_text_change("/app".to_string());
-
-        let width = 72;
-        let area = Rect::new(
-            /*x*/ 0,
-            /*y*/ 0,
-            width,
-            popup.calculate_required_height(width),
-        );
-        let mut buf = Buffer::empty(area);
-        popup.render_ref(area, &mut buf);
-
-        insta::assert_snapshot!("command_popup_app", format!("{buf:?}"));
+        for input in ["/", "/app", "/feedback"] {
+            popup.on_composer_text_change(input.to_string());
+            let commands = popup.filtered_items();
+            assert!(
+                commands.iter().all(|item| {
+                    !matches!(
+                        item,
+                        CommandItem::Builtin(SlashCommand::App | SlashCommand::Feedback)
+                    )
+                }),
+                "Quiet-only disabled commands must not appear for {input}: {commands:?}"
+            );
+        }
     }
 
     #[cfg(target_os = "macos")]

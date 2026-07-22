@@ -31,7 +31,7 @@ use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
 const BASE_CLI_BUG_ISSUE_URL: &str =
-    "https://github.com/openai/codex/issues/new?template=3-cli.yml";
+    "https://github.com/maherr/quiet-for-codex/issues/new?template=bug-report.yml";
 /// Internal routing link for employee feedback follow-ups. This must not be shown to external users.
 const CODEX_FEEDBACK_INTERNAL_URL: &str = "http://go/codex-feedback-internal";
 
@@ -394,77 +394,19 @@ fn slack_feedback_url(_thread_id: &str) -> String {
     CODEX_FEEDBACK_INTERNAL_URL.to_string()
 }
 
-// Build the selection popup params for feedback categories.
-pub(crate) fn feedback_selection_params(
-    app_event_tx: AppEventSender,
-) -> super::SelectionViewParams {
-    super::SelectionViewParams {
-        title: Some("How was this?".to_string()),
-        items: vec![
-            make_feedback_item(
-                app_event_tx.clone(),
-                "bug",
-                "Crash, error message, hang, or broken UI/behavior.",
-                FeedbackCategory::Bug,
-            ),
-            make_feedback_item(
-                app_event_tx.clone(),
-                "bad result",
-                "Output was off-target, incorrect, incomplete, or unhelpful.",
-                FeedbackCategory::BadResult,
-            ),
-            make_feedback_item(
-                app_event_tx.clone(),
-                "good result",
-                "Helpful, correct, high‑quality, or delightful result worth celebrating.",
-                FeedbackCategory::GoodResult,
-            ),
-            make_feedback_item(
-                app_event_tx.clone(),
-                "safety check",
-                "Benign usage blocked due to safety checks or refusals.",
-                FeedbackCategory::SafetyCheck,
-            ),
-            make_feedback_item(
-                app_event_tx,
-                "other",
-                "Slowness, feature suggestion, UX feedback, or anything else.",
-                FeedbackCategory::Other,
-            ),
-        ],
-        ..Default::default()
-    }
-}
-
 /// Build the selection popup params shown when feedback is disabled.
 pub(crate) fn feedback_disabled_params() -> super::SelectionViewParams {
     super::SelectionViewParams {
-        title: Some("Sending feedback is disabled".to_string()),
-        subtitle: Some("This action is disabled by configuration.".to_string()),
+        title: Some("Feedback uploads are disabled".to_string()),
+        subtitle: Some(
+            "No logs are uploaded. Report at github.com/maherr/quiet-for-codex/issues".to_string(),
+        ),
         footer_hint: Some(standard_popup_hint_line()),
         items: vec![super::SelectionItem {
             name: "Close".to_string(),
             dismiss_on_select: true,
             ..Default::default()
         }],
-        ..Default::default()
-    }
-}
-
-fn make_feedback_item(
-    app_event_tx: AppEventSender,
-    name: &str,
-    description: &str,
-    category: FeedbackCategory,
-) -> super::SelectionItem {
-    let action: super::SelectionAction = Box::new(move |_sender: &AppEventSender| {
-        app_event_tx.send(AppEvent::OpenFeedbackConsent { category });
-    });
-    super::SelectionItem {
-        name: name.to_string(),
-        description: Some(description.to_string()),
-        actions: vec![action],
-        dismiss_on_select: true,
         ..Default::default()
     }
 }
@@ -867,7 +809,7 @@ mod tests {
         );
         let bug_url_non_employee =
             issue_url_for_category(FeedbackCategory::Bug, "t", FeedbackAudience::External);
-        let expected_external_url = "https://github.com/openai/codex/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20t";
+        let expected_external_url = "https://github.com/maherr/quiet-for-codex/issues/new?template=bug-report.yml&steps=Uploaded%20thread:%20t";
         assert_eq!(bug_url_non_employee.as_deref(), Some(expected_external_url));
     }
 
@@ -884,7 +826,7 @@ mod tests {
         );
         assert_eq!(
             rendered,
-            "• Feedback uploaded. Please open an issue using the following URL:\n\n  https://github.com/openai/codex/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20thread-1\n\n  Or mention your thread ID thread-1 in an existing issue."
+            "• Feedback uploaded. Please open an issue using the following URL:\n\n  https://github.com/maherr/quiet-for-codex/issues/new?template=bug-report.yml&steps=Uploaded%20thread:%20thread-1\n\n  Or mention your thread ID thread-1 in an existing issue."
         );
     }
 

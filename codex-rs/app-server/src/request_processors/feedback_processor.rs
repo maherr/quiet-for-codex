@@ -4,6 +4,7 @@ use codex_connectors::ConnectorDirectoryCacheKey;
 use codex_connectors::connector_runtime_cache_path;
 use codex_feedback::CODEX_APP_DIRECTORY_CACHE_ATTACHMENT_FILENAME;
 use codex_feedback::CODEX_APPS_TOOLS_CACHE_ATTACHMENT_FILENAME;
+use codex_feedback::QUIET_FEEDBACK_UPLOAD_DISABLED_MESSAGE;
 #[cfg(target_os = "windows")]
 use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
 use codex_rollout::RolloutRecorder;
@@ -11,6 +12,7 @@ use sha2::Digest;
 use sha2::Sha256;
 
 const MAX_FEEDBACK_TREE_THREADS: usize = 8;
+const QUIET_FEEDBACK_UPLOADS_ENABLED: bool = false;
 
 #[derive(Clone)]
 pub(crate) struct FeedbackRequestProcessor {
@@ -45,6 +47,7 @@ impl FeedbackRequestProcessor {
         &self,
         params: FeedbackUploadParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        ensure_quiet_feedback_uploads_enabled()?;
         self.upload_feedback_response(params)
             .await
             .map(|response| Some(response.into()))
@@ -368,6 +371,15 @@ fn normalized_prompt_hash(prompt: &str) -> String {
     format!("{:x}", Sha256::digest(normalized_prompt.as_bytes()))
 }
 
+fn ensure_quiet_feedback_uploads_enabled() -> Result<(), JSONRPCErrorError> {
+    if QUIET_FEEDBACK_UPLOADS_ENABLED {
+        Ok(())
+    } else {
+        Err(invalid_request(QUIET_FEEDBACK_UPLOAD_DISABLED_MESSAGE))
+    }
+}
+
+
 fn tool_cache_feedback_attachments(
     codex_home: &Path,
     chatgpt_base_url: &str,
@@ -668,6 +680,16 @@ mod tests {
         std::fs::write(&rollout_path, format!("{contents}\n")).expect("write feedback rollout");
 
         (tempdir, rollout_path)
+    }
+
+    #[test]
+    fn quiet_feedback_upload_api_stays_disabled() {
+        let error = ensure_quiet_feedback_uploads_enabled()
+            .expect_err("Quiet feedback upload guard must fail closed");
+        assert_eq!(
+            error,
+            invalid_request(QUIET_FEEDBACK_UPLOAD_DISABLED_MESSAGE)
+        );
     }
 
     #[test]

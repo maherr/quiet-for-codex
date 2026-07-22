@@ -246,7 +246,7 @@ fn ensure_supported_platform() -> Result<()> {
 #[cfg(not(unix))]
 fn ensure_supported_platform() -> Result<()> {
     Err(anyhow!(
-        "codex app-server daemon lifecycle is only supported on Unix platforms"
+        "codex-quiet app-server daemon lifecycle is only supported on Unix platforms"
     ))
 }
 
@@ -338,7 +338,7 @@ impl Daemon {
             && self.running_backend(&settings).await?.is_none()
         {
             return Err(anyhow!(
-                "app server is running but is not managed by codex app-server daemon"
+                "app server is running but is not managed by codex-quiet app-server daemon"
             ));
         }
 
@@ -392,7 +392,7 @@ impl Daemon {
             }
         } else if client::probe(&self.socket_path).await.is_ok() {
             return Err(anyhow!(
-                "app server is running but is not managed by codex app-server daemon"
+                "app server is running but is not managed by codex-quiet app-server daemon"
             ));
         } else {
             RestartIfRunningOutcome::NotRunning
@@ -421,7 +421,7 @@ impl Daemon {
 
         if client::probe(&self.socket_path).await.is_ok() {
             return Err(anyhow!(
-                "app server is running but is not managed by codex app-server daemon"
+                "app server is running but is not managed by codex-quiet app-server daemon"
             ));
         }
 
@@ -536,7 +536,7 @@ impl Daemon {
 
         if backend.is_none() && client::probe(&self.socket_path).await.is_ok() {
             return Err(anyhow!(
-                "app server is running but is not managed by codex app-server daemon"
+                "app server is running but is not managed by codex-quiet app-server daemon"
             ));
         }
 
@@ -594,7 +594,7 @@ impl Daemon {
             && self.running_backend(&settings).await?.is_none()
         {
             return Err(anyhow!(
-                "app server is running but is not managed by codex app-server daemon"
+                "app server is running but is not managed by codex-quiet app-server daemon"
             ));
         }
         settings.save(&self.settings_file).await?;

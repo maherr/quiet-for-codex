@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 3709
+expression: popup
+---
+  Feedback uploads are disabled
+  No logs are uploaded. Report at github.com/maherr/quiet-for-codex/issues
+
+› 1. Close
+
+  Press enter to confirm or esc to go back

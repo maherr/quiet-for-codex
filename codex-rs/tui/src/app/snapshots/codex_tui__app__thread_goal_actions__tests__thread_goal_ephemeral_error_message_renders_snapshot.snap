@@ -5,5 +5,5 @@ expression: terminal.backend()
 
 
 ■ Goals need a saved session. This session is temporary.
-Run `codex` to start a saved session, or `codex resume` / `/resume` to
-reopen one.
+Run `codex-quiet` to start a saved session, or `codex-quiet resume` / `/
+resume` to reopen one.
