@@ -183,7 +183,7 @@ fn command_has_prefix(command: &str, prefix: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
 }
 
-fn compact_command_for_viewport(command: &str) -> String {
+pub(crate) fn compact_command_for_viewport(command: &str) -> String {
     if let Some(compact) = compact_ssh_command_for_viewport(command)
         .or_else(|| compact_gh_command_for_viewport(command))
         && compact != command

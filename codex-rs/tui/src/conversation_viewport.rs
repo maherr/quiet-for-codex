@@ -55,6 +55,13 @@ pub(crate) struct ConversationViewport {
     selection_projection_cache: Option<SelectionProjectionCache>,
     selection_autoscroll: SelectionAutoscroll,
     selection_autoscroll_last_tick: Option<Instant>,
+    freeze_bottom_follow_once: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ConversationCellHit {
+    pub(crate) index: usize,
+    pub(crate) row_within_cell: usize,
 }
 
 struct SelectionProjectionCache {
@@ -93,11 +100,13 @@ impl ConversationViewport {
             selection_projection_cache: None,
             selection_autoscroll: SelectionAutoscroll::default(),
             selection_autoscroll_last_tick: None,
+            freeze_bottom_follow_once: false,
         }
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        let bottom_follow = if self.selection.is_active() {
+        let freeze_bottom_follow = std::mem::take(&mut self.freeze_bottom_follow_once);
+        let bottom_follow = if self.selection.is_active() || freeze_bottom_follow {
             BottomFollowMode::Frozen
         } else {
             BottomFollowMode::Enabled
@@ -194,6 +203,53 @@ impl ConversationViewport {
         self.selection.is_active()
     }
 
+    pub(crate) fn committed_cell_hit(
+        &mut self,
+        area: Rect,
+        position: Position,
+    ) -> Option<ConversationCellHit> {
+        if area.is_empty() || !area.contains(position) {
+            return None;
+        }
+        self.ensure_selection_projections(area.width);
+        let screen_row = usize::from(position.y.saturating_sub(area.y));
+        let content_row = self.content.scroll_offset().saturating_add(screen_row);
+        let (index, layout) = self
+            .selection_projection_cache
+            .as_ref()?
+            .layout
+            .iter()
+            .copied()
+            .enumerate()
+            .take(self.cells.len())
+            .find(|(_, layout)| {
+                layout.height > 0
+                    && content_row >= layout.top
+                    && content_row < layout.top.saturating_add(layout.height)
+            })?;
+        Some(ConversationCellHit {
+            index,
+            row_within_cell: content_row.saturating_sub(layout.top),
+        })
+    }
+
+    pub(crate) fn committed_cell(&self, index: usize) -> Option<&Arc<dyn HistoryCell>> {
+        self.cells.get(index)
+    }
+
+    pub(crate) fn scroll_offset(&self) -> usize {
+        self.content.scroll_offset()
+    }
+
+    pub(crate) fn preserve_scroll_offset_through_next_render(&mut self, scroll_offset: usize) {
+        self.content.set_scroll_offset(scroll_offset);
+        self.freeze_bottom_follow_once = true;
+    }
+
+    fn should_follow_bottom(&self) -> bool {
+        !self.freeze_bottom_follow_once && self.content.is_following_bottom()
+    }
+
     pub(crate) fn advance_selection_autoscroll(&mut self, area: Rect, now: Instant) -> bool {
         let Some(pointer) = self.selection_autoscroll.pointer() else {
             return false;
@@ -258,7 +314,7 @@ impl ConversationViewport {
             return;
         }
         self.invalidate_selection_projections();
-        let follow_bottom = self.content.is_following_bottom();
+        let follow_bottom = self.should_follow_bottom();
         let had_prior_cells = !self.cells.is_empty();
         self.take_live_tail_renderables();
         let renderable = Self::cell_renderable(
@@ -294,7 +350,7 @@ impl ConversationViewport {
         }
 
         self.invalidate_selection_projections();
-        let follow_bottom = self.content.is_following_bottom();
+        let follow_bottom = self.should_follow_bottom();
         self.take_live_tail_renderables();
         for _ in 0..remove_count.min(self.cells.len()) {
             self.cells.pop();
@@ -318,7 +374,7 @@ impl ConversationViewport {
             return;
         }
         self.invalidate_selection_projections();
-        let follow_bottom = self.content.is_following_bottom();
+        let follow_bottom = self.should_follow_bottom();
         self.take_live_tail_renderables();
         self.live_tail_key = None;
         self.live_cells.clear();
@@ -340,7 +396,7 @@ impl ConversationViewport {
             return;
         }
         self.invalidate_selection_projections();
-        let follow_bottom = self.content.is_following_bottom();
+        let follow_bottom = self.should_follow_bottom();
         self.take_live_tail_renderables();
         self.live_tail_key = None;
         self.live_cells.clear();
@@ -391,7 +447,7 @@ impl ConversationViewport {
             return;
         }
 
-        let follow_bottom = !self.selection.is_active() && self.content.is_following_bottom();
+        let follow_bottom = !self.selection.is_active() && self.should_follow_bottom();
         self.take_live_tail_renderables();
         if !self.selection.is_active() {
             self.selection_projection_cache = None;
@@ -504,7 +560,7 @@ impl ConversationViewport {
             return;
         }
 
-        let follow_bottom = self.content.is_following_bottom();
+        let follow_bottom = self.should_follow_bottom();
         self.take_live_tail_renderables();
         self.live_tail_key = None;
         self.live_cells.clear();
