@@ -168,7 +168,9 @@ jobs:
           target: x86_64-unknown-linux-gnu
       - name: Run TUI library tests
         working-directory: codex-rs
-        run: cargo test --locked --target x86_64-unknown-linux-gnu -p codex-tui --lib
+        # Crossterm-backed tests share the runner's nonblocking log stream.
+        # Serial execution prevents Linux EAGAIN failures under output pressure.
+        run: cargo test --locked --target x86_64-unknown-linux-gnu -p codex-tui --lib -- --test-threads=1
       - name: Run privacy, identity, and hidden-command regressions
         working-directory: codex-rs
         run: |
