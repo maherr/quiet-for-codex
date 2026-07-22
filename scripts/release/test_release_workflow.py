@@ -40,6 +40,8 @@ EXPECTED_TARGETS = {
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
 }
+EXPECTED_V8_TARGETS = EXPECTED_TARGETS | {"x86_64-unknown-linux-gnu"}
+LITERAL_TARGET_RE = re.compile(r"^\s+target: ([a-z0-9_][a-z0-9_.-]+)$", re.MULTILINE)
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
@@ -172,8 +174,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("rusty_v8_release_${TARGET}.sha256", self.setup_v8_action)
 
         artifacts = self.v8_manifest["lockedInputs"]["artifacts"]
+        configured_targets = set(LITERAL_TARGET_RE.findall(self.workflow)) | set(
+            LITERAL_TARGET_RE.findall(self.quiet_ci)
+        )
+        self.assertEqual(configured_targets, EXPECTED_V8_TARGETS)
         self.assertEqual(
-            {artifact["target"] for artifact in artifacts}, EXPECTED_TARGETS
+            {artifact["target"] for artifact in artifacts}, configured_targets
         )
         for artifact in artifacts:
             self.assertRegex(artifact["sha256"], r"^[0-9a-f]{64}$")
