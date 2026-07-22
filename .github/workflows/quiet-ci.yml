@@ -62,20 +62,7 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
       - name: Run TUI library tests
-        working-directory: codex-rs
-        # Crossterm-backed tests write directly to stdout. GitHub Actions exposes
-        # a nonblocking log pipe, so use a regular file to prevent EAGAIN failures.
-        run: |
-          log="$RUNNER_TEMP/quiet-tui-tests.log"
-          set +e
-          cargo test --locked --target x86_64-unknown-linux-gnu -p codex-tui --lib -- --test-threads=1 > "$log" 2>&1
-          status=$?
-          set -e
-          if (( status != 0 )); then
-            tail -c 262144 "$log" || true
-            exit "$status"
-          fi
-          tail -c 16384 "$log" || true
+        run: bash scripts/ci/run_quiet_tui_tests.sh
       - name: Run privacy, identity, and hidden-command regressions
         working-directory: codex-rs
         run: |
