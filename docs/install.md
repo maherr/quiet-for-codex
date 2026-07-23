@@ -9,13 +9,13 @@ their binaries and update channels remain separate.
 ### macOS or Linux
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.2/scripts/release/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.3/scripts/release/install.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.2/scripts/release/install.ps1)))
+& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.3/scripts/release/install.ps1)))
 ```
 
 The installers detect the host target, download the matching archive from the
@@ -35,8 +35,8 @@ On Windows, packages live under
 root with `CODEX_QUIET_INSTALL_ROOT`.
 
 To install a specific release instead of the latest beta, set
-`CODEX_QUIET_RELEASE` to a version such as `0.145.0-beta.2`. The Unix installer
-also accepts `--release 0.145.0-beta.2` when downloaded and run as a file.
+`CODEX_QUIET_RELEASE` to a version such as `0.145.0-beta.3`. The Unix installer
+also accepts `--release 0.145.0-beta.3` when downloaded and run as a file.
 
 Run the installed command:
 

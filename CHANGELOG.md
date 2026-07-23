@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.145.0-beta.3 - 2026-07-23
+
+### Fixed
+
+- Retried transient Windows executable-handle cleanup failures during release
+  smoke tests while keeping persistent locks fatal.
+
 ## 0.145.0-beta.2 - 2026-07-23
 
 ### Fixed
