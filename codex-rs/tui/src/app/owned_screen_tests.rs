@@ -21,6 +21,7 @@ use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::new_active_exec_command;
 use crate::file_search::FileSearchManager;
+use crate::tui::MouseMoveEvent;
 use crate::tui::MousePrimaryEvent;
 use crate::tui::MousePrimaryEventKind;
 use crate::tui::MouseScrollDirection;
@@ -155,6 +156,33 @@ fn primary_event(kind: MousePrimaryEventKind, column: u16, row: u16) -> MousePri
 
 fn primary_press(column: u16, row: u16) -> MousePrimaryEvent {
     primary_event(MousePrimaryEventKind::Press, column, row)
+}
+
+fn mouse_move(column: u16, row: u16) -> MouseMoveEvent {
+    MouseMoveEvent { column, row }
+}
+
+fn hover_mask(buffer: &Buffer, area: Rect) -> String {
+    let hover = crate::style::interactive_hover_style();
+    (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| {
+                    let style = buffer[(x, y)].style();
+                    let background_matches =
+                        hover.bg.is_some() && style.bg.is_some_and(|bg| Some(bg) == hover.bg);
+                    let modifier_matches = !hover.add_modifier.is_empty()
+                        && style.add_modifier.contains(hover.add_modifier);
+                    if background_matches || modifier_matches {
+                        '#'
+                    } else {
+                        '.'
+                    }
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn completed_read_exec(call_id: &str, name: &str) -> Box<dyn HistoryCell> {
@@ -1463,6 +1491,131 @@ async fn clicking_work_header_expands_and_collapses_without_losing_sources() {
 }
 
 #[tokio::test]
+async fn hovering_work_header_fills_its_width_and_only_redraws_on_target_changes() {
+    let mut app = app_with_owned_parent().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    app.insert_history_cell(&mut tui, completed_read_exec("read-1", "app.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("read-2", "lib.rs"));
+    let initial = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    let conversation = app
+        .chat_widget
+        .owned_screen
+        .as_ref()
+        .expect("owned screen")
+        .last_conversation_area;
+    assert_eq!(
+        hover_mask(
+            initial.backend().buffer(),
+            Rect::new(conversation.x, conversation.y, conversation.width, 2),
+        ),
+        format!("{}\n{}", ".".repeat(80), ".".repeat(80))
+    );
+
+    let event = mouse_move(conversation.right().saturating_sub(1), conversation.y);
+    assert!(app.handle_owned_screen_mouse_move(&mut tui, event));
+    assert!(
+        !app.handle_owned_screen_mouse_move(&mut tui, event),
+        "moving within the same Work target should not request another redraw"
+    );
+    let hovered = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    let hovered_area = Rect::new(conversation.x, conversation.y, conversation.width, 2);
+    assert_snapshot!(format!(
+        "text:\n{}\nhover mask:\n{}",
+        buffer_text(hovered.backend().buffer(), hovered_area),
+        hover_mask(hovered.backend().buffer(), hovered_area),
+    ), @r###"
+text:
+▸ Work: read 2 files · Alt+I inspect · Alt+O all
+
+hover mask:
+################################################################################
+................................................................................
+"###);
+
+    assert!(app.handle_owned_screen_navigation_key(
+        &mut tui,
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+    ));
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .tool_group_hover
+            .hovered(),
+        None,
+        "keyboard navigation can move rows and must invalidate the old pointer hit"
+    );
+    assert!(app.handle_owned_screen_mouse_move(&mut tui, event));
+    let outside = mouse_move(conversation.x, conversation.y.saturating_add(1));
+    assert!(app.handle_owned_screen_mouse_move(&mut tui, outside));
+    assert!(
+        !app.handle_owned_screen_mouse_move(&mut tui, outside),
+        "remaining outside a Work target should not request another redraw"
+    );
+    let cleared = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    assert_eq!(
+        hover_mask(cleared.backend().buffer(), hovered_area),
+        format!("{}\n{}", ".".repeat(80), ".".repeat(80))
+    );
+}
+
+#[tokio::test]
+async fn work_hover_is_pane_local_and_clears_on_focus_loss() -> Result<()> {
+    let mut app = app_with_owned_side().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    app.insert_history_cell(&mut tui, completed_read_exec("parent-1", "parent-a.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("parent-2", "parent-b.rs"));
+    assert!(app.chat_widget.focus(PaneSlot::Side));
+    app.insert_history_cell(&mut tui, completed_read_exec("side-1", "side-a.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("side-2", "side-b.rs"));
+    assert!(app.chat_widget.focus(PaneSlot::Parent));
+    let _initial = render_app(&mut app, /*width*/ 120, /*height*/ 14);
+    let side_position = app
+        .chat_widget
+        .by_slot(PaneSlot::Side)
+        .and_then(|pane| pane.owned_screen.as_ref())
+        .expect("side owned screen")
+        .last_conversation_area;
+
+    assert!(
+        app.handle_owned_screen_mouse_move(&mut tui, mouse_move(side_position.x, side_position.y),)
+    );
+    assert_eq!(
+        app.chat_widget
+            .by_slot(PaneSlot::Parent)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("parent owned screen")
+            .tool_group_hover
+            .hovered(),
+        None
+    );
+    assert!(
+        app.chat_widget
+            .by_slot(PaneSlot::Side)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("side owned screen")
+            .tool_group_hover
+            .hovered()
+            .is_some()
+    );
+
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::FocusLost)
+        .await?;
+    assert_eq!(
+        app.chat_widget
+            .by_slot(PaneSlot::Side)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("side owned screen")
+            .tool_group_hover
+            .hovered(),
+        None
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn work_header_click_survives_a_tool_completion_between_press_and_release() {
     let mut app = app_with_owned_parent().await;
     let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
@@ -1510,7 +1663,7 @@ async fn wrapped_work_header_rows_are_clickable() {
         &mut tui,
         completed_read_exec("read-2", "another-very-long-file-name.rs"),
     );
-    let _collapsed = render_app(&mut app, /*width*/ 34, /*height*/ 12);
+    let collapsed = render_app(&mut app, /*width*/ 34, /*height*/ 12);
     assert!(
         app.chat_widget
             .owned_screen
@@ -1522,6 +1675,30 @@ async fn wrapped_work_header_rows_are_clickable() {
             .display_lines(/*width*/ 34)
             .len()
             > 1
+    );
+    let conversation = app
+        .chat_widget
+        .owned_screen
+        .as_ref()
+        .expect("owned screen")
+        .last_conversation_area;
+    assert_eq!(
+        hover_mask(
+            collapsed.backend().buffer(),
+            Rect::new(conversation.x, conversation.y, conversation.width, 2),
+        ),
+        format!("{}\n{}", ".".repeat(34), ".".repeat(34))
+    );
+    assert!(
+        app.handle_owned_screen_mouse_move(&mut tui, mouse_move(/*column*/ 2, /*wrapped row*/ 1),)
+    );
+    let hovered = render_app(&mut app, /*width*/ 34, /*height*/ 12);
+    assert_eq!(
+        hover_mask(
+            hovered.backend().buffer(),
+            Rect::new(conversation.x, conversation.y, conversation.width, 2),
+        ),
+        format!("{}\n{}", "#".repeat(34), "#".repeat(34))
     );
 
     assert!(
@@ -1544,6 +1721,59 @@ async fn wrapped_work_header_rows_are_clickable() {
             .viewport
             .committed_cell_count(),
         3
+    );
+}
+
+#[tokio::test]
+async fn source_mutation_clears_hover_and_raw_mode_cannot_reacquire_it() {
+    let mut app = app_with_owned_parent().await;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    app.insert_history_cell(&mut tui, completed_read_exec("read-1", "app.rs"));
+    app.insert_history_cell(&mut tui, completed_read_exec("read-2", "lib.rs"));
+    let _collapsed = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    let conversation = app
+        .chat_widget
+        .owned_screen
+        .as_ref()
+        .expect("owned screen")
+        .last_conversation_area;
+
+    assert!(
+        app.handle_owned_screen_mouse_move(&mut tui, mouse_move(conversation.x, conversation.y),)
+    );
+    app.insert_history_cell(&mut tui, Box::new(TestCell("following response")));
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .tool_group_hover
+            .hovered(),
+        None,
+        "a source mutation can move rows and must invalidate the old pointer hit"
+    );
+
+    app.apply_raw_output_mode(&mut tui, /*enabled*/ true, /*notify*/ false);
+    let raw = render_app(&mut app, /*width*/ 80, /*height*/ 12);
+    assert!(
+        !app.handle_owned_screen_mouse_move(&mut tui, mouse_move(conversation.x, conversation.y),),
+        "raw source rows are not clickable Work headers"
+    );
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("owned screen")
+            .tool_group_hover
+            .hovered(),
+        None
+    );
+    assert_eq!(
+        hover_mask(
+            raw.backend().buffer(),
+            Rect::new(conversation.x, conversation.y, conversation.width, 2),
+        ),
+        format!("{}\n{}", ".".repeat(80), ".".repeat(80))
     );
 }
 

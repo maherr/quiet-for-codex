@@ -25,6 +25,7 @@ use super::*;
 use crate::AltScreenBehavior;
 use crate::history_cell::HistoryRenderMode;
 use crate::key_hint::is_plain_text_key_event;
+use crate::tui::MouseMoveEvent;
 use crate::tui::MousePrimaryEvent;
 use crate::tui::MousePrimaryEventKind;
 use crate::tui::MouseScrollEvent;
@@ -36,10 +37,12 @@ pub(super) struct OwnedScreen {
     source_cells: Vec<Arc<dyn HistoryCell>>,
     compact_tool_groups: bool,
     expanded_tool_groups: HashSet<compact_tool_groups::CompactToolGroupId>,
+    tool_group_hover: Arc<compact_tool_groups::CompactToolGroupHover>,
     pending_tool_group_click: Option<compact_tool_groups::CompactToolGroupId>,
     replay_in_progress: bool,
     last_pane_area: Rect,
     last_conversation_area: Rect,
+    last_rendered_conversation_area: Rect,
     last_selection_viewport_area: Option<Rect>,
 }
 
@@ -60,10 +63,12 @@ impl OwnedScreen {
             source_cells: Vec::new(),
             compact_tool_groups: chat_widget.history_render_mode() == HistoryRenderMode::Rich,
             expanded_tool_groups: HashSet::new(),
+            tool_group_hover: Arc::new(compact_tool_groups::CompactToolGroupHover::default()),
             pending_tool_group_click: None,
             replay_in_progress: false,
             last_pane_area: Rect::default(),
             last_conversation_area: Rect::default(),
+            last_rendered_conversation_area: Rect::default(),
             last_selection_viewport_area: None,
         }
     }
@@ -73,6 +78,9 @@ impl OwnedScreen {
         cells: Vec<Arc<dyn HistoryCell>>,
         compact_tool_groups: bool,
     ) {
+        // Reprojection can move a retained header while the pointer remains stationary. Clear the
+        // cue until the terminal reports another coordinate instead of highlighting stale geometry.
+        self.clear_tool_group_hover();
         let valid_groups = compact_tool_groups::compact_tool_group_ids(&cells);
         self.expanded_tool_groups
             .retain(|group| valid_groups.contains(group));
@@ -83,6 +91,7 @@ impl OwnedScreen {
             &cells,
             compact_tool_groups,
             &self.expanded_tool_groups,
+            &self.tool_group_hover,
         );
         self.source_cells = cells;
         self.compact_tool_groups = compact_tool_groups;
@@ -90,6 +99,7 @@ impl OwnedScreen {
     }
 
     fn push_source_cell(&mut self, cell: Arc<dyn HistoryCell>, compact_tool_groups: bool) {
+        self.clear_tool_group_hover();
         if self.compact_tool_groups != compact_tool_groups {
             self.source_cells.push(cell);
             let cells = self.source_cells.clone();
@@ -110,6 +120,7 @@ impl OwnedScreen {
             previous_run,
             /*compact*/ true,
             &self.expanded_tool_groups,
+            &self.tool_group_hover,
         )
         .len();
 
@@ -128,6 +139,7 @@ impl OwnedScreen {
             &self.source_cells[next_run_start..],
             /*compact*/ true,
             &self.expanded_tool_groups,
+            &self.tool_group_hover,
         );
         self.viewport
             .replace_tail(previous_projection_count, projected_tail);
@@ -140,6 +152,9 @@ impl OwnedScreen {
         buffer: &mut Buffer,
     ) -> RenderedOwnedScreen {
         Clear.render(area, buffer);
+        if !chat_widget.no_modal_or_popup_active() {
+            self.clear_tool_group_hover();
+        }
 
         let bottom_pane = chat_widget.bottom_pane_renderable();
         let bottom_height = bottom_pane.desired_height(area.width).min(area.height);
@@ -156,11 +171,16 @@ impl OwnedScreen {
             area.width,
             bottom_height,
         );
+        if self.last_rendered_conversation_area != conversation_area {
+            self.clear_tool_group_hover();
+        }
+        self.last_rendered_conversation_area = conversation_area;
         self.last_conversation_area = conversation_area;
 
         self.viewport
             .set_render_mode(chat_widget.history_render_mode());
         let active_key = chat_widget.active_cell_render_key();
+        let scroll_offset_before_live_tail = self.viewport.scroll_offset();
         let compact_live_tail = self.compact_tool_groups;
         self.viewport
             .sync_live_tail(conversation_area.width, active_key, |width| {
@@ -175,6 +195,9 @@ impl OwnedScreen {
                 }
                 Some(snapshots)
             });
+        if self.viewport.scroll_offset() != scroll_offset_before_live_tail {
+            self.clear_tool_group_hover();
+        }
         let now = Instant::now();
         let selection_autoscroll_active =
             if self.last_selection_viewport_area.replace(conversation_area)
@@ -208,8 +231,13 @@ impl OwnedScreen {
         {
             return false;
         }
-        self.viewport
-            .handle_navigation_key(self.last_conversation_area, key_event)
+        let handled = self
+            .viewport
+            .handle_navigation_key(self.last_conversation_area, key_event);
+        if handled {
+            self.clear_tool_group_hover();
+        }
+        handled
     }
 
     fn set_keymap(&mut self, keymap: crate::keymap::PagerKeymap) {
@@ -219,6 +247,7 @@ impl OwnedScreen {
     fn handle_mouse_scroll(&mut self, event: MouseScrollEvent) -> bool {
         if self.viewport.selection_is_active() {
             self.pending_tool_group_click = None;
+            self.clear_tool_group_hover();
             self.viewport.handle_selection_mouse_scroll(
                 self.last_conversation_area,
                 event.direction,
@@ -233,6 +262,7 @@ impl OwnedScreen {
             return false;
         }
         self.viewport.handle_mouse_scroll(event.direction);
+        self.update_tool_group_hover(Position::new(event.column, event.row));
         true
     }
 
@@ -248,7 +278,9 @@ impl OwnedScreen {
         } else {
             position
         };
-        self.pending_tool_group_click = self.compact_tool_group_header_at(position);
+        let pressed_group = self.compact_tool_group_header_at(position);
+        self.tool_group_hover.update(pressed_group);
+        self.pending_tool_group_click = pressed_group;
         let started = self.viewport.begin_selection(conversation_area, position);
         if !started {
             self.pending_tool_group_click = None;
@@ -258,6 +290,7 @@ impl OwnedScreen {
 
     fn update_selection(&mut self, position: Position) -> bool {
         self.pending_tool_group_click = None;
+        self.clear_tool_group_hover();
         self.viewport
             .update_selection(self.last_conversation_area, position)
     }
@@ -294,6 +327,15 @@ impl OwnedScreen {
     fn clear_last_render_areas(&mut self) {
         self.last_pane_area = Rect::default();
         self.last_conversation_area = Rect::default();
+    }
+
+    fn update_tool_group_hover(&mut self, position: Position) -> bool {
+        let hovered = self.compact_tool_group_header_at(position);
+        self.tool_group_hover.update(hovered)
+    }
+
+    fn clear_tool_group_hover(&self) -> bool {
+        self.tool_group_hover.update(None)
     }
 
     fn compact_tool_group_header_at(
@@ -433,6 +475,7 @@ fn render_layout(
         {
             if !slot_is_visible {
                 screen.cancel_selection();
+                screen.clear_tool_group_hover();
             }
             screen.clear_last_render_areas();
         }
@@ -592,6 +635,51 @@ impl App {
         false
     }
 
+    pub(super) fn handle_owned_screen_mouse_move(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: MouseMoveEvent,
+    ) -> bool {
+        if self.overlay.is_some() {
+            let changed = self.clear_owned_screen_tool_group_hover();
+            if changed {
+                tui.frame_requester().schedule_frame();
+            }
+            return changed;
+        }
+
+        let position = Position::new(event.column, event.row);
+        let target = [PaneSlot::Parent, PaneSlot::Side].into_iter().find(|slot| {
+            self.chat_widget.by_slot(*slot).is_some_and(|pane| {
+                pane.chat_widget.no_modal_or_popup_active()
+                    && pane
+                        .owned_screen
+                        .as_ref()
+                        .is_some_and(|screen| screen.last_pane_area.contains(position))
+            })
+        });
+        let mut changed = false;
+        for slot in [PaneSlot::Parent, PaneSlot::Side] {
+            let Some(pane) = self.chat_widget.by_slot_mut(slot) else {
+                continue;
+            };
+            let can_hover = target == Some(slot) && pane.chat_widget.no_modal_or_popup_active();
+            let Some(screen) = pane.owned_screen.as_mut() else {
+                continue;
+            };
+            changed |= if can_hover {
+                screen.update_tool_group_hover(position)
+            } else {
+                screen.clear_tool_group_hover()
+            };
+        }
+        if changed {
+            tui.frame_requester()
+                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+        }
+        changed
+    }
+
     pub(super) fn handle_owned_screen_mouse_primary(
         &mut self,
         tui: &mut tui::Tui,
@@ -600,7 +688,8 @@ impl App {
         if self.overlay.is_some() || !self.chat_widget.no_modal_or_popup_active() {
             let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();
             let selection_canceled = self.cancel_owned_screen_selection();
-            if split_canceled || selection_canceled {
+            let hover_cleared = self.clear_owned_screen_tool_group_hover();
+            if split_canceled || selection_canceled || hover_cleared {
                 tui.frame_requester().schedule_frame();
             }
             return false;
@@ -608,6 +697,7 @@ impl App {
 
         if self.chat_widget.handle_owned_screen_split_mouse(event) {
             self.cancel_owned_screen_selection();
+            self.clear_owned_screen_tool_group_hover();
             match event.kind {
                 MousePrimaryEventKind::Drag => tui
                     .frame_requester()
@@ -670,11 +760,22 @@ impl App {
                 .is_some_and(|screen| screen.last_pane_area.contains(position))
         });
         let Some(target) = target else {
-            if selection_canceled {
+            let hover_cleared = self.clear_owned_screen_tool_group_hover();
+            if selection_canceled || hover_cleared {
                 tui.frame_requester().schedule_frame();
             }
             return false;
         };
+        let mut hover_cleared = false;
+        for slot in [PaneSlot::Parent, PaneSlot::Side] {
+            if slot != target {
+                hover_cleared |= self
+                    .chat_widget
+                    .by_slot_mut(slot)
+                    .and_then(|pane| pane.owned_screen.as_mut())
+                    .is_some_and(|screen| screen.clear_tool_group_hover());
+            }
+        }
         let selection_started = self.chat_widget.by_slot_mut(target).is_some_and(|pane| {
             pane.chat_widget.no_modal_or_popup_active()
                 && pane
@@ -685,12 +786,17 @@ impl App {
         let focus_changed = self.chat_widget.focused_slot() != target;
         let backtrack_was_primed = self.backtrack.primed;
         if !self.focus_conversation_pane(target) {
-            if selection_canceled {
+            if selection_canceled || hover_cleared {
                 tui.frame_requester().schedule_frame();
             }
             return false;
         }
-        if selection_started || selection_canceled || focus_changed || backtrack_was_primed {
+        if selection_started
+            || selection_canceled
+            || hover_cleared
+            || focus_changed
+            || backtrack_was_primed
+        {
             tui.frame_requester().schedule_frame();
         }
         true
@@ -710,6 +816,18 @@ impl App {
             }
         }
         canceled
+    }
+
+    pub(super) fn clear_owned_screen_tool_group_hover(&mut self) -> bool {
+        let mut changed = false;
+        for slot in [PaneSlot::Parent, PaneSlot::Side] {
+            changed |= self
+                .chat_widget
+                .by_slot_mut(slot)
+                .and_then(|pane| pane.owned_screen.as_mut())
+                .is_some_and(|screen| screen.clear_tool_group_hover());
+        }
+        changed
     }
 
     pub(crate) fn sync_owned_screen_cells(&mut self) {
@@ -775,6 +893,7 @@ impl App {
         if !self.chat_widget.no_modal_or_popup_active() {
             self.chat_widget.cancel_owned_screen_split_drag();
             self.cancel_owned_screen_selection();
+            self.clear_owned_screen_tool_group_hover();
         }
         let focused = self.chat_widget.focused_slot();
         let has_side = self.chat_widget.has_side();

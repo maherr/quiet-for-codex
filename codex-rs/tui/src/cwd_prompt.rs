@@ -134,6 +134,7 @@ pub(crate) async fn run_cwd_selection_prompt(
                 TuiEvent::Paste(_)
                 | TuiEvent::MouseScroll(_)
                 | TuiEvent::MousePrimary(_)
+                | TuiEvent::MouseMove(_)
                 | TuiEvent::FocusLost => {}
                 TuiEvent::Draw | TuiEvent::Resize => {
                     tui.draw(u16::MAX, |frame| {
