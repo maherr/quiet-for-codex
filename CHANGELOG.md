@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Added theme-aware, full-row hover feedback for clickable `Work` group headers.
+
+### Fixed
+
+- Retained the previously detected terminal palette when a focus-triggered
+  requery fails, keeping adaptive colors stable.
+
 ## 0.145.0-beta.3 - 2026-07-23
 
 ### Fixed
