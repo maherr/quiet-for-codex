@@ -1302,11 +1302,13 @@ See the Codex keymap documentation for supported actions and examples."
         match &event {
             TuiEvent::Resize(_) => {
                 self.chat_widget.cancel_owned_screen_split_drag();
+                self.clear_owned_screen_tool_group_hover();
             }
             TuiEvent::FocusLost => {
                 let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();
                 let selection_canceled = self.cancel_owned_screen_selection();
-                if split_canceled || selection_canceled {
+                let hover_cleared = self.clear_owned_screen_tool_group_hover();
+                if split_canceled || selection_canceled || hover_cleared {
                     tui.frame_requester().schedule_frame();
                 }
             }
@@ -1314,6 +1316,7 @@ See the Codex keymap documentation for supported actions and examples."
             | TuiEvent::Paste(_)
             | TuiEvent::MouseScroll(_)
             | TuiEvent::MousePrimary(_)
+            | TuiEvent::MouseMove(_)
             | TuiEvent::Resume
             | TuiEvent::Draw => {}
         }
@@ -1334,7 +1337,8 @@ See the Codex keymap documentation for supported actions and examples."
         if self.overlay.is_some() {
             let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();
             let selection_canceled = self.cancel_owned_screen_selection();
-            if split_canceled || selection_canceled {
+            let hover_cleared = self.clear_owned_screen_tool_group_hover();
+            if split_canceled || selection_canceled || hover_cleared {
                 tui.frame_requester().schedule_frame();
             }
             let _ = self
@@ -1370,6 +1374,9 @@ See the Codex keymap documentation for supported actions and examples."
                 }
                 TuiEvent::MousePrimary(event) => {
                     self.handle_owned_screen_mouse_primary(tui, event);
+                }
+                TuiEvent::MouseMove(event) => {
+                    self.handle_owned_screen_mouse_move(tui, event);
                 }
                 TuiEvent::FocusLost => {}
                 TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) => {

@@ -107,6 +107,7 @@ pub(crate) async fn run_external_agent_config_migration_prompt(
                 TuiEvent::Paste(_)
                 | TuiEvent::MouseScroll(_)
                 | TuiEvent::MousePrimary(_)
+                | TuiEvent::MouseMove(_)
                 | TuiEvent::FocusLost => {}
                 TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) => {
                     let _ = tui.draw(u16::MAX, |frame| {

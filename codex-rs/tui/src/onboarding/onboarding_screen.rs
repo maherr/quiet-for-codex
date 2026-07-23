@@ -514,6 +514,7 @@ pub(crate) async fn run_onboarding_app(
                         }
                         TuiEvent::MouseScroll(_)
                         | TuiEvent::MousePrimary(_)
+                        | TuiEvent::MouseMove(_)
                         | TuiEvent::FocusLost => {}
                         TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) => {
                             if !did_full_clear_after_success

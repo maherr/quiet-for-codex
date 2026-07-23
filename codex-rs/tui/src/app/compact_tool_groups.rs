@@ -5,6 +5,8 @@ use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use codex_protocol::parse_command::ParsedCommand;
 use ratatui::prelude::*;
@@ -45,6 +47,34 @@ pub(super) struct CompactToolGroup {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct CompactToolGroupId(usize);
 
+/// Render-local hover state shared by the retained Work headers in one owned pane.
+///
+/// Updating this value does not rebuild or clone the retained transcript. The next requested draw
+/// reads it through each projected cell's `rich_block_style`.
+#[derive(Debug, Default)]
+pub(super) struct CompactToolGroupHover {
+    id: AtomicUsize,
+}
+
+impl CompactToolGroupHover {
+    #[cfg(test)]
+    pub(super) fn hovered(&self) -> Option<CompactToolGroupId> {
+        match self.id.load(Ordering::Relaxed) {
+            0 => None,
+            id => Some(CompactToolGroupId(id)),
+        }
+    }
+
+    pub(super) fn update(&self, hovered: Option<CompactToolGroupId>) -> bool {
+        let next = hovered.map_or(0, |id| id.0);
+        self.id.swap(next, Ordering::Relaxed) != next
+    }
+
+    fn contains(&self, id: CompactToolGroupId) -> bool {
+        self.id.load(Ordering::Relaxed) == id.0
+    }
+}
+
 /// A retained-view projection of adjacent completed tool cells.
 ///
 /// The source cells stay intact for raw mode, transcript overlays, replay, and selection. Rich
@@ -55,6 +85,7 @@ struct CompactToolGroupCell {
     id: CompactToolGroupId,
     source_cells: Vec<Arc<dyn HistoryCell>>,
     expanded: bool,
+    hover: Arc<CompactToolGroupHover>,
 }
 
 impl CompactToolGroupCell {
@@ -62,11 +93,13 @@ impl CompactToolGroupCell {
         id: CompactToolGroupId,
         source_cells: Vec<Arc<dyn HistoryCell>>,
         expanded: bool,
+        hover: Arc<CompactToolGroupHover>,
     ) -> Self {
         Self {
             id,
             source_cells,
             expanded,
+            hover,
         }
     }
 
@@ -92,6 +125,12 @@ impl HistoryCell for CompactToolGroupCell {
         self.expanded_lines(u16::MAX, HistoryRenderMode::Raw)
     }
 
+    fn rich_block_style(&self) -> Option<Style> {
+        self.hover
+            .contains(self.id)
+            .then(crate::style::interactive_hover_style)
+    }
+
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.expanded_lines(width, HistoryRenderMode::Rich)
     }
@@ -111,13 +150,19 @@ pub(super) fn project_owned_cells(
     cells: &[Arc<dyn HistoryCell>],
     compact_tool_groups: bool,
 ) -> Vec<Arc<dyn HistoryCell>> {
-    project_owned_cells_with_expanded(cells, compact_tool_groups, &HashSet::new())
+    project_owned_cells_with_expanded(
+        cells,
+        compact_tool_groups,
+        &HashSet::new(),
+        &Arc::new(CompactToolGroupHover::default()),
+    )
 }
 
 pub(super) fn project_owned_cells_with_expanded(
     cells: &[Arc<dyn HistoryCell>],
     compact_tool_groups: bool,
     expanded_groups: &HashSet<CompactToolGroupId>,
+    hover: &Arc<CompactToolGroupHover>,
 ) -> Vec<Arc<dyn HistoryCell>> {
     if !compact_tool_groups {
         return cells.to_vec();
@@ -134,6 +179,7 @@ pub(super) fn project_owned_cells_with_expanded(
                 id,
                 cells[index..end].to_vec(),
                 expanded,
+                Arc::clone(hover),
             )) as Arc<dyn HistoryCell>);
             if expanded {
                 projected.extend(cells[index..end].iter().cloned());

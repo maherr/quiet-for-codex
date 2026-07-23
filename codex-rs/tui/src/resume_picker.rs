@@ -523,6 +523,7 @@ async fn run_session_picker_with_loader(
                     }
                     TuiEvent::MouseScroll(_)
                     | TuiEvent::MousePrimary(_)
+                    | TuiEvent::MouseMove(_)
                     | TuiEvent::FocusLost => {}
                     TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) => {
                         let list_width = list_viewport_width(screen_size.width);

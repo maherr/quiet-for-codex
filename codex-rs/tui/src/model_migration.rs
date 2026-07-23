@@ -156,6 +156,7 @@ pub(crate) async fn run_model_migration_prompt(
                 TuiEvent::Paste(_)
                 | TuiEvent::MouseScroll(_)
                 | TuiEvent::MousePrimary(_)
+                | TuiEvent::MouseMove(_)
                 | TuiEvent::FocusLost => {}
                 TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) => {
                     let _ = alt.tui.draw(u16::MAX, |frame| {

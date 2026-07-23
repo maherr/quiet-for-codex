@@ -557,6 +557,8 @@ pub enum TuiEvent {
     MouseScroll(MouseScrollEvent),
     /// A primary mouse-button lifecycle event with terminal coordinates.
     MousePrimary(MousePrimaryEvent),
+    /// Mouse movement with terminal coordinates while mouse capture is enabled.
+    MouseMove(MouseMoveEvent),
     /// Notification that the terminal stopped receiving keyboard and mouse input.
     FocusLost,
     /// A terminal size notification and its reported dimensions.
@@ -583,6 +585,12 @@ pub struct MouseScrollEvent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MousePrimaryEvent {
     pub kind: MousePrimaryEventKind,
+    pub column: u16,
+    pub row: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MouseMoveEvent {
     pub column: u16,
     pub row: u16,
 }
