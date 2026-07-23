@@ -147,6 +147,7 @@ jobs:
           python3 scripts/release/test_generate_v8_notices.py
           python3 scripts/release/test_prepare_v8_artifacts.py
           python3 scripts/release/test_finalize_quiet_package.py
+          python3 scripts/release/test_smoke_quiet_package.py
           python3 scripts/release/test_install_sh.py
           python3 scripts/release/test_release_workflow.py
           python3 -m py_compile \
@@ -159,6 +160,7 @@ jobs:
             scripts/release/smoke_quiet_package.py \
             scripts/release/test_generate_v8_notices.py \
             scripts/release/test_prepare_v8_artifacts.py \
+            scripts/release/test_smoke_quiet_package.py \
             scripts/release/test_install_sh.py \
             scripts/release/test_release_workflow.py
           sh -n scripts/release/install.sh
