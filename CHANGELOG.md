@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.145.0-beta.2 - 2026-07-23
+
+### Fixed
+
+- Reduced long-session memory growth by adopting OpenAI Codex's request
+  serialization fix, which avoids cloning the full prior request and current
+  input prefix at every WebSocket tool step.
+- Bounded Quiet's compact tool-output classifier to 256 KiB and stopped
+  materializing full successful outputs when a cell can be rejected before
+  classification.
+
 ## 0.145.0-beta.1 - 2026-07-22
 
 ### Added
