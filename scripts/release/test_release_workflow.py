@@ -274,6 +274,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "test_generate_v8_notices.py",
             "test_prepare_v8_artifacts.py",
             "test_finalize_quiet_package.py",
+            "test_smoke_quiet_package.py",
             "test_install_sh.py",
             "test_release_workflow.py",
             "codex-tui --lib",
