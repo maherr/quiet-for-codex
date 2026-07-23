@@ -59,6 +59,29 @@ pub(crate) struct McpToolCallCell {
 const MCP_VIEWPORT_RESULT_MAX_LINES: usize = 2;
 const MCP_TRANSCRIPT_RESULT_MAX_LINES: usize = 80;
 const TOOL_TRANSCRIPT_HINT: &str = "ctrl + t to view transcript";
+pub(crate) const MAX_TOOL_RESULT_SCAN_BYTES: usize = 256 * 1024;
+
+#[derive(Default)]
+struct BoundedJsonText {
+    bytes: Vec<u8>,
+}
+
+impl std::io::Write for BoundedJsonText {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let Some(next_len) = self.bytes.len().checked_add(buf.len()) else {
+            return Err(std::io::Error::other("tool result scan limit exceeded"));
+        };
+        if next_len > MAX_TOOL_RESULT_SCAN_BYTES {
+            return Err(std::io::Error::other("tool result scan limit exceeded"));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct McpInvocation {
@@ -121,11 +144,19 @@ impl McpToolCallCell {
             return false;
         }
 
-        let mut visible_result = serde_json::to_string(&result.content).unwrap_or_default();
-        if let Some(structured_content) = &result.structured_content {
-            visible_result.push_str(&structured_content.to_string());
+        let mut visible_result = BoundedJsonText::default();
+        if serde_json::to_writer(&mut visible_result, &result.content).is_err() {
+            return false;
         }
-        !tool_result_requires_user_action(&visible_result)
+        if let Some(structured_content) = &result.structured_content
+            && serde_json::to_writer(&mut visible_result, structured_content).is_err()
+        {
+            return false;
+        }
+        let Ok(visible_result) = std::str::from_utf8(&visible_result.bytes) else {
+            return false;
+        };
+        !tool_result_requires_user_action(visible_result)
     }
 
     pub(crate) fn mark_failed(&mut self) {
@@ -343,7 +374,6 @@ impl McpToolCallCell {
 }
 
 pub(crate) fn tool_result_requires_user_action(result: &str) -> bool {
-    let result = result.to_ascii_lowercase();
     [
         "http://",
         "https://",
@@ -361,7 +391,16 @@ pub(crate) fn tool_result_requires_user_action(result: &str) -> bool {
         "visit the following",
     ]
     .iter()
-    .any(|marker| result.contains(marker))
+    .any(|marker| contains_ascii_case_insensitive(result, marker))
+}
+
+pub(crate) fn contains_ascii_case_insensitive(input: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    !needle.is_empty()
+        && input
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 impl HistoryCell for McpToolCallCell {

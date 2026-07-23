@@ -12,16 +12,19 @@ use ratatui::style::Stylize;
 use serde_json::Value;
 
 use crate::chatwidget::ActiveCellDisplaySnapshot;
+use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::compact_command_for_viewport;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
+use crate::history_cell::MAX_TOOL_RESULT_SCAN_BYTES;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PatchHistoryCell;
 use crate::history_cell::ReasoningSummaryCell;
 use crate::history_cell::SelectionContribution;
 use crate::history_cell::WebSearchCell;
+use crate::history_cell::contains_ascii_case_insensitive;
 use crate::history_cell::selection_contribution_from_display_lines;
 use crate::history_cell::tool_result_requires_user_action;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
@@ -29,6 +32,10 @@ use crate::render::line_utils::line_to_static;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
+
+/// Large successful outputs stay expanded instead of being copied and parsed solely to decide
+/// whether they can collapse into a one-line Work summary.
+const MAX_COMPACT_OUTPUT_SCAN_BYTES: usize = MAX_TOOL_RESULT_SCAN_BYTES;
 
 pub(super) struct CompactToolGroup {
     pub(super) lines: Vec<Line<'static>>,
@@ -195,14 +202,11 @@ pub(super) fn compact_active_exec_snapshot(
         }
 
         let output = call.output.as_ref()?;
-        let transcript = output
-            .transcript_lines()
-            .map(std::borrow::Cow::into_owned)
-            .collect::<Vec<_>>()
-            .join("\n");
-        if output.exit_code != 0
-            || successful_output_requires_user_action(&transcript, &call.command)
-        {
+        if output.exit_code != 0 {
+            return None;
+        }
+        let transcript = bounded_transcript_for_compaction(output)?;
+        if successful_output_requires_user_action(&transcript, &call.command) {
             return None;
         }
         if call.parsed.is_empty() {
@@ -471,7 +475,8 @@ pub(super) fn appended_cell_touches_compact_group(
         return false;
     }
 
-    (0..len).rev().any(|start| {
+    let run_start = trailing_compact_tool_run_start(cells);
+    (run_start..len).rev().any(|start| {
         compact_tool_group_at(cells, start, width)
             .is_some_and(|group| start.saturating_add(group.consumed_cells) == len)
     })
@@ -580,14 +585,11 @@ fn exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
     for call in exec.iter_calls() {
         call_count += 1;
         let output = call.output.as_ref()?;
-        let transcript = output
-            .transcript_lines()
-            .map(|line| line.into_owned())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if output.exit_code != 0
-            || successful_output_requires_user_action(&transcript, &call.command)
-        {
+        if output.exit_code != 0 {
+            return None;
+        }
+        let transcript = bounded_transcript_for_compaction(output)?;
+        if successful_output_requires_user_action(&transcript, &call.command) {
             return None;
         }
 
@@ -607,10 +609,34 @@ fn exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
     })
 }
 
+fn bounded_transcript_for_compaction(output: &CommandOutput) -> Option<String> {
+    let mut transcript = String::new();
+    let mut has_line = false;
+    for line in output.transcript_lines() {
+        let separator_bytes = usize::from(has_line);
+        let next_len = transcript
+            .len()
+            .checked_add(separator_bytes)?
+            .checked_add(line.len())?;
+        if next_len > MAX_COMPACT_OUTPUT_SCAN_BYTES {
+            return None;
+        }
+        if has_line {
+            transcript.push('\n');
+        }
+        transcript.push_str(&line);
+        has_line = true;
+    }
+    Some(transcript)
+}
+
 /// Machine-readable command output often contains URL-valued metadata. It is safe to hide those
 /// assignment values when the surrounding output has no action marker, but a bare or prose URL is
 /// still user-facing by default (OAuth/device links are frequently printed without explanation).
 fn successful_output_requires_user_action(output: &str, command: &[String]) -> bool {
+    if !contains_web_url(output) {
+        return tool_result_requires_user_action(output);
+    }
     if web_urls_have_action_markers(output)
         || !(all_web_urls_are_machine_metadata(output)
             || yt_dlp_tsv_urls_are_metadata(output, command))
@@ -718,19 +744,10 @@ fn all_web_urls_are_machine_metadata(input: &str) -> bool {
 }
 
 fn all_web_urls_are_assignment_values(input: &str) -> bool {
-    let lowercase = input.to_ascii_lowercase();
     let mut cursor = 0usize;
     let mut found_url = false;
     while cursor < input.len() {
-        let remaining = &lowercase[cursor..];
-        let next_http = remaining.find("http://");
-        let next_https = remaining.find("https://");
-        let Some(relative_start) = (match (next_http, next_https) {
-            (Some(http), Some(https)) => Some(http.min(https)),
-            (Some(http), None) => Some(http),
-            (None, Some(https)) => Some(https),
-            (None, None) => None,
-        }) else {
+        let Some((relative_start, scheme_len)) = next_web_url(&input[cursor..]) else {
             break;
         };
         found_url = true;
@@ -750,7 +767,7 @@ fn all_web_urls_are_assignment_values(input: &str) -> bool {
         {
             return false;
         }
-        cursor = url_start.saturating_add("https://".len().min(input.len() - url_start));
+        cursor = url_start.saturating_add(scheme_len);
     }
     found_url
 }
@@ -830,40 +847,34 @@ fn safe_metadata_url_key(key: &str) -> bool {
 }
 
 fn contains_web_url(input: &str) -> bool {
-    let input = input.to_ascii_lowercase();
-    input.contains("http://") || input.contains("https://")
+    next_web_url(input).is_some()
 }
 
 fn is_plain_web_url(input: &str) -> bool {
     let input = input.trim();
-    let lowercase = input.to_ascii_lowercase();
     input.split_whitespace().count() == 1
-        && (lowercase.starts_with("http://") || lowercase.starts_with("https://"))
+        && (input
+            .get(.."http://".len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+            || input
+                .get(.."https://".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://")))
 }
 
 fn web_urls_have_action_markers(input: &str) -> bool {
-    let lowercase = input.to_ascii_lowercase();
     let mut cursor = 0usize;
-    while cursor < lowercase.len() {
-        let remaining = &lowercase[cursor..];
-        let next_http = remaining.find("http://");
-        let next_https = remaining.find("https://");
-        let Some(relative_start) = (match (next_http, next_https) {
-            (Some(http), Some(https)) => Some(http.min(https)),
-            (Some(http), None) => Some(http),
-            (None, Some(https)) => Some(https),
-            (None, None) => None,
-        }) else {
+    while cursor < input.len() {
+        let Some((relative_start, _)) = next_web_url(&input[cursor..]) else {
             return false;
         };
         let url_start = cursor.saturating_add(relative_start);
-        let url_end = lowercase[url_start..]
+        let url_end = input[url_start..]
             .char_indices()
             .find_map(|(offset, ch)| {
                 (offset > 0 && is_url_terminator(ch)).then_some(url_start.saturating_add(offset))
             })
-            .unwrap_or(lowercase.len());
-        let url = &lowercase[url_start..url_end];
+            .unwrap_or(input.len());
+        let url = &input[url_start..url_end];
         if [
             "login",
             "sign-in",
@@ -882,7 +893,7 @@ fn web_urls_have_action_markers(input: &str) -> bool {
             "/device",
         ]
         .iter()
-        .any(|marker| url.contains(marker))
+        .any(|marker| contains_ascii_case_insensitive(url, marker))
         {
             return true;
         }
@@ -892,20 +903,11 @@ fn web_urls_have_action_markers(input: &str) -> bool {
 }
 
 fn strip_web_urls(input: &str) -> String {
-    let lowercase = input.to_ascii_lowercase();
     let mut output = String::with_capacity(input.len());
     let mut cursor = 0usize;
 
     while cursor < input.len() {
-        let remaining = &lowercase[cursor..];
-        let next_http = remaining.find("http://");
-        let next_https = remaining.find("https://");
-        let Some(relative_start) = (match (next_http, next_https) {
-            (Some(http), Some(https)) => Some(http.min(https)),
-            (Some(http), None) => Some(http),
-            (None, Some(https)) => Some(https),
-            (None, None) => None,
-        }) else {
+        let Some((relative_start, _)) = next_web_url(&input[cursor..]) else {
             output.push_str(&input[cursor..]);
             break;
         };
@@ -923,6 +925,27 @@ fn strip_web_urls(input: &str) -> String {
     }
 
     output
+}
+
+fn next_web_url(input: &str) -> Option<(usize, usize)> {
+    let http = find_ascii_case_insensitive(input, "http://").map(|index| (index, "http://".len()));
+    let https =
+        find_ascii_case_insensitive(input, "https://").map(|index| (index, "https://".len()));
+    match (http, https) {
+        (Some(http), Some(https)) => Some(if http.0 <= https.0 { http } else { https }),
+        (Some(http), None) => Some(http),
+        (None, Some(https)) => Some(https),
+        (None, None) => None,
+    }
+}
+
+fn find_ascii_case_insensitive(input: &str, needle: &str) -> Option<usize> {
+    let needle = needle.as_bytes();
+    (!needle.is_empty()).then_some(())?;
+    input
+        .as_bytes()
+        .windows(needle.len())
+        .position(|window| window.eq_ignore_ascii_case(needle))
 }
 
 fn is_url_terminator(ch: char) -> bool {
@@ -1339,6 +1362,97 @@ mod tests {
     }
 
     #[test]
+    fn large_exec_output_stays_out_of_compact_work_groups() {
+        let at_limit = completed_command_with_output(
+            "bounded",
+            "generate report",
+            0,
+            "x".repeat(MAX_COMPACT_OUTPUT_SCAN_BYTES),
+        );
+        let bounded_cells = vec![at_limit, completed_read_exec("read-1", "report.txt")];
+        assert!(
+            compact_tool_group_at(&bounded_cells, 0, 100).is_some(),
+            "the byte limit itself should remain eligible"
+        );
+
+        let over_limit = completed_command_with_output(
+            "oversized",
+            "generate report",
+            0,
+            "x".repeat(MAX_COMPACT_OUTPUT_SCAN_BYTES + 1),
+        );
+        let oversized_cells = vec![over_limit, completed_read_exec("read-2", "report.txt")];
+        assert!(
+            compact_tool_group_at(&oversized_cells, 0, 100).is_none(),
+            "oversized output should remain expanded without full classification"
+        );
+
+        let blank_lines = completed_command_with_output(
+            "blank-lines",
+            "generate report",
+            0,
+            "\n".repeat(MAX_COMPACT_OUTPUT_SCAN_BYTES + 2),
+        );
+        let blank_line_cells = vec![blank_lines, completed_read_exec("read-3", "report.txt")];
+        assert!(
+            compact_tool_group_at(&blank_line_cells, 0, 100).is_none(),
+            "oversized blank-line output must count its separators toward the limit"
+        );
+    }
+
+    #[test]
+    fn bounded_exec_transcript_preserves_leading_empty_lines() {
+        let output = CommandOutput::new(/*exit_code*/ 0, "\n\nx".to_string());
+        assert_eq!(
+            bounded_transcript_for_compaction(&output).as_deref(),
+            Some("\n\nx")
+        );
+    }
+
+    #[test]
+    fn action_markers_remain_ascii_case_insensitive_without_lowercase_copies() {
+        assert!(tool_result_requires_user_action(
+            "Please SIGN IN to continue"
+        ));
+        assert!(contains_web_url("Open HTTPS://example.com/device"));
+        assert!(web_urls_have_action_markers(
+            "Open HTTPS://example.com/OAuth/device"
+        ));
+
+        let metadata = completed_command_with_output(
+            "metadata",
+            "fetch artifact",
+            0,
+            "manifest_url=HTTPS://example.com/data".to_string(),
+        );
+        assert!(
+            compact_tool_group_at(
+                &[metadata, completed_read_exec("read-meta", "artifact.json")],
+                0,
+                100
+            )
+            .is_some(),
+            "mixed-case metadata URLs should remain compactable"
+        );
+
+        let action = completed_command_with_output(
+            "action",
+            "service login",
+            0,
+            "OPEN HTTPS://example.com/OAuth/device".to_string(),
+        );
+        assert!(
+            compact_tool_group_at(
+                &[action, completed_read_exec("read-action", "artifact.json")],
+                0,
+                100
+            )
+            .is_none(),
+            "mixed-case action URLs must remain visible"
+        );
+    }
+
+    #[test]
     fn compact_group_summarizes_adjacent_tool_cells() {
         let cells = vec![
             completed_read_exec("read-1", "app.rs"),
@@ -1492,6 +1606,7 @@ mod tests {
             "▸ Work: read 2 files · Alt+I inspect · Alt+O all"
         );
         assert_eq!(trailing_compact_tool_run_start(&cells[..2]), 0);
+        assert!(appended_cell_touches_compact_group(&cells, 120));
 
         let projected = project_owned_cells(&cells, /*compact_tool_groups*/ true);
         assert_eq!(projected.len(), 1);
@@ -1528,6 +1643,7 @@ mod tests {
             2
         );
         assert!(compact_tool_group_at(&cells, 2, 100).is_none());
+        assert!(!appended_cell_touches_compact_group(&cells[..3], 100));
         assert_eq!(
             compact_tool_group_at(&cells, 3, 100)
                 .expect("second compact group")
@@ -1751,6 +1867,51 @@ mod tests {
         ));
         assert!(rendered.contains("Error: permission denied"));
         assert!(rendered.contains("https://example.com/device"));
+    }
+
+    #[test]
+    fn oversized_mcp_results_never_compact() {
+        let oversized_text = completed_mcp_result(
+            "mcp-large-text",
+            "files",
+            "read",
+            Ok(CallToolResult {
+                content: vec![json!({
+                    "type": "text",
+                    "text": "x".repeat(MAX_TOOL_RESULT_SCAN_BYTES)
+                })],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        );
+        let oversized_structured = completed_mcp_result(
+            "mcp-large-structured",
+            "files",
+            "read",
+            Ok(CallToolResult {
+                content: Vec::new(),
+                structured_content: Some(json!({
+                    "payload": "x".repeat(MAX_TOOL_RESULT_SCAN_BYTES)
+                })),
+                is_error: Some(false),
+                meta: None,
+            }),
+        );
+
+        for (index, result) in [oversized_text, oversized_structured]
+            .into_iter()
+            .enumerate()
+        {
+            let cells = vec![
+                result,
+                completed_read_exec(&format!("read-large-{index}"), "result.json"),
+            ];
+            assert!(
+                compact_tool_group_at(&cells, 0, 100).is_none(),
+                "oversized MCP result {index} should remain expanded"
+            );
+        }
     }
 
     #[test]
