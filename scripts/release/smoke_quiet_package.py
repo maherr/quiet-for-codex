@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -31,6 +33,8 @@ DISABLED_DAEMON_ROUTES = (
     ("remote-control", "stop"),
     ("remote-control", "pair"),
 )
+SMOKE_CLEANUP_ATTEMPTS = 20
+SMOKE_CLEANUP_RETRY_SECONDS = 0.25
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,6 +119,27 @@ def extract_archive(archive: Path, destination: Path) -> None:
     raise RuntimeError(f"Unsupported package archive: {archive}")
 
 
+def cleanup_smoke_directory(
+    path: Path,
+    *,
+    attempts: int = SMOKE_CLEANUP_ATTEMPTS,
+    retry_delay_seconds: float = SMOKE_CLEANUP_RETRY_SECONDS,
+) -> None:
+    """Remove a smoke directory after transient executable handles are released."""
+    if attempts < 1:
+        raise ValueError("Smoke cleanup attempts must be positive.")
+    for attempt in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt + 1 == attempts:
+                raise
+            time.sleep(retry_delay_seconds)
+
+
 def smoke_package(args: argparse.Namespace, package_dir: Path) -> None:
     suffix = ".exe" if args.target.endswith("-pc-windows-msvc") else ""
     quiet = package_dir / "bin" / f"codex-quiet{suffix}"
@@ -186,10 +211,12 @@ def main() -> int:
     archive = args.archive.resolve()
     if not archive.is_file():
         raise RuntimeError(f"Package archive does not exist: {archive}")
-    with tempfile.TemporaryDirectory(prefix="codex-quiet-smoke-") as temp_dir:
-        package_dir = Path(temp_dir)
+    package_dir = Path(tempfile.mkdtemp(prefix="codex-quiet-smoke-"))
+    try:
         extract_archive(archive, package_dir)
         smoke_package(args, package_dir)
+    finally:
+        cleanup_smoke_directory(package_dir)
     return 0
 
 
