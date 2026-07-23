@@ -87,10 +87,20 @@ pub fn requery_default_colors() {
     imp::requery_default_colors();
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DefaultColors {
     fg: (u8, u8, u8),
     bg: (u8, u8, u8),
+}
+
+fn merge_default_color_requery(
+    previous: Option<DefaultColors>,
+    fg: Option<(u8, u8, u8)>,
+    bg: Option<(u8, u8, u8)>,
+) -> Option<DefaultColors> {
+    fg.zip(bg)
+        .map(|(fg, bg)| DefaultColors { fg, bg })
+        .or(previous)
 }
 
 pub fn default_colors() -> Option<DefaultColors> {
@@ -186,7 +196,10 @@ mod imp {
                 .ok()
                 .flatten()
                 .and_then(color_to_tuple);
-            cache.value = fg.zip(bg).map(|(fg, bg)| DefaultColors { fg, bg });
+            // OSC 10 and 11 are a single logical palette snapshot. A hidden, detached, or
+            // mid-resize terminal can answer only one query (or time out entirely); that is not
+            // evidence that the last complete palette stopped being valid.
+            cache.value = super::merge_default_color_requery(cache.value, fg, bg);
             cache.attempted = true;
         }
     }
@@ -569,6 +582,50 @@ pub const XTERM_COLORS: [(u8, u8, u8); 256] = [
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn complete_default_color_requery_replaces_the_cached_palette() {
+        let previous = Some(DefaultColors {
+            fg: (1, 2, 3),
+            bg: (4, 5, 6),
+        });
+
+        assert_eq!(
+            merge_default_color_requery(previous, Some((11, 12, 13)), Some((14, 15, 16))),
+            Some(DefaultColors {
+                fg: (11, 12, 13),
+                bg: (14, 15, 16),
+            })
+        );
+    }
+
+    #[test]
+    fn partial_default_color_requery_retains_the_cached_palette() {
+        let previous = Some(DefaultColors {
+            fg: (1, 2, 3),
+            bg: (4, 5, 6),
+        });
+
+        assert_eq!(
+            merge_default_color_requery(previous, Some((11, 12, 13)), None),
+            previous
+        );
+        assert_eq!(
+            merge_default_color_requery(previous, None, Some((14, 15, 16))),
+            previous
+        );
+    }
+
+    #[test]
+    fn failed_default_color_requery_retains_the_cached_palette() {
+        let previous = Some(DefaultColors {
+            fg: (1, 2, 3),
+            bg: (4, 5, 6),
+        });
+
+        assert_eq!(merge_default_color_requery(previous, None, None), previous);
+        assert_eq!(merge_default_color_requery(None, None, None), None);
+    }
 
     #[test]
     fn best_color_uses_truecolor_without_quantization() {
