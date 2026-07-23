@@ -60,6 +60,7 @@ pub(crate) async fn run_update_prompt_if_needed(
                 TuiEvent::Paste(_)
                 | TuiEvent::MouseScroll(_)
                 | TuiEvent::MousePrimary(_)
+                | TuiEvent::MouseMove(_)
                 | TuiEvent::FocusLost => {}
                 TuiEvent::Draw | TuiEvent::Resize => {
                     tui.draw(u16::MAX, |frame| {

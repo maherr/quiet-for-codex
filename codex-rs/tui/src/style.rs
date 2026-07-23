@@ -2,8 +2,10 @@ use crate::color::blend;
 use crate::color::is_light;
 use crate::terminal_palette::StdoutColorLevel;
 use crate::terminal_palette::best_color;
+use crate::terminal_palette::best_color_for_level;
 use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
+use crate::terminal_palette::effective_stdout_color_level;
 use crate::terminal_palette::rgb_color;
 use crate::terminal_palette::stdout_color_level;
 use ratatui::style::Color;
@@ -11,6 +13,8 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 
 const LIGHT_BG_ACCENT_RGB: (u8, u8, u8) = (0, 95, 135);
+const LIGHT_BG_HOVER_ALPHA: f32 = 0.06;
+const DARK_BG_HOVER_ALPHA: f32 = 0.10;
 // Decorative table rules should remain visible without competing with cell content.
 const TABLE_SEPARATOR_FG_ALPHA: f32 = 0.20;
 
@@ -30,6 +34,11 @@ pub(crate) fn table_separator_style() -> Style {
 /// Returns the shared accent style for active or selected TUI controls.
 pub(crate) fn accent_style() -> Style {
     accent_style_for(default_bg())
+}
+
+/// Returns a neutral, theme-aware style for a full-width interactive hover target.
+pub(crate) fn interactive_hover_style() -> Style {
+    interactive_hover_style_for(default_bg(), effective_stdout_color_level())
 }
 
 /// Returns the style for a user-authored message using the provided terminal background.
@@ -53,6 +62,26 @@ pub(crate) fn accent_style_for(terminal_bg: Option<(u8, u8, u8)>) -> Style {
         Style::default().fg(best_color(LIGHT_BG_ACCENT_RGB)).bold()
     } else {
         Style::default().fg(Color::Cyan).bold()
+    }
+}
+
+fn interactive_hover_style_for(
+    terminal_bg: Option<(u8, u8, u8)>,
+    color_level: StdoutColorLevel,
+) -> Style {
+    let Some(bg) = terminal_bg else {
+        return Style::default().reversed();
+    };
+    match color_level {
+        StdoutColorLevel::TrueColor | StdoutColorLevel::Ansi256 => {
+            let (overlay, alpha) = if is_light(bg) {
+                ((0, 0, 0), LIGHT_BG_HOVER_ALPHA)
+            } else {
+                ((255, 255, 255), DARK_BG_HOVER_ALPHA)
+            };
+            Style::default().bg(best_color_for_level(blend(overlay, bg, alpha), color_level))
+        }
+        StdoutColorLevel::Ansi16 | StdoutColorLevel::Unknown => Style::default().reversed(),
     }
 }
 
@@ -111,6 +140,36 @@ mod tests {
 
         assert_eq!(accent_style_for(Some((0, 0, 0))), expected);
         assert_eq!(accent_style_for(/*terminal_bg*/ None), expected);
+    }
+
+    #[test]
+    fn interactive_hover_style_adapts_to_light_and_dark_backgrounds() {
+        assert_eq!(
+            interactive_hover_style_for(Some((255, 255, 255)), StdoutColorLevel::TrueColor,),
+            Style::default().bg(rgb_color((239, 239, 239)))
+        );
+        assert_eq!(
+            interactive_hover_style_for(Some((0, 0, 0)), StdoutColorLevel::TrueColor),
+            Style::default().bg(rgb_color((25, 25, 25)))
+        );
+    }
+
+    #[test]
+    fn interactive_hover_style_reverses_when_background_color_is_unavailable() {
+        let expected = Style::default().reversed();
+
+        assert_eq!(
+            interactive_hover_style_for(/*terminal_bg*/ None, StdoutColorLevel::TrueColor),
+            expected
+        );
+        assert_eq!(
+            interactive_hover_style_for(Some((0, 0, 0)), StdoutColorLevel::Ansi16),
+            expected
+        );
+        assert_eq!(
+            interactive_hover_style_for(Some((255, 255, 255)), StdoutColorLevel::Unknown),
+            expected
+        );
     }
 
     #[test]
