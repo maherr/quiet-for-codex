@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.146.0-beta.2 - 2026-07-29
+
+### Fixed
+
+- Resolved the documented OpenAI Codex base tag from the official upstream
+  repository during release validation, so a clean fork checkout does not
+  depend on upstream tags existing in the fork remote.
+
 ## 0.146.0-beta.1 - 2026-07-29
 
 ### Changed
@@ -11,6 +19,10 @@
   lifecycle cards, and fork safety behavior.
 - Added GitHub Actions build provenance for each platform archive and a
   read-only hosted workflow for generating reviewable TUI snapshot patches.
+
+No release assets were published for beta.1 because its clean hosted checkout
+did not contain the documented upstream tag. Beta.2 supersedes that failed
+attempt.
 
 ## 0.145.0-beta.4 - 2026-07-29
 
