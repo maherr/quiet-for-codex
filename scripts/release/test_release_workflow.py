@@ -494,7 +494,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_readme_visuals_are_repository_native_pngs(self) -> None:
         for asset in (
-            "docs/assets/quiet-work-groups.png",
+            "docs/assets/official-vs-quiet.png",
             "docs/assets/quiet-work-inspect.png",
         ):
             path = REPO_ROOT / asset
