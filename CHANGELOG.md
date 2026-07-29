@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- Added an authentic same-task comparison with official Codex and a concise
+  decision table to make the terminal-interface tradeoffs visible before
+  installation.
+
 ## 0.146.0-beta.2 - 2026-07-29
 
 ### Fixed

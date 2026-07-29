@@ -15,28 +15,33 @@ The current beta is based on upstream [`rust-v0.146.0`](https://github.com/opena
 
 ## See the difference
 
-### Calm by default, loud when it matters
+The comparison below uses identical clones of a disposable demo repository.
+Both runs used the same task constraints, three shell calls, model settings,
+and terminal geometry. It compares completed-work presentation only; both
+captures were taken in alternate-screen mode. It does not claim faster
+execution, fewer tool calls, or lower token use.
 
-Successful exploration folds into one `Work` line. A failed test stays open
-with its exit status and a pointer to the full transcript.
+![Official Codex shows a failed unit test followed by two successful shell calls as separate blocks. Quiet for Codex keeps the failed test visible and folds the two successful calls into one Work row.](docs/assets/official-vs-quiet.png)
 
-![Quiet for Codex keeping a failed test visible while collapsing routine work into one outcome-first line](docs/assets/quiet-work-groups.png)
+Official Codex shows the two routine successes separately. Quiet folds those
+same eligible calls into one `Work` row while keeping the failed test and its
+exit status visible.
 
 ### Exact details on demand
 
-Press `Alt+I` to inspect the latest compact group, including every command,
-output, and duration.
+Nothing is discarded. Click a `Work` row or press `Alt+I` to inspect every
+command, output, and duration. Press `Ctrl+T` to open the complete transcript.
 
 ![Quiet for Codex Last Work view showing the exact commands and outputs behind a compact work group](docs/assets/quiet-work-inspect.png)
 
-Both screenshots come from the Quiet 0.146.0 TUI running against a disposable
-demo repository. No private project or session data is shown.
+All captures use disposable demo data. No private project or session data is
+shown.
 
 ## What changes
 
 - The composer stays pinned to the bottom in an app-owned alternate screen.
-- Successful commands collapse into outcome-first `▸ Work` groups. Failures
-  and results that need action stay expanded.
+- Eligible successful commands collapse into outcome-first `▸ Work` groups.
+  Failures and results that need action stay expanded.
 - A `Work` header expands in place when clicked and collapses when clicked
   again. Dragging from the row still selects text.
 - Background terminals and collaborator fleets render as compact lifecycle
@@ -52,6 +57,21 @@ configuration, sessions, tools, and compatible service access track the
 corresponding upstream Codex CLI release. Binary beta packages omit the
 experimental patched-zsh backend; if that upstream feature is enabled in shared
 configuration, Quiet falls back to the normal user shell.
+
+## Which should I use?
+
+| If you care most about | Official Codex | Quiet for Codex |
+| --- | --- | --- |
+| Official distribution and support | OpenAI release and support channels | Unofficial, community-maintained beta |
+| Long tool-heavy turns | Successful calls remain as individual blocks in the main flow | Eligible successful work folds into outcome-first `Work` rows |
+| Failure visibility | Failed and successful calls use the normal upstream presentation | Failures stay visible while eligible routine success folds |
+| Inspecting details | Inline previews and the complete transcript | Click, `Alt+I`, `Alt+O`, or the complete transcript |
+| Desktop integration and updates | Upstream Desktop handoff and update path, where available | Desktop handoff is disabled and releases use a separate update channel |
+| Trying both | Runs as `codex` | Installs beside it as `codex-quiet` and reuses existing `~/.codex` data |
+
+Choose Quiet if transcript density is the problem you want to solve. Stay with
+official Codex if official distribution, Desktop integration, and immediate
+upstream releases matter more.
 
 ## Install
 
