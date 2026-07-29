@@ -152,7 +152,19 @@ jobs:
             echo "Documented base $documented_release does not match tag base ${version%%-*}." >&2
             exit 1
           fi
-          documented_commit="$(git rev-parse "$documented_release^{commit}")"
+          upstream_remote="https://github.com/openai/codex.git"
+          upstream_refs="$(git ls-remote --exit-code "$upstream_remote" \
+            "refs/tags/$documented_release" \
+            "refs/tags/$documented_release^{}")"
+          direct_upstream_ref="refs/tags/$documented_release"
+          peeled_upstream_ref="refs/tags/$documented_release^{}"
+          direct_upstream_commit="$(awk -v ref="$direct_upstream_ref" '$2 == ref { sha = $1 } END { print sha }' <<< "$upstream_refs")"
+          peeled_upstream_commit="$(awk -v ref="$peeled_upstream_ref" '$2 == ref { sha = $1 } END { print sha }' <<< "$upstream_refs")"
+          documented_commit="${peeled_upstream_commit:-$direct_upstream_commit}"
+          if [[ ! "$documented_commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve documented upstream tag $documented_release." >&2
+            exit 1
+          fi
           if [[ "$documented_commit" != "$upstream_base" ]]; then
             echo "Documented base release and commit do not identify the same upstream source." >&2
             exit 1
