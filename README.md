@@ -11,7 +11,7 @@ scrolling.
 > Codex identify the upstream project and compatible service; they do not imply
 > sponsorship.
 
-The current beta is based on upstream [`rust-v0.145.0`](https://github.com/openai/codex/releases/tag/rust-v0.145.0).
+The current beta is based on upstream [`rust-v0.146.0`](https://github.com/openai/codex/releases/tag/rust-v0.146.0).
 
 ## What changes
 

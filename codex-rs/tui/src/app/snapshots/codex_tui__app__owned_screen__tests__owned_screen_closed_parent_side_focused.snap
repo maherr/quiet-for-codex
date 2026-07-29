@@ -3,12 +3,12 @@ source: tui/src/app/owned_screen_tests.rs
 expression: terminal.backend()
 ---
 " Parent                                  │ Side  ⌥ + 1 / ⌥ + 2 focus               "
-"parent transcript                        ││ model:     loading   /model to change  "
-"                                         │ │                                       "
-"                                         ││ directory: /tmp/project                "
-"                                         │ │                                       "
-"                                         │╰────────────────────────────────────────"
-"                                         │──╯                                      "
+"parent transcript                        │╭───────────────────────────────────────╮"
+"                                         ││ >_ Quiet for Codex (codex-quiet 0.14… │"
+"                                         ││                                       │"
+"                                         ││ model:     loading   /model to change │"
+"                                         ││ directory: /tmp/project               │"
+"                                         │╰───────────────────────────────────────╯"
 "                                         │                                         "
 "                                         │                                         "
 "› Conversation closed.                   │› side draft                             "
