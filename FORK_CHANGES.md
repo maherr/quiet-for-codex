@@ -6,14 +6,14 @@ independent, unofficial fork.
 ## Current upstream base
 
 - Upstream repository: <https://github.com/openai/codex>
-- Base release: `rust-v0.145.0`
-- Base commit: `25af12f7e61572b0bc18ddb1008be543b91519b0`
+- Base release: `rust-v0.146.0`
+- Base commit: `e363b08c9175ac1cbe5893615dd2cb9ddf95043b`
 
 Git history is the authoritative record of modifications. To list every path
 that differs from the current base:
 
 ```shell
-git diff --name-status 25af12f7e61572b0bc18ddb1008be543b91519b0...HEAD
+git diff --name-status e363b08c9175ac1cbe5893615dd2cb9ddf95043b...HEAD
 ```
 
 Unless a file states otherwise, paths in that diff have been modified or added
