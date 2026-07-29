@@ -10,6 +10,8 @@ use pretty_assertions::assert_eq;
 fn fallback_command_selection_excludes_gutters_and_preserves_output_whitespace() {
     let item = ThreadItem::CommandExecution {
         id: "command-1".to_string(),
+        plugin_id: None,
+        script_path: None,
         command: "printf 'x'\nprintf 'y'".to_string(),
         cwd: AbsolutePathBuf::try_from("/workspace")
             .expect("absolute path")

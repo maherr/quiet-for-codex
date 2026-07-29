@@ -75,14 +75,14 @@ fn conversation_sender_envelopes_non_operations_before_thread_binding() {
     let (tx, mut rx) = unbounded_channel();
     let sender = AppEventSender::new(tx).scoped_to_conversation(PaneSlot::Parent);
 
-    sender.send(AppEvent::NewSession);
+    sender.send(AppEvent::NewSession { name: None });
 
     let event = rx.try_recv().expect("conversation event should be sent");
     let AppEvent::FromConversation { target, event } = event else {
         panic!("expected conversation envelope");
     };
     assert_eq!(target.pane, PaneSlot::Parent);
-    assert!(matches!(*event, AppEvent::NewSession));
+    assert!(matches!(*event, AppEvent::NewSession { name: None }));
 }
 
 #[test]
@@ -92,12 +92,12 @@ fn replacement_sender_has_a_new_generation_for_the_same_pane() {
     let stale_sender = sender.scoped_to_conversation(PaneSlot::Parent);
     let replacement_sender = sender.scoped_to_conversation(PaneSlot::Parent);
 
-    stale_sender.send(AppEvent::ClearUi);
-    replacement_sender.send(AppEvent::ClearUi);
+    stale_sender.send(AppEvent::ClearUi { name: None });
+    replacement_sender.send(AppEvent::ClearUi { name: None });
 
     let targets = [rx.try_recv(), rx.try_recv()].map(|event| match event {
         Ok(AppEvent::FromConversation { target, event }) => {
-            assert!(matches!(*event, AppEvent::ClearUi));
+            assert!(matches!(*event, AppEvent::ClearUi { name: None }));
             target
         }
         _ => panic!("expected conversation envelope"),
@@ -158,7 +158,10 @@ fn global_sender_preserves_non_operation_events() {
     let (tx, mut rx) = unbounded_channel();
     let sender = AppEventSender::new(tx);
 
-    sender.send(AppEvent::NewSession);
+    sender.send(AppEvent::NewSession { name: None });
 
-    assert!(matches!(rx.try_recv(), Ok(AppEvent::NewSession)));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::NewSession { name: None })
+    ));
 }

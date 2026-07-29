@@ -253,7 +253,7 @@ impl App {
     }
 
     pub(super) fn active_side_parent_thread_id(&self) -> Option<ThreadId> {
-        self.installed_side_thread_id()
+        self.focused_side_thread_id()
             .and_then(|thread_id| self.side_threads.get(&thread_id))
             .map(|state| state.parent_thread_id)
     }
@@ -551,7 +551,7 @@ impl App {
     pub(super) fn side_start_block_message(&self) -> Option<&'static str> {
         if self.primary_thread_id.is_none() {
             Some(SIDE_MAIN_THREAD_UNAVAILABLE_MESSAGE)
-        } else if self.chat_widget.has_side() {
+        } else if self.active_side_parent_thread_id().is_some() {
             Some(SIDE_ALREADY_OPEN_MESSAGE)
         } else {
             None
