@@ -21,11 +21,38 @@ and terminal geometry. It compares completed-work presentation only; both
 captures were taken in alternate-screen mode. It does not claim faster
 execution, fewer tool calls, or lower token use.
 
-![Official Codex shows a failed unit test followed by two successful shell calls as separate blocks. Quiet for Codex keeps the failed test visible and folds the two successful calls into one Work row.](docs/assets/official-vs-quiet.png)
+### Before: Official Codex
+
+```text
+• Ran python -m unittest -v
+  └ FAILED (failures=1)
+
+• Explored
+  └ List rg --files
+
+• Ran git status --short
+  └ (no output)
+```
+
+### After: Quiet for Codex
+
+```text
+• Ran python -m unittest -v
+  └ FAILED (failures=1)
+    ✗ failed (exit 1)
+      details remain in transcript
+
+▸ Work: listed dir · ran command
+  Alt+I inspect · Alt+O all
+```
 
 Official Codex shows the two routine successes separately. Quiet folds those
 same eligible calls into one `Work` row while keeping the failed test and its
 exit status visible.
+
+### Live TUI capture
+
+![Before, Official Codex shows a failed unit test followed by two successful shell calls as separate blocks. After, Quiet for Codex keeps the failed test visible and folds the two successful calls into one Work row.](docs/assets/official-vs-quiet.png)
 
 ### Exact details on demand
 
