@@ -3965,13 +3965,12 @@ async fn side_start_block_message_allows_replacing_open_side_conversation() {
 
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+    install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
 
-    app.chat_widget.active_thread_id = Some(parent_thread_id);
+    assert!(app.chat_widget.focus(PaneSlot::Parent));
     assert_eq!(app.side_start_block_message(), None);
 
-    app.chat_widget.active_thread_id = Some(side_thread_id);
+    assert!(app.chat_widget.focus(PaneSlot::Side));
     assert_eq!(
         app.side_start_block_message(),
         Some(

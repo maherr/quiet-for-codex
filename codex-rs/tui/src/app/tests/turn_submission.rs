@@ -33,6 +33,7 @@ async fn turn_start_failure_is_shown_without_exiting() -> Result<()> {
         })
         .expect("turn/start failure should be added to history");
     let transcript = app
+        .chat_widget
         .transcript_cells
         .iter()
         .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 80)))
