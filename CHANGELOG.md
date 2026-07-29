@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.146.0-beta.1 - 2026-07-29
+
+### Changed
+
+- Rebased Quiet for Codex on OpenAI Codex 0.146.0 while retaining the
+  app-owned terminal surface, compact work groups, failure visibility,
+  lifecycle cards, and fork safety behavior.
+- Added GitHub Actions build provenance for each platform archive and a
+  read-only hosted workflow for generating reviewable TUI snapshot patches.
+
 ## 0.145.0-beta.4 - 2026-07-29
 
 ### Added
