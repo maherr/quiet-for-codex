@@ -4,9 +4,9 @@
 
 ### Changed
 
-- Added an authentic same-task comparison with official Codex and a concise
-  decision table to make the terminal-interface tradeoffs visible before
-  installation.
+- Added a compact before/after text comparison with explicit timeline length
+  and a concise decision table, making the terminal-interface tradeoffs visible
+  before installation.
 
 ## 0.146.0-beta.2 - 2026-07-29
 
