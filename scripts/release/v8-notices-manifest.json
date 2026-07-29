@@ -103,7 +103,7 @@
     {
       "path": "MODULE.bazel.lock",
       "literals": [
-        "\"abseil-cpp\": \"20250814.1\"",
+        "\"https://bcr.bazel.build/modules/abseil-cpp/20250814.1/MODULE.bazel\"",
         "\"https://bcr.bazel.build/modules/abseil-cpp/20250814.1/source.json\"",
         "\"v8_149.2.0\""
       ]
