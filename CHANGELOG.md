@@ -2,11 +2,19 @@
 
 ## Unreleased
 
+## 0.146.0-beta.3 - 2026-07-29
+
 ### Changed
 
 - Added a compact before/after text comparison with explicit timeline length
   and a concise decision table, making the terminal-interface tradeoffs visible
   before installation.
+
+### Fixed
+
+- Cached retained `Work` summaries and updated trailing groups incrementally,
+  preventing long tool-heavy sessions from repeatedly rescanning prior command
+  output during redraws and tool completion.
 
 ## 0.146.0-beta.2 - 2026-07-29
 
