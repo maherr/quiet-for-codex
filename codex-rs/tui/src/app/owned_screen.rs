@@ -38,6 +38,7 @@ pub(super) struct OwnedScreen {
     compact_tool_groups: bool,
     expanded_tool_groups: HashSet<compact_tool_groups::CompactToolGroupId>,
     tool_group_hover: Arc<compact_tool_groups::CompactToolGroupHover>,
+    trailing_tool_run: Option<compact_tool_groups::TrailingCompactToolRun>,
     pending_tool_group_click: Option<compact_tool_groups::CompactToolGroupId>,
     replay_in_progress: bool,
     last_pane_area: Rect,
@@ -64,6 +65,7 @@ impl OwnedScreen {
             compact_tool_groups: chat_widget.history_render_mode() == HistoryRenderMode::Rich,
             expanded_tool_groups: HashSet::new(),
             tool_group_hover: Arc::new(compact_tool_groups::CompactToolGroupHover::default()),
+            trailing_tool_run: None,
             pending_tool_group_click: None,
             replay_in_progress: false,
             last_pane_area: Rect::default(),
@@ -93,6 +95,9 @@ impl OwnedScreen {
             &self.expanded_tool_groups,
             &self.tool_group_hover,
         );
+        self.trailing_tool_run = compact_tool_groups
+            .then(|| compact_tool_groups::trailing_compact_tool_run(&cells, &projected))
+            .flatten();
         self.source_cells = cells;
         self.compact_tool_groups = compact_tool_groups;
         self.viewport.replace_cells(projected);
@@ -108,41 +113,29 @@ impl OwnedScreen {
         }
 
         if !compact_tool_groups {
+            self.trailing_tool_run = None;
             self.source_cells.push(cell.clone());
             self.viewport.push_cell(cell);
             return;
         }
 
-        let previous_run_start =
-            compact_tool_groups::trailing_compact_tool_run_start(&self.source_cells);
-        let previous_run = &self.source_cells[previous_run_start..];
-        let previous_projection_count = compact_tool_groups::project_owned_cells_with_expanded(
-            previous_run,
-            /*compact*/ true,
+        let reuse_projected_group = !self.viewport.selection_is_active();
+        self.source_cells.push(Arc::clone(&cell));
+        match compact_tool_groups::append_to_trailing_compact_tool_run(
+            &mut self.trailing_tool_run,
+            cell,
             &self.expanded_tool_groups,
             &self.tool_group_hover,
-        )
-        .len();
-
-        self.source_cells.push(cell);
-        let next_run_start =
-            compact_tool_groups::trailing_compact_tool_run_start(&self.source_cells);
-        if next_run_start == self.source_cells.len() {
-            let Some(cell) = self.source_cells.last().cloned() else {
-                return;
-            };
-            self.viewport.push_cell(cell);
-            return;
+            reuse_projected_group,
+        ) {
+            compact_tool_groups::TrailingCompactToolRunUpdate::Push(cell) => {
+                self.viewport.push_cell(cell);
+            }
+            compact_tool_groups::TrailingCompactToolRunUpdate::Replace {
+                remove_count,
+                replacement,
+            } => self.viewport.replace_tail(remove_count, replacement),
         }
-
-        let projected_tail = compact_tool_groups::project_owned_cells_with_expanded(
-            &self.source_cells[next_run_start..],
-            /*compact*/ true,
-            &self.expanded_tool_groups,
-            &self.tool_group_hover,
-        );
-        self.viewport
-            .replace_tail(previous_projection_count, projected_tail);
     }
 
     fn render(
