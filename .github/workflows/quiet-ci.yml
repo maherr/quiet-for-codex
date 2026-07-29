@@ -7,20 +7,86 @@ on:
       - main
       - "tui/quiet-*"
   workflow_dispatch:
+    inputs:
+      refresh_snapshots:
+        description: Generate a reviewed TUI snapshot patch without pushing
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: quiet-ci-${{ github.ref }}
+  group: quiet-ci-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.refresh_snapshots && 'snapshot-refresh' || 'checks' }}
   cancel-in-progress: true
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
+  snapshot-refresh:
+    name: Generate TUI snapshot patch
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_snapshots }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+      - name: Regenerate snapshots
+        working-directory: codex-rs
+        run: |
+          INSTA_UPDATE=always cargo test --locked \
+            --target x86_64-unknown-linux-gnu \
+            -p codex-tui --lib -- --test-threads=1
+      - name: Package source-bound patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' tracked < <(git diff --name-only --no-renames -z)
+          mapfile -d '' untracked < <(git ls-files --others --exclude-standard -z)
+          changed=("${tracked[@]}" "${untracked[@]}")
+          for path in "${changed[@]}"; do
+            case "$path" in
+              codex-rs/*/snapshots/*.snap) ;;
+              *)
+                echo "Snapshot refresh changed a forbidden path: $path" >&2
+                exit 1
+                ;;
+            esac
+          done
+          if [[ "${#untracked[@]}" -gt 0 ]]; then
+            git add -N -- "${untracked[@]}"
+          fi
+          mkdir -p snapshot-refresh
+          git diff --binary -- codex-rs > snapshot-refresh/snapshots.patch
+          printf '%s\n' "$GITHUB_SHA" > snapshot-refresh/source-sha.txt
+          if [[ "${#changed[@]}" -gt 0 ]]; then
+            printf '%s\n' "${changed[@]}" > snapshot-refresh/changed-paths.txt
+          else
+            : > snapshot-refresh/changed-paths.txt
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: quiet-snapshot-refresh-${{ github.sha }}
+          path: snapshot-refresh
+          if-no-files-found: error
+          retention-days: 7
+
   quality:
     name: Format, packaging, and TUI tests
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.refresh_snapshots }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -156,6 +222,7 @@ jobs:
 
   platform-check:
     name: Check ${{ matrix.target }}
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.refresh_snapshots }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:

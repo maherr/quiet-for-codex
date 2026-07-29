@@ -28,6 +28,8 @@ TUI_TOOLTIPS_PATH = REPO_ROOT / "codex-rs" / "tui" / "src" / "tooltips.rs"
 README_PATH = REPO_ROOT / "README.md"
 INSTALL_DOC_PATH = REPO_ROOT / "docs" / "install.md"
 CHANGELOG_PATH = REPO_ROOT / "CHANGELOG.md"
+FORK_CHANGES_PATH = REPO_ROOT / "FORK_CHANGES.md"
+BUG_REPORT_PATH = REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "bug-report.yml"
 INSTALLER_PATHS = (
     REPO_ROOT / "scripts" / "release" / "install.sh",
     POWERSHELL_INSTALLER_PATH,
@@ -62,6 +64,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         cls.tui_tooltips = TUI_TOOLTIPS_PATH.read_text(encoding="utf-8")
         cls.readme = README_PATH.read_text(encoding="utf-8")
         cls.install_doc = INSTALL_DOC_PATH.read_text(encoding="utf-8")
+        cls.fork_changes = FORK_CHANGES_PATH.read_text(encoding="utf-8")
+        cls.bug_report = BUG_REPORT_PATH.read_text(encoding="utf-8")
         changelog = CHANGELOG_PATH.read_text(encoding="utf-8")
         release_heading = re.search(
             r"^## ([0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*) - ",
@@ -133,10 +137,65 @@ class ReleaseWorkflowTests(unittest.TestCase):
             'git merge-base --is-ancestor "$upstream_base" HEAD', validate_job
         )
         self.assertIn(
-            'upstream_base="25af12f7e61572b0bc18ddb1008be543b91519b0"',
+            '"$GITHUB_REF" != "refs/tags/$tag"',
             validate_job,
         )
+        self.assertIn(
+            "This keeps build provenance bound to the packaged tag.",
+            validate_job,
+        )
+        self.assertIn(
+            "sed -nE 's/^- Base release:",
+            validate_job,
+        )
+        self.assertIn("sed -nE 's/^- Base commit:", validate_job)
+        self.assertIn('documented_commit="$(git rev-parse', validate_job)
+        self.assertIn('documented_commit" != "$upstream_base', validate_job)
+        self.assertNotRegex(validate_job, r'upstream_base="[0-9a-f]{40}"')
         self.assertIn("breaks fork provenance", validate_job)
+
+    def test_release_attests_and_verifies_every_archive(self) -> None:
+        action = "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
+        self.assertEqual(self.workflow.count(action), 2)
+        self.assertEqual(self.workflow.count("subject-path: dist/codex-quiet-*"), 2)
+
+        canary = self.workflow.split("  attestation-canary:\n", 1)[1].split(
+            "  validate:\n", 1
+        )[0]
+        self.assertIn("inputs.mode == 'attestation-canary'", canary)
+        self.assertIn("contents: read", canary)
+        self.assertIn("id-token: write", canary)
+        self.assertIn("attestations: write", canary)
+        self.assertIn("--source-digest", canary)
+        self.assertIn("--source-ref", canary)
+        self.assertIn("--deny-self-hosted-runners", canary)
+        self.assertNotIn("contents: write", canary)
+
+        build = self.workflow.split("  build:\n", 1)[1].split("  publish:\n", 1)[0]
+        self.assertIn("contents: read", build)
+        self.assertIn("id-token: write", build)
+        self.assertIn("attestations: write", build)
+        self.assertLess(
+            build.index("Finalize, launch-test, and archive"),
+            build.index("Generate build provenance"),
+        )
+        self.assertLess(
+            build.index("Generate build provenance"),
+            build.index("actions/upload-artifact@"),
+        )
+
+        publish = self.workflow.split("  publish:\n", 1)[1]
+        self.assertIn("attestations: read", publish)
+        self.assertIn('gh attestation verify "dist/$archive"', publish)
+        self.assertIn("--signer-workflow", publish)
+        self.assertIn('--source-digest "$COMMIT"', publish)
+        self.assertIn('--source-ref "$GITHUB_REF"', publish)
+        self.assertIn("--deny-self-hosted-runners", publish)
+        self.assertEqual(self.workflow.count("for attempt in 1 2 3; do"), 2)
+        self.assertIn(
+            "Build provenance did not verify for $archive after three attempts.",
+            publish,
+        )
 
     def test_published_release_is_verified_immutable_without_admin_api(self) -> None:
         self.assertNotIn('"repos/$GITHUB_REPOSITORY/immutable-releases"', self.workflow)
@@ -168,7 +227,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_every_platform_uses_manifest_pinned_v8_archive_and_binding(self) -> None:
         setup_action = "uses: ./.github/actions/setup-rusty-v8"
         self.assertEqual(self.workflow.count(setup_action), 2)
-        self.assertEqual(self.quiet_ci.count(setup_action), 2)
+        self.assertEqual(self.quiet_ci.count(setup_action), 3)
         self.assertIn("prepare_v8_artifacts.py", self.setup_v8_action)
         self.assertIn('--github-env "${GITHUB_ENV}"', self.setup_v8_action)
         self.assertNotIn("rusty_v8_release_${TARGET}.sha256", self.setup_v8_action)
@@ -316,9 +375,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "-p codex-tui --lib -- --test-threads=1"
         )
         for workflow in (self.quiet_ci, self.workflow):
-            tui_step = workflow.split(
-                "      - name: Run TUI library tests\n", 1
-            )[1].split("      - name:", 1)[0]
+            tui_step = workflow.split("      - name: Run TUI library tests\n", 1)[
+                1
+            ].split("      - name:", 1)[0]
             self.assertEqual(tui_step.count(command), 1)
             self.assertNotIn("--skip", tui_step)
 
@@ -340,6 +399,35 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "default_command_popup_items_snapshot",
         ):
             self.assertIn(test_name, self.quiet_ci)
+
+    def test_snapshot_refresh_is_read_only_and_source_bound(self) -> None:
+        refresh = self.quiet_ci.split("  snapshot-refresh:\n", 1)[1].split(
+            "  quality:\n", 1
+        )[0]
+        self.assertIn("inputs.refresh_snapshots", refresh)
+        self.assertIn("contents: read", refresh)
+        self.assertNotIn("contents: write", refresh)
+        self.assertIn("INSTA_UPDATE=always cargo test --locked", refresh)
+        self.assertIn("codex-rs/*/snapshots/*.snap", refresh)
+        self.assertIn("git diff --binary -- codex-rs", refresh)
+        self.assertIn("snapshot-refresh/source-sha.txt", refresh)
+        self.assertIn("quiet-snapshot-refresh-${{ github.sha }}", refresh)
+        self.assertIn("retention-days: 7", refresh)
+        self.assertIn("git diff --name-only --no-renames -z", refresh)
+        self.assertIn("git ls-files --others --exclude-standard -z", refresh)
+        self.assertIn('git add -N -- "${untracked[@]}"', refresh)
+        self.assertNotIn("git status --porcelain", refresh)
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' && inputs.refresh_snapshots "
+            "&& 'snapshot-refresh' || 'checks'",
+            self.quiet_ci,
+        )
+        self.assertEqual(
+            self.quiet_ci.count(
+                "github.event_name != 'workflow_dispatch' || !inputs.refresh_snapshots"
+            ),
+            2,
+        )
 
     def test_windows_installer_is_powershell_51_safe_and_relocatable(self) -> None:
         self.assertEqual(self.powershell_installer.count("-UseBasicParsing"), 3)
@@ -383,6 +471,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 "raw.githubusercontent.com/maherr/quiet-for-codex/main/",
                 documentation,
             )
+        self.assertIn(
+            f"placeholder: codex-quiet {self.release_version}", self.bug_report
+        )
+
+    def test_readme_visuals_are_repository_native_pngs(self) -> None:
+        for asset in (
+            "docs/assets/quiet-work-groups.png",
+            "docs/assets/quiet-work-inspect.png",
+        ):
+            path = REPO_ROOT / asset
+            self.assertIn(f"]({asset})", self.readme)
+            self.assertEqual(path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
 
     def test_manual_install_docs_verify_checksums_on_every_platform(self) -> None:
         for required in (
@@ -390,6 +490,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "command -v sha256sum",
             "shasum -a 256",
             "Get-FileHash -Algorithm SHA256",
+            "gh attestation verify",
+            "--signer-workflow",
+            "--deny-self-hosted-runners",
+            "Together, the checksum command for your platform",
             "A checksum is not a publisher signature",
             "unsigned binary notes",
         ):
