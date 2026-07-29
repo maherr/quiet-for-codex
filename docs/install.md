@@ -9,13 +9,13 @@ their binaries and update channels remain separate.
 ### macOS or Linux
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.4/scripts/release/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.146.0-beta.1/scripts/release/install.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.4/scripts/release/install.ps1)))
+& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.146.0-beta.1/scripts/release/install.ps1)))
 ```
 
 The installers detect the host target, download the matching archive from the
@@ -35,8 +35,8 @@ On Windows, packages live under
 root with `CODEX_QUIET_INSTALL_ROOT`.
 
 To install a specific release instead of the latest beta, set
-`CODEX_QUIET_RELEASE` to a version such as `0.145.0-beta.4`. The Unix installer
-also accepts `--release 0.145.0-beta.4` when downloaded and run as a file.
+`CODEX_QUIET_RELEASE` to a version such as `0.146.0-beta.1`. The Unix installer
+also accepts `--release 0.146.0-beta.1` when downloaded and run as a file.
 
 Run the installed command:
 
@@ -121,9 +121,24 @@ if ($Actual -ne $Expected) {
 Write-Host "Verified $($Archive.Name)"
 ```
 
-This verifies that the archive exactly matches the release's published
-checksum. A checksum is not a publisher signature. The current macOS and
-Windows beta binaries remain unsigned, so also review the
+Each platform archive also has GitHub Actions build provenance. With the
+[GitHub CLI](https://cli.github.com/) installed, replace `PATH_TO_ARCHIVE` with
+the downloaded archive and run:
+
+```shell
+gh attestation verify PATH_TO_ARCHIVE \
+  --repo maherr/quiet-for-codex \
+  --signer-workflow maherr/quiet-for-codex/.github/workflows/quiet-release.yml \
+  --source-ref refs/tags/quiet-v0.146.0-beta.1 \
+  --deny-self-hosted-runners
+```
+
+Together, the checksum command for your platform and `gh attestation verify`
+confirm that the archive exactly matches the release's published checksum and
+that its provenance was signed by the repository's hosted release workflow.
+This does not replace platform signing.
+A checksum is not a publisher signature. The current macOS and Windows beta
+binaries remain unsigned, so also review the
 [unsigned binary notes](../SUPPORT.md#unsigned-beta-binaries).
 
 The package includes `codex-code-mode-host` beside the main executable and
