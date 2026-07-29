@@ -15,55 +15,53 @@ The current beta is based on upstream [`rust-v0.146.0`](https://github.com/opena
 
 ## See the difference
 
-This representative turn has the same tool outcomes in both views: one failed
-test, then routine exploration, an edit, a passing test, a build, a check, and
-a clean status. It compares presentation only, not execution speed, tool count,
-or token use.
+This illustrative turn has the same successful outcomes in both views: inspect
+three files, make three edits, then pass formatting, tests, a release build, and
+a workspace check. It compares presentation only, not execution speed, tool
+count, or token use.
 
-### Before: Official Codex (7 blocks, 15 timeline lines)
+### Before: Official Codex (8 blocks, 16 timeline lines)
 
 ```text
-• Ran python -m unittest -v
-  └ FAILED (failures=1)
-
 • Explored
-  ├ List rg --files
-  ├ Read slugify.py
-  └ Read test_slugify.py
+  ├ Read src/app.rs
+  ├ Read src/keybindings.rs
+  ├ Read tests/keybindings.rs
+  └ Search toggle_panel
 
-• Edited slugify.py
+• Edited src/app.rs
 
-• Ran python -m unittest -v
-  └ Ran 2 tests ... OK
+• Edited src/keybindings.rs
 
-• Ran cargo build
+• Edited tests/keybindings.rs
+
+• Ran cargo fmt --check
+  └ passed
+
+• Ran cargo test -p codex-tui
+  └ 48 passed
+
+• Ran cargo build --release
   └ finished
 
-• Ran cargo check
-  └ finished
-
-• Ran git status --short
-  └ (no output)
+• Ran cargo check --workspace
+  └ passed
 ```
 
-### After: Quiet for Codex (2 rows, 6 timeline lines)
+### After: Quiet for Codex (1 row, 3 timeline lines)
 
 ```text
-• Ran python -m unittest -v
-  └ FAILED (failures=1)
-    ✗ failed (exit 1) · +17 lines in transcript
-
-▸ Work: read 2 files · listed dir · edited 1 file · tests passed
-  build passed · check passed · ran command
+▸ Work: read 3 files · searched · 3 files edited
+  tests passed · build passed · check passed · ran command
   Alt+I inspect · Alt+O all
 ```
 
-That is 60% less vertical timeline for this representative turn. Quiet folds
-eligible successful work into one outcome-first row while the failed test,
-exit status, and transcript pointer stay visible. Click the `Work` row or press
-`Alt+I` for exact commands, outputs, and durations; `Alt+O` temporarily opens
-all groups, and `Ctrl+T` opens the complete transcript. During the turn, the
-composer stays anchored below retained, selectable history.
+That is 81% less vertical timeline for this illustrative turn. Quiet folds
+eligible successful work into one outcome-first row without discarding the
+underlying details. Click the `Work` row or press `Alt+I` for exact commands,
+outputs, and durations; `Alt+O` temporarily opens all groups, and `Ctrl+T`
+opens the complete transcript. During the turn, the composer stays anchored
+below retained, selectable history.
 
 ## What changes
 
