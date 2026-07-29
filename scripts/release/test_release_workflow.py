@@ -494,9 +494,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_readme_has_compact_before_after_comparison(self) -> None:
         for text in (
-            "Before: Official Codex (7 blocks, 15 timeline lines)",
-            "After: Quiet for Codex (2 rows, 6 timeline lines)",
-            "That is 60% less vertical timeline",
+            "Before: Official Codex (8 blocks, 16 timeline lines)",
+            "After: Quiet for Codex (1 row, 3 timeline lines)",
+            "That is 81% less vertical timeline",
             "Alt+I inspect",
             "Alt+O all",
             "Ctrl+T",
