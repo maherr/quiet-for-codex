@@ -13,6 +13,25 @@ scrolling.
 
 The current beta is based on upstream [`rust-v0.146.0`](https://github.com/openai/codex/releases/tag/rust-v0.146.0).
 
+## See the difference
+
+### Calm by default, loud when it matters
+
+Successful exploration folds into one `Work` line. A failed test stays open
+with its exit status and a pointer to the full transcript.
+
+![Quiet for Codex keeping a failed test visible while collapsing routine work into one outcome-first line](docs/assets/quiet-work-groups.png)
+
+### Exact details on demand
+
+Press `Alt+I` to inspect the latest compact group, including every command,
+output, and duration.
+
+![Quiet for Codex Last Work view showing the exact commands and outputs behind a compact work group](docs/assets/quiet-work-inspect.png)
+
+Both screenshots come from the Quiet 0.146.0 TUI running against a disposable
+demo repository. No private project or session data is shown.
+
 ## What changes
 
 - The composer stays pinned to the bottom in an app-owned alternate screen.
@@ -42,13 +61,13 @@ replace or remove a `codex` command you already have.
 ### macOS or Linux
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.4/scripts/release/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.146.0-beta.1/scripts/release/install.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.145.0-beta.4/scripts/release/install.ps1)))
+& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v0.146.0-beta.1/scripts/release/install.ps1)))
 ```
 
 The installers select the matching archive from the newest Quiet for Codex
@@ -56,7 +75,7 @@ entry on the
 [GitHub releases page](https://github.com/maherr/quiet-for-codex/releases),
 verify its published SHA-256 checksum, and install a user-local command. See
 [Installing and building](docs/install.md) for manual installation, exact
-paths, checksum verification, and source builds.
+paths, checksum and build-provenance verification, and source builds.
 
 Release binaries are not yet Apple-notarized or Windows code-signed. See the
 [platform notes](SUPPORT.md#unsigned-beta-binaries) before installing on those
