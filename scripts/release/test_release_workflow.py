@@ -492,14 +492,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
             f"placeholder: codex-quiet {self.release_version}", self.bug_report
         )
 
-    def test_readme_visuals_are_repository_native_pngs(self) -> None:
-        for asset in (
-            "docs/assets/official-vs-quiet.png",
-            "docs/assets/quiet-work-inspect.png",
+    def test_readme_has_compact_before_after_comparison(self) -> None:
+        for text in (
+            "Before: Official Codex (7 blocks, 15 timeline lines)",
+            "After: Quiet for Codex (2 rows, 6 timeline lines)",
+            "That is 60% less vertical timeline",
+            "Alt+I inspect",
+            "Alt+O all",
+            "Ctrl+T",
         ):
-            path = REPO_ROOT / asset
-            self.assertIn(f"]({asset})", self.readme)
-            self.assertEqual(path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertIn(text, self.readme)
+        self.assertNotIn("official-vs-quiet.png", self.readme)
 
     def test_manual_install_docs_verify_checksums_on_every_platform(self) -> None:
         for required in (

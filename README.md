@@ -15,54 +15,55 @@ The current beta is based on upstream [`rust-v0.146.0`](https://github.com/opena
 
 ## See the difference
 
-The comparison below uses identical clones of a disposable demo repository.
-Both runs used the same task constraints, three shell calls, model settings,
-and terminal geometry. It compares completed-work presentation only; both
-captures were taken in alternate-screen mode. It does not claim faster
-execution, fewer tool calls, or lower token use.
+This representative turn has the same tool outcomes in both views: one failed
+test, then routine exploration, an edit, a passing test, a build, a check, and
+a clean status. It compares presentation only, not execution speed, tool count,
+or token use.
 
-### Before: Official Codex
+### Before: Official Codex (7 blocks, 15 timeline lines)
 
 ```text
 • Ran python -m unittest -v
   └ FAILED (failures=1)
 
 • Explored
-  └ List rg --files
+  ├ List rg --files
+  ├ Read slugify.py
+  └ Read test_slugify.py
+
+• Edited slugify.py
+
+• Ran python -m unittest -v
+  └ Ran 2 tests ... OK
+
+• Ran cargo build
+  └ finished
+
+• Ran cargo check
+  └ finished
 
 • Ran git status --short
   └ (no output)
 ```
 
-### After: Quiet for Codex
+### After: Quiet for Codex (2 rows, 6 timeline lines)
 
 ```text
 • Ran python -m unittest -v
   └ FAILED (failures=1)
-    ✗ failed (exit 1)
-      details remain in transcript
+    ✗ failed (exit 1) · +17 lines in transcript
 
-▸ Work: listed dir · ran command
+▸ Work: read 2 files · listed dir · edited 1 file · tests passed
+  build passed · check passed · ran command
   Alt+I inspect · Alt+O all
 ```
 
-Official Codex shows the two routine successes separately. Quiet folds those
-same eligible calls into one `Work` row while keeping the failed test and its
-exit status visible.
-
-### Live TUI capture
-
-![Before, Official Codex shows a failed unit test followed by two successful shell calls as separate blocks. After, Quiet for Codex keeps the failed test visible and folds the two successful calls into one Work row.](docs/assets/official-vs-quiet.png)
-
-### Exact details on demand
-
-Nothing is discarded. Click a `Work` row or press `Alt+I` to inspect every
-command, output, and duration. Press `Ctrl+T` to open the complete transcript.
-
-![Quiet for Codex Last Work view showing the exact commands and outputs behind a compact work group](docs/assets/quiet-work-inspect.png)
-
-All captures use disposable demo data. No private project or session data is
-shown.
+That is 60% less vertical timeline for this representative turn. Quiet folds
+eligible successful work into one outcome-first row while the failed test,
+exit status, and transcript pointer stay visible. Click the `Work` row or press
+`Alt+I` for exact commands, outputs, and durations; `Alt+O` temporarily opens
+all groups, and `Ctrl+T` opens the complete transcript. During the turn, the
+composer stays anchored below retained, selectable history.
 
 ## What changes
 
