@@ -149,7 +149,24 @@ class ReleaseWorkflowTests(unittest.TestCase):
             validate_job,
         )
         self.assertIn("sed -nE 's/^- Base commit:", validate_job)
-        self.assertIn('documented_commit="$(git rev-parse', validate_job)
+        self.assertIn(
+            'upstream_remote="https://github.com/openai/codex.git"', validate_job
+        )
+        self.assertIn(
+            'upstream_refs="$(git ls-remote --exit-code "$upstream_remote"',
+            validate_job,
+        )
+        self.assertIn(
+            'direct_upstream_ref="refs/tags/$documented_release"', validate_job
+        )
+        self.assertIn(
+            'peeled_upstream_ref="refs/tags/$documented_release^{}"', validate_job
+        )
+        self.assertIn(
+            'documented_commit="${peeled_upstream_commit:-$direct_upstream_commit}"',
+            validate_job,
+        )
+        self.assertNotIn('git rev-parse "$documented_release^{commit}"', validate_job)
         self.assertIn('documented_commit" != "$upstream_base', validate_job)
         self.assertNotRegex(validate_job, r'upstream_base="[0-9a-f]{40}"')
         self.assertIn("breaks fork provenance", validate_job)
