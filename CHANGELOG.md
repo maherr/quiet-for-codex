@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.145.0-beta.4 - 2026-07-29
+
 ### Added
 
 - Added theme-aware, full-row hover feedback for clickable `Work` group headers.
