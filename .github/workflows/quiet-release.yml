@@ -6,9 +6,17 @@ on:
       - "quiet-v*"
   workflow_dispatch:
     inputs:
+      mode:
+        description: Run a release or a non-release attestation canary
+        required: true
+        default: release
+        type: choice
+        options:
+          - release
+          - attestation-canary
       tag:
         description: Existing quiet-v tag to package
-        required: true
+        required: false
         type: string
 
 permissions:
@@ -21,8 +29,54 @@ env:
   CARGO_PROFILE_RELEASE_DEBUG: "none"
 
 jobs:
+  attestation-canary:
+    name: Provenance attestation canary
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'attestation-canary'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Create source-bound canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          printf 'source=%s\n' "$GITHUB_SHA" \
+            > "dist/codex-quiet-attestation-canary-$GITHUB_SHA.txt"
+      - name: Attest canary
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: dist/codex-quiet-*
+      - name: Verify canary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact="dist/codex-quiet-attestation-canary-$GITHUB_SHA.txt"
+          signer="$GITHUB_REPOSITORY/.github/workflows/quiet-release.yml"
+          for attempt in 1 2 3; do
+            if gh attestation verify "$artifact" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$signer" \
+              --source-digest "$GITHUB_SHA" \
+              --source-ref "$GITHUB_REF" \
+              --deny-self-hosted-runners >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Canary attestation did not verify after three attempts" >&2
+          exit 1
+
   validate:
     name: Validate release tag
+    if: github.event_name != 'workflow_dispatch' || inputs.mode == 'release'
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
@@ -44,6 +98,12 @@ jobs:
           tag="$REQUESTED_TAG"
           if [[ ! "$tag" =~ ^quiet-v([0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*)$ ]]; then
             echo "Invalid Quiet release tag: $tag" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
+                "$GITHUB_REF" != "refs/tags/$tag" ]]; then
+            echo "Manual release dispatch must run from refs/tags/$tag." >&2
+            echo "This keeps build provenance bound to the packaged tag." >&2
             exit 1
           fi
           version="${BASH_REMATCH[1]}"
@@ -76,7 +136,27 @@ jobs:
             echo "Tag version $version does not match first released CHANGELOG version $changelog_version" >&2
             exit 1
           fi
-          upstream_base="25af12f7e61572b0bc18ddb1008be543b91519b0"
+          mapfile -t documented_releases < <(
+            sed -nE 's/^- Base release: `(rust-v[0-9]+\.[0-9]+\.[0-9]+)`$/\1/p' FORK_CHANGES.md
+          )
+          mapfile -t upstream_bases < <(
+            sed -nE 's/^- Base commit: `([0-9a-f]{40})`$/\1/p' FORK_CHANGES.md
+          )
+          if [[ "${#documented_releases[@]}" -ne 1 || "${#upstream_bases[@]}" -ne 1 ]]; then
+            echo "FORK_CHANGES.md must contain one canonical base release and commit." >&2
+            exit 1
+          fi
+          documented_release="${documented_releases[0]}"
+          upstream_base="${upstream_bases[0]}"
+          if [[ "$documented_release" != "rust-v${version%%-*}" ]]; then
+            echo "Documented base $documented_release does not match tag base ${version%%-*}." >&2
+            exit 1
+          fi
+          documented_commit="$(git rev-parse "$documented_release^{commit}")"
+          if [[ "$documented_commit" != "$upstream_base" ]]; then
+            echo "Documented base release and commit do not identify the same upstream source." >&2
+            exit 1
+          fi
           if ! git merge-base --is-ancestor "$upstream_base" HEAD; then
             echo "Documented upstream base $upstream_base is not an ancestor of the release." >&2
             echo "Refusing a root, squash, or history rewrite that breaks fork provenance." >&2
@@ -309,6 +389,10 @@ jobs:
       - verify
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     env:
       CODEX_QUIET_VERSION: ${{ needs.validate.outputs.version }}
       CODEX_QUIET_DISPLAY_VERSION: codex-quiet ${{ needs.validate.outputs.version }}
@@ -458,6 +542,10 @@ jobs:
               QUIET_INSTALL_TEST_VERSION="$VERSION" \
               "$python_bin" scripts/release/test_install_sh.py
           fi
+      - name: Generate build provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: dist/codex-quiet-*
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: quiet-release-${{ matrix.target }}
@@ -472,6 +560,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      attestations: read
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -481,6 +570,7 @@ jobs:
       - name: Write checksums and release notes
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.validate.outputs.tag }}
           VERSION: ${{ needs.validate.outputs.version }}
           COMMIT: ${{ needs.validate.outputs.commit }}
@@ -508,6 +598,26 @@ jobs:
             printf 'Actual:   %s\n' "${actual[*]}" >&2
             exit 1
           fi
+          signer="$GITHUB_REPOSITORY/.github/workflows/quiet-release.yml"
+          for archive in "${expected[@]}"; do
+            verified=0
+            for attempt in 1 2 3; do
+              if gh attestation verify "dist/$archive" \
+                --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$signer" \
+                --source-digest "$COMMIT" \
+                --source-ref "$GITHUB_REF" \
+                --deny-self-hosted-runners >/dev/null; then
+                verified=1
+                break
+              fi
+              [[ "$attempt" == 3 ]] || sleep 5
+            done
+            if (( verified == 0 )); then
+              echo "Build provenance did not verify for $archive after three attempts." >&2
+              exit 1
+            fi
+          done
           (
             cd dist
             sha256sum "${expected[@]}" | sort -k2 > SHA256SUMS
@@ -517,7 +627,8 @@ jobs:
             printf '%s\n' 'Quiet for Codex is an unofficial community fork of OpenAI Codex CLI.'
             printf '%s\n' ''
             printf '%s\n' 'This beta includes native packages for Linux, macOS, and Windows on x86_64 and arm64.'
-            printf '%s\n' 'This beta adds theme-aware hover feedback on clickable Work group headers and keeps adaptive terminal colors stable when a focus-time palette requery fails.'
+            printf '%s\n' 'This beta updates the fork to OpenAI Codex 0.146.0 while preserving the retained Quiet terminal interface and safety behavior.'
+            printf '%s\n' 'Each archive has GitHub Actions build provenance. This does not replace Apple notarization or Windows code signing.'
             printf '%s\n' 'Restart existing Quiet sessions after installing so they use the new binary.'
             printf '%s\n' 'The macOS and Windows binaries are unsigned. Review the repository security notes before installing.'
             printf '%s\n' ''
