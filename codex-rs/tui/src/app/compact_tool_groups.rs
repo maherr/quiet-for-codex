@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -39,9 +40,24 @@ use crate::wrapping::adaptive_wrap_line;
 /// whether they can collapse into a one-line Work summary.
 const MAX_COMPACT_OUTPUT_SCAN_BYTES: usize = MAX_TOOL_RESULT_SCAN_BYTES;
 
+#[cfg(test)]
+std::thread_local! {
+    static COMPACT_OUTPUT_SCAN_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static COMPACT_PRESENTATION_RENDER_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
 pub(super) struct CompactToolGroup {
     pub(super) lines: Vec<Line<'static>>,
     pub(super) consumed_cells: usize,
+}
+
+struct CompactToolGroupAnalysis {
+    detail: String,
+    consumed_cells: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -77,48 +93,83 @@ impl CompactToolGroupHover {
 
 /// A retained-view projection of adjacent completed tool cells.
 ///
-/// The source cells stay intact for raw mode, transcript overlays, replay, and selection. Rich
-/// owned-screen rendering asks the group to recompute its one-line summary at the current width,
-/// so terminal resize does not require flattening the transcript into cached rows.
+/// The source cells stay intact for raw mode, transcript overlays, replay, and selection. The
+/// semantic summary is computed when the projection changes, and its wrapped presentation is
+/// cached by width so ordinary draws never rescan tool output.
 #[derive(Debug)]
 struct CompactToolGroupCell {
     id: CompactToolGroupId,
-    source_cells: Vec<Arc<dyn HistoryCell>>,
     expanded: bool,
     hover: Arc<CompactToolGroupHover>,
+    state: Mutex<CompactToolGroupCellState>,
+}
+
+#[derive(Debug)]
+struct CompactToolGroupCellState {
+    source_cells: Vec<Arc<dyn HistoryCell>>,
+    detail: String,
+    display_cache: Option<(u16, Vec<Line<'static>>)>,
 }
 
 impl CompactToolGroupCell {
     fn new(
         id: CompactToolGroupId,
         source_cells: Vec<Arc<dyn HistoryCell>>,
+        detail: String,
         expanded: bool,
         hover: Arc<CompactToolGroupHover>,
     ) -> Self {
         Self {
             id,
-            source_cells,
             expanded,
             hover,
+            state: Mutex::new(CompactToolGroupCellState {
+                source_cells,
+                detail,
+                display_cache: None,
+            }),
         }
     }
 
     fn expanded_lines(&self, width: u16, mode: HistoryRenderMode) -> Vec<Line<'static>> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         render_transcript_lines(
-            &self.source_cells,
+            &state.source_cells,
             width,
             mode,
             /*compact_tool_groups*/ false,
             /*row_cap*/ None,
         )
     }
+
+    fn append_source(&self, source: Arc<dyn HistoryCell>, detail: String) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.source_cells.push(source);
+        state.detail = detail;
+        state.display_cache = None;
+    }
 }
 
 impl HistoryCell for CompactToolGroupCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        compact_tool_group_at_with_state(&self.source_cells, /*start*/ 0, width, self.expanded)
-            .map(|group| group.lines)
-            .unwrap_or_else(|| self.expanded_lines(width, HistoryRenderMode::Rich))
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((cached_width, lines)) = state.display_cache.as_ref()
+            && *cached_width == width
+        {
+            return lines.clone();
+        }
+        let lines = render_compact_tool_group_lines(&state.detail, width, self.expanded);
+        state.display_cache = Some((width, lines.clone()));
+        lines
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -171,13 +222,14 @@ pub(super) fn project_owned_cells_with_expanded(
     let mut projected = Vec::with_capacity(cells.len());
     let mut index = 0usize;
     while index < cells.len() {
-        if let Some(group) = compact_tool_group_at(cells, index, /*width*/ u16::MAX) {
+        if let Some(group) = analyze_compact_tool_group_at(cells, index) {
             let end = index.saturating_add(group.consumed_cells).min(cells.len());
             let id = compact_tool_group_id(&cells[index]);
             let expanded = expanded_groups.contains(&id);
             projected.push(Arc::new(CompactToolGroupCell::new(
                 id,
                 cells[index..end].to_vec(),
+                group.detail,
                 expanded,
                 Arc::clone(hover),
             )) as Arc<dyn HistoryCell>);
@@ -337,6 +389,175 @@ pub(super) fn trailing_compact_tool_run_start(cells: &[Arc<dyn HistoryCell>]) ->
     start
 }
 
+pub(super) enum TrailingCompactToolRunUpdate {
+    Push(Arc<dyn HistoryCell>),
+    Replace {
+        remove_count: usize,
+        replacement: Vec<Arc<dyn HistoryCell>>,
+    },
+}
+
+pub(super) struct TrailingCompactToolRun {
+    source_cells: Vec<Arc<dyn HistoryCell>>,
+    summary: ToolGroupSummary,
+    tool_cells: usize,
+    collapse_single: bool,
+    projected_group: Option<Arc<dyn HistoryCell>>,
+}
+
+impl TrailingCompactToolRun {
+    fn detail(&self) -> Option<String> {
+        if self.tool_cells == 0 || (self.tool_cells == 1 && !self.collapse_single) {
+            return None;
+        }
+        let detail = self.summary.parts().join(" · ");
+        (!detail.is_empty()).then_some(detail)
+    }
+
+    fn projected_count(&self, expanded_groups: &HashSet<CompactToolGroupId>) -> usize {
+        if self.detail().is_none() {
+            return self.source_cells.len();
+        }
+        if expanded_groups.contains(&self.id()) {
+            self.source_cells.len().saturating_add(1)
+        } else {
+            1
+        }
+    }
+
+    fn id(&self) -> CompactToolGroupId {
+        compact_tool_group_id(&self.source_cells[0])
+    }
+
+    fn bind_projected_group(&mut self, projected: &[Arc<dyn HistoryCell>]) {
+        if self.detail().is_none() {
+            self.projected_group = None;
+            return;
+        }
+        let id = self.id();
+        self.projected_group = projected
+            .iter()
+            .rev()
+            .find(|cell| {
+                cell.as_any()
+                    .downcast_ref::<CompactToolGroupCell>()
+                    .is_some_and(|group| group.id == id)
+            })
+            .cloned();
+    }
+
+    fn replace_projection(
+        &mut self,
+        detail: String,
+        appended_cell: Arc<dyn HistoryCell>,
+        expanded_groups: &HashSet<CompactToolGroupId>,
+        hover: &Arc<CompactToolGroupHover>,
+        reuse_projected_group: bool,
+    ) -> Vec<Arc<dyn HistoryCell>> {
+        let group = if reuse_projected_group
+            && let Some(group) = self.projected_group.as_ref()
+            && let Some(compact) = group.as_any().downcast_ref::<CompactToolGroupCell>()
+        {
+            compact.append_source(appended_cell, detail);
+            Arc::clone(group)
+        } else {
+            Arc::new(CompactToolGroupCell::new(
+                self.id(),
+                self.source_cells.clone(),
+                detail,
+                expanded_groups.contains(&self.id()),
+                Arc::clone(hover),
+            )) as Arc<dyn HistoryCell>
+        };
+        self.projected_group = Some(Arc::clone(&group));
+
+        let mut replacement = vec![group];
+        if expanded_groups.contains(&self.id()) {
+            replacement.extend(self.source_cells.iter().cloned());
+        }
+        replacement
+    }
+}
+
+pub(super) fn trailing_compact_tool_run(
+    cells: &[Arc<dyn HistoryCell>],
+    projected: &[Arc<dyn HistoryCell>],
+) -> Option<TrailingCompactToolRun> {
+    let mut entries = Vec::new();
+    for cell in cells.iter().rev() {
+        if let Some(item) = tool_group_item(cell.as_ref()) {
+            entries.push((Arc::clone(cell), Some(item)));
+        } else if is_transparent_tool_group_cell(cell.as_ref()) {
+            entries.push((Arc::clone(cell), None));
+        } else {
+            break;
+        }
+    }
+    entries.reverse();
+
+    let first_tool = entries.iter().position(|(_, item)| item.is_some())?;
+    let mut run = TrailingCompactToolRun {
+        source_cells: Vec::with_capacity(entries.len().saturating_sub(first_tool)),
+        summary: ToolGroupSummary::default(),
+        tool_cells: 0,
+        collapse_single: false,
+        projected_group: None,
+    };
+    for (cell, item) in entries.into_iter().skip(first_tool) {
+        run.source_cells.push(cell);
+        if let Some(item) = item {
+            run.summary.merge(item.summary);
+            run.tool_cells += 1;
+            run.collapse_single |= item.collapse_single;
+        }
+    }
+    run.bind_projected_group(projected);
+    Some(run)
+}
+
+pub(super) fn append_to_trailing_compact_tool_run(
+    run: &mut Option<TrailingCompactToolRun>,
+    cell: Arc<dyn HistoryCell>,
+    expanded_groups: &HashSet<CompactToolGroupId>,
+    hover: &Arc<CompactToolGroupHover>,
+    reuse_projected_group: bool,
+) -> TrailingCompactToolRunUpdate {
+    let item = tool_group_item(cell.as_ref());
+    let transparent = item.is_none() && is_transparent_tool_group_cell(cell.as_ref());
+    if item.is_none() && !transparent {
+        *run = None;
+        return TrailingCompactToolRunUpdate::Push(cell);
+    }
+    if run.is_none() && transparent {
+        return TrailingCompactToolRunUpdate::Push(cell);
+    }
+
+    let run = run.get_or_insert_with(|| TrailingCompactToolRun {
+        source_cells: Vec::new(),
+        summary: ToolGroupSummary::default(),
+        tool_cells: 0,
+        collapse_single: false,
+        projected_group: None,
+    });
+    let remove_count = run.projected_count(expanded_groups);
+    run.source_cells.push(Arc::clone(&cell));
+    if let Some(item) = item {
+        run.summary.merge(item.summary);
+        run.tool_cells += 1;
+        run.collapse_single |= item.collapse_single;
+    }
+
+    let Some(detail) = run.detail() else {
+        return TrailingCompactToolRunUpdate::Push(cell);
+    };
+    let replacement =
+        run.replace_projection(detail, cell, expanded_groups, hover, reuse_projected_group);
+    TrailingCompactToolRunUpdate::Replace {
+        remove_count,
+        replacement,
+    }
+}
+
 #[derive(Default)]
 struct ToolGroupItem {
     summary: ToolGroupSummary,
@@ -458,6 +679,17 @@ fn compact_tool_group_at_with_state(
     width: u16,
     expanded: bool,
 ) -> Option<CompactToolGroup> {
+    let analysis = analyze_compact_tool_group_at(cells, start)?;
+    Some(CompactToolGroup {
+        lines: render_compact_tool_group_lines(&analysis.detail, width, expanded),
+        consumed_cells: analysis.consumed_cells,
+    })
+}
+
+fn analyze_compact_tool_group_at(
+    cells: &[Arc<dyn HistoryCell>],
+    start: usize,
+) -> Option<CompactToolGroupAnalysis> {
     let mut summary = ToolGroupSummary::default();
     let mut consumed_cells = 0usize;
     let mut tool_cells = 0usize;
@@ -482,34 +714,38 @@ fn compact_tool_group_at_with_state(
         return None;
     }
 
-    let parts = summary.parts();
-    if parts.is_empty() {
+    let detail = summary.parts().join(" · ");
+    if detail.is_empty() {
         return None;
     }
 
-    let detail = parts.join(" · ");
+    Some(CompactToolGroupAnalysis {
+        detail,
+        consumed_cells,
+    })
+}
+
+fn render_compact_tool_group_lines(detail: &str, width: u16, expanded: bool) -> Vec<Line<'static>> {
+    #[cfg(test)]
+    COMPACT_PRESENTATION_RENDER_COUNT.with(|count| count.set(count.get() + 1));
+
     let line = Line::from(vec![
         (if expanded { "▾ " } else { "▸ " }).dim(),
         "Work".bold(),
         ": ".dim(),
-        detail.into(),
+        detail.to_string().into(),
         " · ".dim(),
         "Alt+I inspect · Alt+O all".dim(),
     ]);
-    let wrapped = adaptive_wrap_line(
+    adaptive_wrap_line(
         &line,
         RtOptions::new(usize::from(width.max(1)))
             .initial_indent(Line::from(""))
             .subsequent_indent(Line::from("  ")),
-    );
-
-    Some(CompactToolGroup {
-        lines: wrapped
-            .into_iter()
-            .map(|line| line_to_static(&line))
-            .collect(),
-        consumed_cells,
-    })
+    )
+    .into_iter()
+    .map(|line| line_to_static(&line))
+    .collect()
 }
 
 pub(super) fn appended_cell_touches_compact_group(
@@ -656,6 +892,9 @@ fn exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
 }
 
 fn bounded_transcript_for_compaction(output: &CommandOutput) -> Option<String> {
+    #[cfg(test)]
+    COMPACT_OUTPUT_SCAN_COUNT.with(|count| count.set(count.get() + 1));
+
     let mut transcript = String::new();
     let mut has_line = false;
     for line in output.transcript_lines() {
@@ -1407,6 +1646,35 @@ mod tests {
         Arc::new(new_patch_event(changes, Path::new("/repo")))
     }
 
+    fn apply_trailing_update(
+        projected: &mut Vec<Arc<dyn HistoryCell>>,
+        update: TrailingCompactToolRunUpdate,
+    ) {
+        match update {
+            TrailingCompactToolRunUpdate::Push(cell) => projected.push(cell),
+            TrailingCompactToolRunUpdate::Replace {
+                remove_count,
+                replacement,
+            } => {
+                projected.truncate(projected.len().saturating_sub(remove_count));
+                projected.extend(replacement);
+            }
+        }
+    }
+
+    fn projection_signature(cells: &[Arc<dyn HistoryCell>]) -> Vec<(String, String, String)> {
+        cells
+            .iter()
+            .map(|cell| {
+                (
+                    render_lines_text(&cell.display_lines(/*width*/ 88)),
+                    render_lines_text(&cell.raw_lines()),
+                    render_lines_text(&cell.transcript_lines(/*width*/ 88)),
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn large_exec_output_stays_out_of_compact_work_groups() {
         let at_limit = completed_command_with_output(
@@ -1740,6 +2008,178 @@ mod tests {
 
         let expanded = project_owned_cells(&cells, /*compact_tool_groups*/ false);
         assert_eq!(expanded.len(), 2);
+    }
+
+    #[test]
+    fn retained_work_header_caches_semantics_and_wrapping_between_draws() {
+        let cells = vec![
+            completed_read_exec("read-1", "app.rs"),
+            completed_read_exec("read-2", "lib.rs"),
+        ];
+        let projected = project_owned_cells(&cells, /*compact_tool_groups*/ true);
+        assert_eq!(projected.len(), 1);
+        COMPACT_OUTPUT_SCAN_COUNT.with(|count| count.set(0));
+        COMPACT_PRESENTATION_RENDER_COUNT.with(|count| count.set(0));
+
+        let first = projected[0].display_lines(/*width*/ 80);
+        let second = projected[0].display_lines(/*width*/ 80);
+
+        assert_eq!(first, second);
+        COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), 0));
+        COMPACT_PRESENTATION_RENDER_COUNT.with(|count| assert_eq!(count.get(), 1));
+
+        let _resized = projected[0].display_lines(/*width*/ 40);
+        COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), 0));
+        COMPACT_PRESENTATION_RENDER_COUNT.with(|count| assert_eq!(count.get(), 2));
+    }
+
+    #[test]
+    fn long_trailing_work_run_classifies_only_each_appended_cell_once() {
+        const CELL_COUNT: usize = 256;
+        let expanded_groups = HashSet::new();
+        let hover = Arc::new(CompactToolGroupHover::default());
+        let mut run = None;
+        let mut projected = Vec::new();
+        let mut retained_header = None;
+        COMPACT_OUTPUT_SCAN_COUNT.with(|count| count.set(0));
+
+        for index in 0..CELL_COUNT {
+            let cell = completed_read_exec(&format!("read-{index}"), &format!("file-{index}.rs"));
+            let update = append_to_trailing_compact_tool_run(
+                &mut run,
+                cell,
+                &expanded_groups,
+                &hover,
+                /*reuse_projected_group*/ true,
+            );
+            apply_trailing_update(&mut projected, update);
+            if index == 1 {
+                retained_header = projected.first().cloned();
+            }
+        }
+
+        assert_eq!(projected.len(), 1);
+        assert!(Arc::ptr_eq(
+            retained_header.as_ref().expect("first compact header"),
+            &projected[0]
+        ));
+        COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), CELL_COUNT));
+        assert_eq!(
+            render_lines_text(&projected[0].display_lines(/*width*/ 100)),
+            "▸ Work: read 256 files · Alt+I inspect · Alt+O all"
+        );
+
+        COMPACT_PRESENTATION_RENDER_COUNT.with(|count| count.set(0));
+        let _first_draw = projected[0].display_lines(/*width*/ 72);
+        let _second_draw = projected[0].display_lines(/*width*/ 72);
+        COMPACT_PRESENTATION_RENDER_COUNT.with(|count| assert_eq!(count.get(), 1));
+        COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), CELL_COUNT));
+    }
+
+    #[test]
+    fn incremental_failure_and_action_required_cells_remain_hard_boundaries() {
+        let boundaries = [
+            completed_command("failed", "cargo build", 7),
+            completed_command_with_output(
+                "login",
+                "service login",
+                0,
+                "Open https://example.com/device to sign in".to_string(),
+            ),
+        ];
+
+        for boundary in boundaries {
+            let expanded_groups = HashSet::new();
+            let hover = Arc::new(CompactToolGroupHover::default());
+            let mut run = None;
+            let mut projected = Vec::new();
+            for cell in [
+                completed_read_exec("read-1", "app.rs"),
+                completed_read_exec("read-2", "lib.rs"),
+                boundary,
+            ] {
+                let update = append_to_trailing_compact_tool_run(
+                    &mut run,
+                    cell,
+                    &expanded_groups,
+                    &hover,
+                    /*reuse_projected_group*/ true,
+                );
+                apply_trailing_update(&mut projected, update);
+            }
+
+            assert!(run.is_none());
+            assert_eq!(projected.len(), 2);
+            assert!(render_lines_text(&projected[0].display_lines(100)).starts_with("▸ Work"));
+            let boundary_text = render_lines_text(&projected[1].display_lines(100));
+            assert!(
+                boundary_text.contains("failed (exit 7)")
+                    || boundary_text.contains("https://example.com/device")
+            );
+        }
+    }
+
+    #[test]
+    fn incremental_projection_matches_full_projection_across_boundaries_and_expansion() {
+        for reuse_projected_group in [true, false] {
+            let mut collapse_single = active_exploring_exec();
+            assert!(collapse_single.complete_call(
+                "read-2",
+                CommandOutput::new(/*exit_code*/ 0, String::new()),
+                Duration::from_millis(10),
+            ));
+            let sequence: Vec<Arc<dyn HistoryCell>> = vec![
+                completed_read_exec("read-1", "app.rs"),
+                reasoning_summary("hidden reasoning", true),
+                completed_read_exec("read-2", "lib.rs"),
+                completed_patch(&["src/app.rs"]),
+                completed_command("failed", "cargo build", 7),
+                Arc::new(collapse_single),
+                completed_mcp("mcp-1", "files", "read"),
+                reasoning_summary("Visible reasoning", false),
+                completed_read_exec("read-3", "main.rs"),
+                completed_read_exec("read-4", "mod.rs"),
+            ];
+            let hover = Arc::new(CompactToolGroupHover::default());
+            let mut expanded_groups = HashSet::new();
+            let mut source = Vec::new();
+            let mut projected = Vec::new();
+            let mut run = None;
+
+            for (index, cell) in sequence.into_iter().enumerate() {
+                source.push(Arc::clone(&cell));
+                apply_trailing_update(
+                    &mut projected,
+                    append_to_trailing_compact_tool_run(
+                        &mut run,
+                        cell,
+                        &expanded_groups,
+                        &hover,
+                        reuse_projected_group,
+                    ),
+                );
+                if index == 2 {
+                    expanded_groups.insert(compact_tool_group_id(&source[0]));
+                    projected = project_owned_cells_with_expanded(
+                        &source,
+                        /*compact_tool_groups*/ true,
+                        &expanded_groups,
+                        &hover,
+                    );
+                    run = trailing_compact_tool_run(&source, &projected);
+                }
+                let full = project_owned_cells_with_expanded(
+                    &source,
+                    /*compact_tool_groups*/ true,
+                    &expanded_groups,
+                    &hover,
+                );
+                assert_eq!(
+                    projection_signature(&projected),
+                    projection_signature(&full)
+                );
+            }
+        }
     }
 
     #[test]
