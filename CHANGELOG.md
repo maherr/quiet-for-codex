@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.146.0-beta.4 - 2026-07-30
+
+### Fixed
+
+- Kept completed hook notifications lossless and prevented saturated live
+  channels from delivering transient hook starts after their completions,
+  eliminating stale `Running PreToolUse hook` and
+  `Running PostToolUse hook` rows during ongoing turns.
+
 ## 0.146.0-beta.3 - 2026-07-29
 
 ### Changed
