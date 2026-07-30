@@ -690,6 +690,46 @@ async fn enqueue_thread_event_does_not_block_when_channel_full() -> Result<()> {
 }
 
 #[tokio::test]
+async fn full_thread_channel_drops_transient_hook_start_instead_of_delaying_it() -> Result<()> {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    app.thread_event_channels
+        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+    app.set_thread_active(thread_id, /*active*/ true).await;
+
+    app.enqueue_thread_notification(thread_id, thread_closed_notification(thread_id))
+        .await?;
+    app.enqueue_thread_notification(thread_id, hook_started_notification(thread_id))
+        .await?;
+
+    let channel = app
+        .thread_event_channels
+        .get_mut(&thread_id)
+        .expect("missing thread channel");
+    let snapshot = channel.store.lock().await.snapshot();
+    assert_matches!(
+        snapshot.events.as_slice(),
+        [ThreadBufferedEvent::Notification(
+            ServerNotification::HookStarted(_)
+        )]
+    );
+    let mut rx = channel.receiver.take().expect("missing receiver");
+
+    time::timeout(Duration::from_millis(50), rx.recv())
+        .await
+        .expect("timed out waiting for the event already in the live channel")
+        .expect("channel closed unexpectedly");
+    assert!(
+        time::timeout(Duration::from_millis(50), rx.recv())
+            .await
+            .is_err(),
+        "a transient hook start should not arrive after the channel recovers"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn active_history_batch_is_delivered_without_replay_buffering() -> Result<()> {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
@@ -5937,6 +5977,29 @@ fn turn_completed_notification(
 fn thread_closed_notification(thread_id: ThreadId) -> ServerNotification {
     ServerNotification::ThreadClosed(ThreadClosedNotification {
         thread_id: thread_id.to_string(),
+    })
+}
+
+fn hook_started_notification(thread_id: ThreadId) -> ServerNotification {
+    ServerNotification::HookStarted(codex_app_server_protocol::HookStartedNotification {
+        thread_id: thread_id.to_string(),
+        turn_id: Some("turn-1".to_string()),
+        run: codex_app_server_protocol::HookRunSummary {
+            id: "post-tool-use:0:/tmp/hooks.json:tool-1".to_string(),
+            event_name: codex_app_server_protocol::HookEventName::PostToolUse,
+            handler_type: codex_app_server_protocol::HookHandlerType::Command,
+            execution_mode: codex_app_server_protocol::HookExecutionMode::Sync,
+            scope: codex_app_server_protocol::HookScope::Turn,
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: codex_app_server_protocol::HookSource::User,
+            display_order: 0,
+            status: codex_app_server_protocol::HookRunStatus::Running,
+            status_message: None,
+            started_at: 1,
+            completed_at: None,
+            duration_ms: None,
+            entries: Vec::new(),
+        },
     })
 }
 
