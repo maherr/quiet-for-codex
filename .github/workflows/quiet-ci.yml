@@ -132,6 +132,22 @@ jobs:
       - name: Run TUI library tests
         working-directory: codex-rs
         run: cargo test --locked --target x86_64-unknown-linux-gnu -p codex-tui --lib -- --test-threads=1
+      - name: Run hook lifecycle regressions
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-app-server-client --lib \
+            event_requires_delivery_marks_transcript_and_terminal_events
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-app-server-client --lib \
+            forward_in_process_event_preserves_transcript_notifications_under_backpressure
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-app-server-client --lib \
+            remote_backpressure_preserves_transcript_notifications
+          cargo test --locked --target x86_64-unknown-linux-gnu \
+            -p codex-app-server --lib \
+            guaranteed_delivery_helpers_cover_terminal_server_notifications
       - name: Run privacy, identity, and hidden-command regressions
         working-directory: codex-rs
         run: |
