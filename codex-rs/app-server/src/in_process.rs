@@ -107,7 +107,8 @@ type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorErro
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(
         notification,
-        ServerNotification::TurnCompleted(_)
+        ServerNotification::HookCompleted(_)
+            | ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
     )
@@ -779,6 +780,14 @@ mod tests {
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+    use codex_app_server_protocol::HookCompletedNotification;
+    use codex_app_server_protocol::HookEventName;
+    use codex_app_server_protocol::HookExecutionMode;
+    use codex_app_server_protocol::HookHandlerType;
+    use codex_app_server_protocol::HookRunStatus;
+    use codex_app_server_protocol::HookRunSummary;
+    use codex_app_server_protocol::HookScope;
+    use codex_app_server_protocol::HookSource;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
@@ -787,6 +796,7 @@ mod tests {
     use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use tempfile::TempDir;
@@ -981,6 +991,29 @@ mod tests {
 
     #[test]
     fn guaranteed_delivery_helpers_cover_terminal_server_notifications() {
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::HookCompleted(HookCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                run: HookRunSummary {
+                    id: "post-tool-use:0:/tmp/hooks.json:tool-1".to_string(),
+                    event_name: HookEventName::PostToolUse,
+                    handler_type: HookHandlerType::Command,
+                    execution_mode: HookExecutionMode::Sync,
+                    scope: HookScope::Turn,
+                    source_path: AbsolutePathBuf::from_absolute_path("/tmp/hooks.json")
+                        .expect("absolute hook path"),
+                    source: HookSource::User,
+                    display_order: 0,
+                    status: HookRunStatus::Completed,
+                    status_message: None,
+                    started_at: 1,
+                    completed_at: Some(2),
+                    duration_ms: Some(1_000),
+                    entries: Vec::new(),
+                },
+            })
+        ));
         assert!(server_notification_requires_delivery(
             &ServerNotification::TurnCompleted(TurnCompletedNotification {
                 thread_id: "thread-1".to_string(),

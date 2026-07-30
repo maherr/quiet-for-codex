@@ -130,18 +130,20 @@ fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
 /// Returns `true` for notifications that must survive backpressure.
 ///
 /// Transcript events (`AgentMessageDelta`, `PlanDelta`, reasoning deltas) and
-/// the authoritative `ItemCompleted` / `TurnCompleted` form the lossless tier
-/// of the event stream. Dropping any of these corrupts the visible assistant
-/// output or leaves surfaces waiting for a completion signal that already
-/// fired. Everything else (`CommandExecutionOutputDelta`, progress, etc.) is
-/// best-effort and may be dropped with only cosmetic impact.
+/// the authoritative `ItemCompleted`, `HookCompleted`, and `TurnCompleted` form
+/// the lossless tier of the event stream. Dropping any of these corrupts the
+/// visible assistant output or leaves surfaces waiting for a completion signal
+/// that already fired. Everything else (`CommandExecutionOutputDelta`,
+/// `HookStarted`, progress, etc.) is best-effort and may be dropped with only
+/// cosmetic impact.
 ///
 /// Both the in-process and remote transports delegate to this function so the
 /// classification stays in sync.
 pub(crate) fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(
         notification,
-        ServerNotification::TurnCompleted(_)
+        ServerNotification::HookCompleted(_)
+            | ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ItemCompleted(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
@@ -1185,6 +1187,45 @@ mod tests {
         })
     }
 
+    fn hook_started_notification() -> ServerNotification {
+        ServerNotification::HookStarted(codex_app_server_protocol::HookStartedNotification {
+            thread_id: "thread".to_string(),
+            turn_id: Some("turn".to_string()),
+            run: hook_run_summary(codex_app_server_protocol::HookRunStatus::Running),
+        })
+    }
+
+    fn hook_completed_notification() -> ServerNotification {
+        ServerNotification::HookCompleted(codex_app_server_protocol::HookCompletedNotification {
+            thread_id: "thread".to_string(),
+            turn_id: Some("turn".to_string()),
+            run: hook_run_summary(codex_app_server_protocol::HookRunStatus::Completed),
+        })
+    }
+
+    fn hook_run_summary(
+        status: codex_app_server_protocol::HookRunStatus,
+    ) -> codex_app_server_protocol::HookRunSummary {
+        let is_completed = status == codex_app_server_protocol::HookRunStatus::Completed;
+        codex_app_server_protocol::HookRunSummary {
+            id: "post-tool-use:0:/tmp/hooks.json:tool-1".to_string(),
+            event_name: codex_app_server_protocol::HookEventName::PostToolUse,
+            handler_type: codex_app_server_protocol::HookHandlerType::Command,
+            execution_mode: codex_app_server_protocol::HookExecutionMode::Sync,
+            scope: codex_app_server_protocol::HookScope::Turn,
+            source_path: AbsolutePathBuf::from_absolute_path("/tmp/hooks.json")
+                .expect("absolute hook path"),
+            source: codex_app_server_protocol::HookSource::User,
+            display_order: 0,
+            status,
+            status_message: None,
+            started_at: 1,
+            completed_at: is_completed.then_some(2),
+            duration_ms: is_completed.then_some(1_000),
+            entries: Vec::new(),
+        }
+    }
+
     fn turn_completed_notification() -> ServerNotification {
         ServerNotification::TurnCompleted(codex_app_server_protocol::TurnCompletedNotification {
             thread_id: "thread".to_string(),
@@ -1354,7 +1395,7 @@ mod tests {
 
         let receive_task = tokio::spawn(async move {
             let mut events = Vec::new();
-            for _ in 0..5 {
+            for _ in 0..6 {
                 events.push(
                     timeout(Duration::from_secs(2), event_rx.recv())
                         .await
@@ -1368,6 +1409,7 @@ mod tests {
         for notification in [
             agent_message_delta_notification("hello"),
             item_completed_notification("hello"),
+            hook_completed_notification(),
             turn_completed_notification(),
         ] {
             let result = forward_in_process_event(
@@ -1421,6 +1463,16 @@ mod tests {
         ));
         assert!(matches!(
             &events[4],
+            InProcessServerEvent::ServerNotification(notification)
+                if matches!(
+                    notification.as_ref(),
+                    ServerNotification::HookCompleted(notification)
+                        if notification.run.status
+                            == codex_app_server_protocol::HookRunStatus::Completed
+                )
+        ));
+        assert!(matches!(
+            &events[5],
             InProcessServerEvent::ServerNotification(notification)
                 if matches!(
                     notification.as_ref(),
@@ -1785,6 +1837,7 @@ mod tests {
                 command_execution_output_delta_notification("stdout-2"),
                 agent_message_delta_notification("hello"),
                 item_completed_notification("hello"),
+                hook_completed_notification(),
                 turn_completed_notification(),
             ] {
                 write_websocket_message(
@@ -1824,7 +1877,7 @@ mod tests {
         ));
 
         let mut remaining_events = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..5 {
             remaining_events.push(
                 timeout(Duration::from_secs(2), client.next_event())
                     .await
@@ -1854,6 +1907,12 @@ mod tests {
                     {
                         transcript_event_names.push("item_completed");
                     }
+                    ServerNotification::HookCompleted(notification)
+                        if notification.run.status
+                            == codex_app_server_protocol::HookRunStatus::Completed =>
+                    {
+                        transcript_event_names.push("hook_completed");
+                    }
                     ServerNotification::TurnCompleted(notification)
                         if notification.turn.status
                             == codex_app_server_protocol::TurnStatus::Completed =>
@@ -1867,7 +1926,12 @@ mod tests {
         }
         assert_eq!(
             transcript_event_names,
-            vec!["agent_message_delta", "item_completed", "turn_completed"]
+            vec![
+                "agent_message_delta",
+                "item_completed",
+                "hook_completed",
+                "turn_completed",
+            ]
         );
 
         done_tx
@@ -2124,6 +2188,12 @@ mod tests {
 
     #[test]
     fn event_requires_delivery_marks_transcript_and_terminal_events() {
+        assert!(!event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(hook_started_notification())
+        ));
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(hook_completed_notification())
+        ));
         assert!(event_requires_delivery(
             &InProcessServerEvent::ServerNotification(Box::new(
                 codex_app_server_protocol::ServerNotification::TurnCompleted(
