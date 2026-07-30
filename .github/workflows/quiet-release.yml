@@ -639,7 +639,7 @@ jobs:
             printf '%s\n' 'Quiet for Codex is an unofficial community fork of OpenAI Codex CLI.'
             printf '%s\n' ''
             printf '%s\n' 'This beta includes native packages for Linux, macOS, and Windows on x86_64 and arm64.'
-            printf '%s\n' 'This beta keeps long tool-heavy sessions responsive by caching retained Work summaries and updating trailing groups incrementally.'
+            printf '%s\n' 'This beta clears completed hook activity during ongoing turns, preventing stale Running PreToolUse hook and Running PostToolUse hook rows without changing hook or guard behavior.'
             printf '%s\n' 'Each archive has GitHub Actions build provenance. This does not replace Apple notarization or Windows code signing.'
             printf '%s\n' 'Restart existing Quiet sessions after installing so they use the new binary.'
             printf '%s\n' 'The macOS and Windows binaries are unsigned. Review the repository security notes before installing.'
