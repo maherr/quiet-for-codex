@@ -1006,6 +1006,14 @@ impl App {
         if let Some(notification) = notification {
             match sender.try_send(ThreadBufferedEvent::Notification(notification)) {
                 Ok(()) => {}
+                Err(TrySendError::Full(ThreadBufferedEvent::Notification(
+                    ServerNotification::HookStarted(_),
+                ))) => {
+                    tracing::debug!(
+                        %thread_id,
+                        "dropping delayed live hook start; replay state retains the notification"
+                    );
+                }
                 Err(TrySendError::Full(event)) => {
                     tokio::spawn(async move {
                         if let Err(err) = sender.send(event).await {
