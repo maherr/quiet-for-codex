@@ -437,6 +437,163 @@ async fn legacy_tool_history_uses_active_turn_when_call_metadata_is_missing() ->
 }
 
 #[tokio::test]
+async fn explicit_turn_boundary_wins_over_stale_call_metadata() -> io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let path = temp_dir.path().join("rollout.jsonl");
+    let thread_id = ThreadId::new();
+    let prior_turn_id = "turn-1";
+    let active_turn_id = "turn-2";
+    write_records(
+        &path,
+        &[
+            task_started(prior_turn_id),
+            user_message("first"),
+            agent_message("first done"),
+            task_complete(prior_turn_id),
+            task_started(active_turn_id),
+            user_message("continue"),
+            function_call(
+                prior_turn_id,
+                "goal-1",
+                "get_goal",
+                r#"{"unused":"ignored"}"#,
+            ),
+            function_output(active_turn_id, "goal-1", "ignored"),
+            task_complete(active_turn_id),
+        ],
+    )?;
+
+    let replay = rebuild_legacy_turns_with_tool_calls(&path, thread_id).await?;
+
+    assert_eq!(replay.turns.len(), 2);
+    assert!(
+        !replay.turns[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::DynamicToolCall { id, .. } if id == "goal-1"))
+    );
+    assert!(replay.turns[1].items.iter().any(|item| matches!(
+        item,
+        ThreadItem::DynamicToolCall {
+            id,
+            status: codex_app_server_protocol::DynamicToolCallStatus::Completed,
+            ..
+        } if id == "goal-1"
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn implicit_active_turn_wins_over_stale_call_metadata() -> io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let path = temp_dir.path().join("rollout.jsonl");
+    let thread_id = ThreadId::new();
+    write_records(
+        &path,
+        &[
+            user_message("legacy implicit turn"),
+            function_call("stale-turn", "goal-1", "get_goal", "{}"),
+            record(
+                "response_item",
+                json!({
+                    "type": "function_call_output",
+                    "id": "fco-goal-1",
+                    "call_id": "goal-1",
+                    "output": "ignored",
+                }),
+            ),
+        ],
+    )?;
+
+    let replay = rebuild_legacy_turns_with_tool_calls(&path, thread_id).await?;
+
+    assert!(!replay.turn_assignment_conflict);
+    assert_eq!(replay.turns.len(), 1);
+    assert!(replay.turns[0].items.iter().any(|item| matches!(
+        item,
+        ThreadItem::DynamicToolCall {
+            id,
+            status: codex_app_server_protocol::DynamicToolCallStatus::Completed,
+            ..
+        } if id == "goal-1"
+    )));
+    Ok(())
+}
+
+#[tokio::test]
+async fn conflicting_output_turn_metadata_fails_closed() -> io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let path = temp_dir.path().join("rollout.jsonl");
+    let thread_id = ThreadId::new();
+    write_records(
+        &path,
+        &[
+            task_started("turn-1"),
+            user_message("hello"),
+            function_call("turn-1", "goal-1", "get_goal", "{}"),
+            function_output("turn-2", "goal-1", "ignored"),
+            task_complete("turn-1"),
+        ],
+    )?;
+
+    let replay = rebuild_legacy_turns_with_tool_calls(&path, thread_id).await?;
+
+    assert!(replay.turn_assignment_conflict);
+    Ok(())
+}
+
+#[tokio::test]
+async fn richer_item_replaces_stale_cross_turn_call_in_active_turn() -> io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let path = temp_dir.path().join("rollout.jsonl");
+    let thread_id = ThreadId::new();
+    write_records(
+        &path,
+        &[
+            task_started("turn-1"),
+            user_message("first"),
+            task_complete("turn-1"),
+            task_started("turn-2"),
+            user_message("continue"),
+            function_call("turn-1", "patch-1", "apply_patch", "{}"),
+            record(
+                "event_msg",
+                json!({
+                    "type": "patch_apply_end",
+                    "call_id": "patch-1",
+                    "turn_id": "turn-2",
+                    "stdout": "",
+                    "stderr": "",
+                    "success": true,
+                    "status": "completed",
+                    "changes": {},
+                }),
+            ),
+            function_output("turn-2", "patch-1", "ignored"),
+            task_complete("turn-2"),
+        ],
+    )?;
+
+    let replay = rebuild_legacy_turns_with_tool_calls(&path, thread_id).await?;
+
+    assert!(!replay.turn_assignment_conflict);
+    assert!(!replay.inserted_call_ids.contains("patch-1"));
+    assert!(
+        !replay.turns[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::DynamicToolCall { id, .. } if id == "patch-1"))
+    );
+    assert!(
+        replay.turns[1]
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::FileChange { id, .. } if id == "patch-1"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn legacy_tool_history_reports_malformed_record_without_contents() -> io::Result<()> {
     let temp_dir = TempDir::new()?;
     let path = temp_dir.path().join("rollout.jsonl");
@@ -541,6 +698,34 @@ async fn authoritative_hook_prompts_are_merged_at_their_original_anchor() -> io:
         authoritative
     );
     Ok(())
+}
+
+#[test]
+fn authoritative_turn_state_overrides_incomplete_rollout_state() {
+    let mut rebuilt = vec![codex_app_server_protocol::Turn {
+        id: "turn-1".to_string(),
+        items: Vec::new(),
+        items_view: codex_app_server_protocol::TurnItemsView::Full,
+        error: None,
+        status: codex_app_server_protocol::TurnStatus::InProgress,
+        started_at: Some(1),
+        completed_at: None,
+        duration_ms: None,
+    }];
+    let authoritative = vec![codex_app_server_protocol::Turn {
+        id: "turn-1".to_string(),
+        items: Vec::new(),
+        items_view: codex_app_server_protocol::TurnItemsView::Full,
+        error: None,
+        status: codex_app_server_protocol::TurnStatus::Interrupted,
+        started_at: Some(1),
+        completed_at: Some(2),
+        duration_ms: Some(1000),
+    }];
+
+    merge_authoritative_turn_state(&mut rebuilt, &authoritative);
+
+    assert_eq!(rebuilt, authoritative);
 }
 
 #[tokio::test]
