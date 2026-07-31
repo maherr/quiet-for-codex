@@ -212,7 +212,19 @@ impl ChatWidget {
                 agents_states,
             }),
             item @ ThreadItem::SubAgentActivity { .. } => self.on_sub_agent_activity(item),
-            ThreadItem::DynamicToolCall { .. } => {}
+            ThreadItem::DynamicToolCall {
+                namespace,
+                tool,
+                arguments,
+                status,
+                ..
+            } => {
+                self.flush_answer_stream_with_separator();
+                self.add_to_history(history_cell::new_dynamic_tool_call(
+                    namespace, tool, arguments, status,
+                ));
+                self.transcript.had_work_activity = true;
+            }
             ThreadItem::Sleep(_) => {}
         }
 

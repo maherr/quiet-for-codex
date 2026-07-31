@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changed
+
+- Rebuilt legacy local-session tool history from compact call metadata only.
+  Historical tool output bodies remain unloaded, and remote or paginated
+  history behavior is unchanged.
+
+### Fixed
+
+- Restored tool-call rows when reopening legacy local sessions instead of
+  showing only user and assistant messages.
+- Indexed retained pager heights and rendered only the visible range, avoiding
+  full-transcript measurement and traversal on every redraw in long sessions.
+
 ## 0.146.0-beta.4 - 2026-07-30
 
 ### Fixed

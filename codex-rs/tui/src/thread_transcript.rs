@@ -35,7 +35,7 @@ pub(crate) async fn load_session_transcript(
     codex_home: Option<&std::path::Path>,
 ) -> std::io::Result<TranscriptCells> {
     let thread = app_server
-        .thread_read(thread_id, /*include_turns*/ true)
+        .thread_read_for_transcript(thread_id)
         .await
         .map_err(std::io::Error::other)?;
     Ok(thread_to_transcript_cells(
