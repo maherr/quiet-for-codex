@@ -19,6 +19,7 @@ use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::compact_command_for_viewport;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::history_cell::DynamicToolCallCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::MAX_TOOL_RESULT_SCAN_BYTES;
@@ -579,6 +580,7 @@ struct ToolGroupSummary {
     web_open_count: usize,
     web_find_count: usize,
     mcp_counts: BTreeMap<String, usize>,
+    dynamic_tool_counts: BTreeMap<String, usize>,
     actions: usize,
 }
 
@@ -599,6 +601,9 @@ impl ToolGroupSummary {
         self.actions += other.actions;
         for (label, count) in other.mcp_counts {
             *self.mcp_counts.entry(label).or_default() += count;
+        }
+        for (label, count) in other.dynamic_tool_counts {
+            *self.dynamic_tool_counts.entry(label).or_default() += count;
         }
     }
 
@@ -660,6 +665,9 @@ impl ToolGroupSummary {
         );
         if !self.mcp_counts.is_empty() {
             parts.push(mcp_summary(&self.mcp_counts));
+        }
+        if !self.dynamic_tool_counts.is_empty() {
+            parts.push(dynamic_tool_summary(&self.dynamic_tool_counts));
         }
         parts
     }
@@ -837,6 +845,9 @@ fn tool_group_item(cell: &dyn HistoryCell) -> Option<ToolGroupItem> {
     }
     if let Some(mcp) = cell.as_any().downcast_ref::<McpToolCallCell>() {
         return mcp_tool_group_item(mcp);
+    }
+    if let Some(tool) = cell.as_any().downcast_ref::<DynamicToolCallCell>() {
+        return dynamic_tool_group_item(tool);
     }
     if let Some(web) = cell.as_any().downcast_ref::<WebSearchCell>() {
         return web_tool_group_item(web);
@@ -1252,6 +1263,17 @@ fn mcp_tool_group_item(mcp: &McpToolCallCell) -> Option<ToolGroupItem> {
     })
 }
 
+fn dynamic_tool_group_item(tool: &DynamicToolCallCell) -> Option<ToolGroupItem> {
+    let label = tool.completed_label()?;
+    let mut summary = ToolGroupSummary::default();
+    summary.dynamic_tool_counts.insert(label, 1);
+    summary.actions = 1;
+    Some(ToolGroupItem {
+        summary,
+        collapse_single: false,
+    })
+}
+
 fn web_tool_group_item(web: &WebSearchCell) -> Option<ToolGroupItem> {
     let action = web.completed_action()?;
     let mut summary = ToolGroupSummary {
@@ -1388,6 +1410,21 @@ fn mcp_summary(counts: &BTreeMap<String, usize>) -> String {
         }
     } else {
         format!("called {} MCP tools", counts.values().sum::<usize>())
+    }
+}
+
+fn dynamic_tool_summary(counts: &BTreeMap<String, usize>) -> String {
+    if counts.len() == 1 {
+        let Some((label, count)) = counts.iter().next() else {
+            return "called 0 tools".to_string();
+        };
+        if *count == 1 {
+            format!("called {label}")
+        } else {
+            format!("called {label} x{count}")
+        }
+    } else {
+        format!("called {} tools", counts.values().sum::<usize>())
     }
 }
 
@@ -1596,6 +1633,19 @@ mod tests {
         Arc::new(cell)
     }
 
+    fn dynamic_tool(
+        namespace: Option<&str>,
+        tool: &str,
+        status: codex_app_server_protocol::DynamicToolCallStatus,
+    ) -> Arc<dyn HistoryCell> {
+        Arc::new(crate::history_cell::new_dynamic_tool_call(
+            namespace.map(str::to_string),
+            tool.to_string(),
+            serde_json::Value::Null,
+            status,
+        ))
+    }
+
     fn completed_command(call_id: &str, command: &str, exit_code: i32) -> Arc<dyn HistoryCell> {
         completed_command_with_output(
             call_id,
@@ -1781,6 +1831,48 @@ mod tests {
             render_group_text(group),
             "▸ Work: read 2 files · called gmail.read_thread · Alt+I inspect · Alt+O all"
         );
+    }
+
+    #[test]
+    fn compact_group_summarizes_replayed_dynamic_tool_calls() {
+        let cells = vec![
+            dynamic_tool(
+                Some("functions"),
+                "exec",
+                codex_app_server_protocol::DynamicToolCallStatus::Completed,
+            ),
+            dynamic_tool(
+                Some("functions"),
+                "exec",
+                codex_app_server_protocol::DynamicToolCallStatus::Completed,
+            ),
+        ];
+
+        let group = compact_tool_group_at(&cells, 0, 120).expect("compact group");
+
+        assert_eq!(group.consumed_cells, 2);
+        assert_eq!(
+            render_group_text(group),
+            "▸ Work: called functions.exec x2 · Alt+I inspect · Alt+O all"
+        );
+    }
+
+    #[test]
+    fn unfinished_replayed_dynamic_tool_calls_remain_expanded() {
+        let cells = vec![
+            dynamic_tool(
+                Some("collaboration"),
+                "wait_agent",
+                codex_app_server_protocol::DynamicToolCallStatus::InProgress,
+            ),
+            dynamic_tool(
+                Some("collaboration"),
+                "wait_agent",
+                codex_app_server_protocol::DynamicToolCallStatus::Completed,
+            ),
+        ];
+
+        assert!(compact_tool_group_at(&cells, 0, 120).is_none());
     }
 
     #[test]

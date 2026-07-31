@@ -545,7 +545,7 @@ impl AppServerSession {
         } else {
             self.session_config_with_effective_service_tier(&config)
         };
-        let response: ThreadResumeResponse = self
+        let mut response: ThreadResumeResponse = self
             .client
             .request_typed(ClientRequest::ThreadResume {
                 request_id,
@@ -561,6 +561,11 @@ impl AppServerSession {
             .map_err(|err| {
                 bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
             })?;
+        crate::legacy_tool_history::maybe_restore_local_legacy_tool_history(
+            &mut response.thread,
+            matches!(self.thread_params_mode(), ThreadParamsMode::Embedded),
+        )
+        .await;
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
@@ -632,7 +637,7 @@ impl AppServerSession {
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
-        let response: ThreadForkResponse = self
+        let mut response: ThreadForkResponse = self
             .client
             .request_typed(ClientRequest::ThreadFork {
                 request_id,
@@ -654,6 +659,11 @@ impl AppServerSession {
             .map_err(|err| {
                 bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
             })?;
+        crate::legacy_tool_history::maybe_restore_local_legacy_tool_history(
+            &mut response.thread,
+            matches!(self.thread_params_mode(), ThreadParamsMode::Embedded),
+        )
+        .await;
         let fork_parent_title = if presentation == ForkPresentation::SideConversation {
             None
         } else {
@@ -766,6 +776,19 @@ impl AppServerSession {
             .await
             .wrap_err("thread/read failed during TUI session lookup")?;
         Ok(response.thread)
+    }
+
+    pub(crate) async fn thread_read_for_transcript(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<Thread> {
+        let mut thread = self.thread_read(thread_id, /*include_turns*/ true).await?;
+        crate::legacy_tool_history::maybe_restore_local_legacy_tool_history(
+            &mut thread,
+            matches!(self.thread_params_mode(), ThreadParamsMode::Embedded),
+        )
+        .await;
+        Ok(thread)
     }
 
     pub(crate) async fn thread_archive(&mut self, thread_id: ThreadId) -> Result<()> {
