@@ -861,6 +861,10 @@ impl Renderable for ConversationCellRenderable {
         self.cached_height.set(Some((width, height)));
         height
     }
+
+    fn has_stable_height(&self) -> bool {
+        true
+    }
 }
 
 struct HyperlinkLinesRenderable {
@@ -881,6 +885,10 @@ impl Renderable for HyperlinkLinesRenderable {
             .line_count(width)
             .try_into()
             .unwrap_or(/*default*/ 0)
+    }
+
+    fn has_stable_height(&self) -> bool {
+        true
     }
 }
 
