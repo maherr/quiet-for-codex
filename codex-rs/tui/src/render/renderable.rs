@@ -16,6 +16,13 @@ use crate::render::RectExt as _;
 pub trait Renderable {
     fn render(&self, area: Rect, buf: &mut Buffer);
     fn desired_height(&self, width: u16) -> u16;
+    /// Whether `desired_height` stays valid at the same width until this renderable is replaced.
+    ///
+    /// Retained pagers use this to cache layout across animation redraws. Renderables backed by
+    /// mutable external state must keep the default `false` so they are remeasured every frame.
+    fn has_stable_height(&self) -> bool {
+        false
+    }
     fn cursor_pos(&self, _area: Rect) -> Option<(u16, u16)> {
         None
     }
@@ -41,6 +48,13 @@ impl<'a> Renderable for RenderableItem<'a> {
         match self {
             RenderableItem::Owned(child) => child.desired_height(width),
             RenderableItem::Borrowed(child) => child.desired_height(width),
+        }
+    }
+
+    fn has_stable_height(&self) -> bool {
+        match self {
+            RenderableItem::Owned(child) => child.has_stable_height(),
+            RenderableItem::Borrowed(child) => child.has_stable_height(),
         }
     }
 
@@ -79,6 +93,9 @@ impl Renderable for () {
     fn desired_height(&self, _width: u16) -> u16 {
         0
     }
+    fn has_stable_height(&self) -> bool {
+        true
+    }
 }
 
 impl Renderable for &str {
@@ -87,6 +104,9 @@ impl Renderable for &str {
     }
     fn desired_height(&self, _width: u16) -> u16 {
         1
+    }
+    fn has_stable_height(&self) -> bool {
+        true
     }
 }
 
@@ -97,6 +117,9 @@ impl Renderable for String {
     fn desired_height(&self, _width: u16) -> u16 {
         1
     }
+    fn has_stable_height(&self) -> bool {
+        true
+    }
 }
 
 impl<'a> Renderable for Span<'a> {
@@ -105,6 +128,9 @@ impl<'a> Renderable for Span<'a> {
     }
     fn desired_height(&self, _width: u16) -> u16 {
         1
+    }
+    fn has_stable_height(&self) -> bool {
+        true
     }
 }
 
@@ -115,6 +141,9 @@ impl<'a> Renderable for Line<'a> {
     fn desired_height(&self, _width: u16) -> u16 {
         1
     }
+    fn has_stable_height(&self) -> bool {
+        true
+    }
 }
 
 impl<'a> Renderable for Paragraph<'a> {
@@ -123,6 +152,9 @@ impl<'a> Renderable for Paragraph<'a> {
     }
     fn desired_height(&self, width: u16) -> u16 {
         self.line_count(width) as u16
+    }
+    fn has_stable_height(&self) -> bool {
+        true
     }
 }
 
@@ -141,6 +173,10 @@ impl<R: Renderable> Renderable for Option<R> {
         }
     }
 
+    fn has_stable_height(&self) -> bool {
+        self.as_ref().is_none_or(Renderable::has_stable_height)
+    }
+
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_ref()
             .and_then(|renderable| renderable.cursor_pos(area))
@@ -154,12 +190,15 @@ impl<R: Renderable> Renderable for Option<R> {
     }
 }
 
-impl<R: Renderable> Renderable for Arc<R> {
+impl<R: Renderable + ?Sized> Renderable for Arc<R> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_ref().render(area, buf);
     }
     fn desired_height(&self, width: u16) -> u16 {
         self.as_ref().desired_height(width)
+    }
+    fn has_stable_height(&self) -> bool {
+        self.as_ref().has_stable_height()
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_ref().cursor_pos(area)
@@ -191,6 +230,10 @@ impl Renderable for ColumnRenderable<'_> {
             .iter()
             .map(|child| child.desired_height(width))
             .sum()
+    }
+
+    fn has_stable_height(&self) -> bool {
+        self.children.iter().all(Renderable::has_stable_height)
     }
 
     /// Returns the cursor position of the first child that has a cursor position, offset by the
@@ -366,6 +409,12 @@ impl<'a> Renderable for FlexRenderable<'a> {
             .unwrap_or(0)
     }
 
+    fn has_stable_height(&self) -> bool {
+        self.children
+            .iter()
+            .all(|child| child.child.has_stable_height())
+    }
+
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.allocate(area)
             .into_iter()
@@ -419,6 +468,12 @@ impl Renderable for RowRenderable<'_> {
             width_remaining = width_remaining.saturating_sub(w);
         }
         max_height
+    }
+
+    fn has_stable_height(&self) -> bool {
+        self.children
+            .iter()
+            .all(|(_, child)| child.has_stable_height())
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -475,6 +530,9 @@ impl<'a> Renderable for InsetRenderable<'a> {
             .desired_height(width - self.insets.left - self.insets.right)
             + self.insets.top
             + self.insets.bottom
+    }
+    fn has_stable_height(&self) -> bool {
+        self.child.has_stable_height()
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.child.cursor_pos(area.inset(self.insets))
