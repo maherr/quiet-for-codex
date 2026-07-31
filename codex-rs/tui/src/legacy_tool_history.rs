@@ -36,6 +36,7 @@ use serde_json::Value;
 pub(crate) struct LegacyToolReplay {
     turns: Vec<Turn>,
     inserted_call_ids: HashSet<String>,
+    turn_assignment_conflict: bool,
 }
 
 #[derive(Deserialize)]
@@ -73,7 +74,7 @@ enum SlimResponseItem {
         _output: IgnoredAny,
         #[serde(default)]
         #[serde(rename = "internal_chat_message_metadata_passthrough")]
-        _metadata: Option<TurnMetadata>,
+        metadata: Option<TurnMetadata>,
     },
     CustomToolCall {
         call_id: String,
@@ -91,7 +92,7 @@ enum SlimResponseItem {
         _output: IgnoredAny,
         #[serde(default)]
         #[serde(rename = "internal_chat_message_metadata_passthrough")]
-        _metadata: Option<TurnMetadata>,
+        metadata: Option<TurnMetadata>,
     },
     ToolSearchCall {
         #[serde(default)]
@@ -113,7 +114,7 @@ enum SlimResponseItem {
         _tools: IgnoredAny,
         #[serde(default)]
         #[serde(rename = "internal_chat_message_metadata_passthrough")]
-        _metadata: Option<TurnMetadata>,
+        metadata: Option<TurnMetadata>,
     },
     #[serde(other)]
     Other,
@@ -161,11 +162,19 @@ pub(crate) async fn maybe_restore_local_legacy_tool_history(
             return false;
         }
     };
+    if replay.turn_assignment_conflict {
+        tracing::warn!(
+            rollout_path = %path.display(),
+            "legacy tool history turn assignment conflict; keeping app-server history"
+        );
+        return false;
+    }
     if replay.inserted_call_ids.is_empty() {
         return false;
     }
 
     merge_authoritative_hook_prompts(&mut replay.turns, &thread.turns);
+    merge_authoritative_turn_state(&mut replay.turns, &thread.turns);
     let expected = baseline_turns(&thread.turns, &replay.inserted_call_ids);
     let rebuilt = baseline_turns(&replay.turns, &replay.inserted_call_ids);
     if rebuilt != expected {
@@ -197,6 +206,7 @@ pub(crate) async fn rebuild_legacy_turns_with_tool_calls(
     let mut pending_calls = HashMap::<String, PendingResponseToolCall>::new();
     let mut inserted_call_ids = HashSet::new();
     let mut richer_item_ids = HashSet::new();
+    let mut turn_assignment_conflict = false;
     let mut line_number = 0usize;
 
     while let Some(line) = reader.next_line().await? {
@@ -235,6 +245,7 @@ pub(crate) async fn rebuild_legacy_turns_with_tool_calls(
                     &mut pending_calls,
                     &mut inserted_call_ids,
                     &richer_item_ids,
+                    &mut turn_assignment_conflict,
                     thread_id,
                     record.payload,
                 );
@@ -246,6 +257,7 @@ pub(crate) async fn rebuild_legacy_turns_with_tool_calls(
     Ok(LegacyToolReplay {
         turns: builder.finish(),
         inserted_call_ids,
+        turn_assignment_conflict,
     })
 }
 
@@ -254,6 +266,7 @@ fn handle_response_item(
     pending_calls: &mut HashMap<String, PendingResponseToolCall>,
     inserted_call_ids: &mut HashSet<String>,
     richer_item_ids: &HashSet<String>,
+    turn_assignment_conflict: &mut bool,
     thread_id: ThreadId,
     item: SlimResponseItem,
 ) {
@@ -300,20 +313,22 @@ fn handle_response_item(
         SlimResponseItem::FunctionCallOutput {
             call_id,
             _output: _,
-            _metadata: _,
+            metadata,
         }
         | SlimResponseItem::CustomToolCallOutput {
             call_id,
             _output: _,
-            _metadata: _,
+            metadata,
         } => {
             complete_tool_call(
                 builder,
                 pending_calls,
                 inserted_call_ids,
                 richer_item_ids,
+                turn_assignment_conflict,
                 thread_id,
                 &call_id,
+                metadata,
             );
         }
         SlimResponseItem::ToolSearchCall {
@@ -345,8 +360,10 @@ fn handle_response_item(
                     pending_calls,
                     inserted_call_ids,
                     richer_item_ids,
+                    turn_assignment_conflict,
                     thread_id,
                     &id,
+                    None,
                 );
                 return;
             }
@@ -369,7 +386,7 @@ fn handle_response_item(
         SlimResponseItem::ToolSearchOutput {
             call_id,
             _tools: _,
-            _metadata: _,
+            metadata,
         } => {
             let Some(call_id) = call_id else {
                 handle_noop(builder);
@@ -380,8 +397,10 @@ fn handle_response_item(
                 pending_calls,
                 inserted_call_ids,
                 richer_item_ids,
+                turn_assignment_conflict,
                 thread_id,
                 &call_id,
+                metadata,
             );
         }
         SlimResponseItem::Other => handle_noop(builder),
@@ -400,9 +419,20 @@ fn start_tool_call(
     arguments: Value,
     metadata: Option<TurnMetadata>,
 ) {
-    let turn_id = metadata
-        .and_then(|metadata| metadata.turn_id)
-        .filter(|turn_id| !turn_id.is_empty())
+    // Response items replayed at the beginning of a turn can retain the prior turn's metadata even
+    // though their matching output and lifecycle events belong to the active turn. Prefer a real
+    // active boundary, including older implicit turns, then fall back to item metadata.
+    let active_turn_id = if builder.has_active_turn() {
+        builder.active_turn_id().map(str::to_string)
+    } else {
+        None
+    };
+    let turn_id = active_turn_id
+        .or_else(|| {
+            metadata
+                .and_then(|metadata| metadata.turn_id)
+                .filter(|turn_id| !turn_id.is_empty())
+        })
         .or_else(|| builder.active_turn_id().map(str::to_string));
     let Some(turn_id) = turn_id else {
         handle_noop(builder);
@@ -441,14 +471,25 @@ fn complete_tool_call(
     pending_calls: &mut HashMap<String, PendingResponseToolCall>,
     inserted_call_ids: &mut HashSet<String>,
     richer_item_ids: &HashSet<String>,
+    turn_assignment_conflict: &mut bool,
     thread_id: ThreadId,
     call_id: &str,
+    output_metadata: Option<TurnMetadata>,
 ) {
     let Some(call) = pending_calls.remove(call_id) else {
         handle_noop(builder);
         return;
     };
     let turn_id = call.turn_id;
+    if output_metadata
+        .and_then(|metadata| metadata.turn_id)
+        .filter(|output_turn_id| !output_turn_id.is_empty())
+        .is_some_and(|output_turn_id| output_turn_id != turn_id)
+    {
+        *turn_assignment_conflict = true;
+        handle_noop(builder);
+        return;
+    }
     if richer_item_ids.contains(call_id) {
         inserted_call_ids.remove(call_id);
         handle_noop(builder);
@@ -604,6 +645,21 @@ fn merge_authoritative_hook_prompts(rebuilt: &mut [Turn], authoritative: &[Turn]
                 .unwrap_or(rebuilt_turn.items.len());
             rebuilt_turn.items.insert(insert_at, item.clone());
         }
+    }
+}
+
+fn merge_authoritative_turn_state(rebuilt: &mut [Turn], authoritative: &[Turn]) {
+    for rebuilt_turn in rebuilt {
+        let Some(authoritative_turn) = authoritative.iter().find(|turn| turn.id == rebuilt_turn.id)
+        else {
+            continue;
+        };
+        rebuilt_turn.items_view = authoritative_turn.items_view.clone();
+        rebuilt_turn.error = authoritative_turn.error.clone();
+        rebuilt_turn.status = authoritative_turn.status.clone();
+        rebuilt_turn.started_at = authoritative_turn.started_at;
+        rebuilt_turn.completed_at = authoritative_turn.completed_at;
+        rebuilt_turn.duration_ms = authoritative_turn.duration_ms;
     }
 }
 
