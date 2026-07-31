@@ -76,6 +76,51 @@ async fn resumed_initial_messages_render_history() {
 }
 
 #[tokio::test]
+async fn replayed_dynamic_tool_calls_render_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut turn = app_server_turn(
+        "turn-1",
+        AppServerTurnStatus::Completed,
+        /*duration_ms*/ Some(1),
+        /*error*/ None,
+    );
+    turn.items = vec![
+        AppServerThreadItem::DynamicToolCall {
+            id: "exec-1".to_string(),
+            namespace: None,
+            tool: "exec_command".to_string(),
+            arguments: serde_json::json!({
+                "cmd": "printf hello\nprintf again",
+                "workdir": "/tmp"
+            }),
+            status: codex_app_server_protocol::DynamicToolCallStatus::Completed,
+            content_items: None,
+            success: None,
+            duration_ms: None,
+        },
+        AppServerThreadItem::DynamicToolCall {
+            id: "collab-1".to_string(),
+            namespace: Some("collaboration".to_string()),
+            tool: "wait_agent".to_string(),
+            arguments: serde_json::Value::Null,
+            status: codex_app_server_protocol::DynamicToolCallStatus::Completed,
+            content_items: None,
+            success: None,
+            duration_ms: None,
+        },
+    ];
+
+    chat.replay_thread_turns(vec![turn], ReplayKind::ResumeInitialMessages);
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("replayed_dynamic_tool_calls_render_history", rendered);
+}
+
+#[tokio::test]
 async fn replayed_failed_turns_preserve_overload_warnings_between_retries() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let prompt = "The workspace also looks super confusing with its separator.";

@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/history_replay.rs
+expression: rendered
+---
+• Called exec_command: printf hello
+  printf again
+
+
+• Called collaboration.wait_agent

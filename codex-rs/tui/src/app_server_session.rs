@@ -677,6 +677,11 @@ impl AppServerSession {
             HistoryHydrationScope::Initial,
         )
         .await?;
+        crate::legacy_tool_history::maybe_restore_local_legacy_tool_history(
+            &mut response.thread,
+            matches!(self.thread_params_mode(), ThreadParamsMode::Embedded),
+        )
+        .await;
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;
@@ -772,7 +777,7 @@ impl AppServerSession {
                 self.remote_cwd_override.as_deref(),
             )
         };
-        let response: ThreadForkResponse = match self
+        let mut response: ThreadForkResponse = match self
             .client
             .request_typed(ClientRequest::ThreadFork {
                 request_id,
@@ -820,6 +825,11 @@ impl AppServerSession {
                 "preserving the created fork after bounded history hydration failed"
             );
         }
+        crate::legacy_tool_history::maybe_restore_local_legacy_tool_history(
+            &mut response.thread,
+            matches!(self.thread_params_mode(), ThreadParamsMode::Embedded),
+        )
+        .await;
         let mut started =
             started_thread_from_fork_response(response, &config, self.thread_params_mode()).await?;
         started.session.fork_parent_title = fork_parent.and_then(|thread| thread.name);
@@ -954,6 +964,27 @@ impl AppServerSession {
         )
         .await?;
         Ok(response.thread)
+    }
+
+    pub(crate) async fn thread_read_for_transcript(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<Thread> {
+        let mut thread = self.thread_read(thread_id, /*include_turns*/ false).await?;
+        self.hydrate_initial_thread_history(
+            &mut thread,
+            /*turn_cursor*/ None,
+            /*item_cursor*/ None,
+            /*config*/ None,
+            HistoryHydrationScope::Complete,
+        )
+        .await?;
+        crate::legacy_tool_history::maybe_restore_local_legacy_tool_history(
+            &mut thread,
+            matches!(self.thread_params_mode(), ThreadParamsMode::Embedded),
+        )
+        .await;
+        Ok(thread)
     }
 
     pub(crate) async fn thread_archive(&mut self, thread_id: ThreadId) -> Result<()> {
