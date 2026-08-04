@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.146.0 - 2026-08-04
+
+First stable Quiet release. It promotes the 0.146.0 beta line unchanged in
+behavior; everything below shipped and was used daily across beta.1 through
+beta.5.
+
+### Added
+
+- A release channel for stable tags. `quiet-vX.Y.Z` now publishes as a stable
+  release and becomes the latest pointer, while `quiet-vX.Y.Z-beta.N` continues
+  to publish as a prerelease that never claims latest.
+
+### Changed
+
+- Source builds now render as `codex-quiet <version>+local`. A stable release
+  carries the bare upstream base version, which is exactly what a source build
+  reported before, so the two were indistinguishable in the UI. Release builds
+  are unaffected, and the version used for update comparison is unchanged.
+- Release notes are generated from this file's entry for the version being
+  published, rather than from a fixed string in the release workflow that
+  described one specific beta.
+
+### Known limitations
+
+- The macOS and Windows binaries are unsigned and not notarized. macOS
+  Gatekeeper will warn on first launch. Each archive carries GitHub Actions
+  build provenance, which is verifiable with `gh attestation verify`, but
+  provenance is not a substitute for platform code signing.
+
 ## 0.146.0-beta.5 - 2026-08-01
 
 ### Changed

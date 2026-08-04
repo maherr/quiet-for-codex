@@ -422,7 +422,10 @@ fn quiet_exec_display_version() -> String {
     if let Some(version) = option_env!("CODEX_QUIET_VERSION") {
         return format!("codex-quiet {version}");
     }
-    format!("codex-quiet {}", env!("CARGO_PKG_VERSION"))
+    // `+local` marks a source build. A stable release carries the bare upstream
+    // base version, so without this an unreleased local build and a published
+    // stable render identically. See `codex-rs/tui/src/version.rs`.
+    format!("codex-quiet {}+local", env!("CARGO_PKG_VERSION"))
 }
 
 fn config_summary_entries(
