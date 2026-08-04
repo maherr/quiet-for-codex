@@ -37,6 +37,25 @@ fn exec_summary_uses_quiet_identity_and_exact_build_version() {
     if let Some(version) = option_env!("CODEX_QUIET_VERSION") {
         assert!(display_version.ends_with(version));
     }
+
+    // A stable release carries the bare upstream base version, which is exactly
+    // what a source build reports. Without the `+local` marker the two render
+    // identically and the UI cannot say which is running. Assert the marker is
+    // present precisely when this is NOT a release build, so neither channel can
+    // silently start impersonating the other.
+    let is_release_build = option_env!("CODEX_QUIET_DISPLAY_VERSION").is_some()
+        || option_env!("CODEX_QUIET_VERSION").is_some();
+    if is_release_build {
+        assert!(
+            !display_version.contains("+local"),
+            "release build must not be marked as a local build: {display_version}"
+        );
+    } else {
+        assert!(
+            display_version.ends_with("+local"),
+            "source build must be distinguishable from a stable release: {display_version}"
+        );
+    }
 }
 
 #[test]
