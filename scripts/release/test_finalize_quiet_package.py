@@ -88,12 +88,20 @@ class FinalizeQuietPackageTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Invalid Quiet release version"):
             validate_release_identity("latest", "x86_64-unknown-linux-musl")
         with self.assertRaisesRegex(RuntimeError, "Invalid Quiet release version"):
-            validate_release_identity("0.145.0", "x86_64-unknown-linux-musl")
-        with self.assertRaisesRegex(RuntimeError, "Invalid Quiet release version"):
             validate_release_identity("0.145.0-beta", "x86_64-unknown-linux-musl")
         with self.assertRaisesRegex(RuntimeError, "Invalid Quiet release version"):
             validate_release_identity("0.145.0-beta.01", "x86_64-unknown-linux-musl")
+        with self.assertRaisesRegex(RuntimeError, "Invalid Quiet release version"):
+            validate_release_identity("1.0", "x86_64-unknown-linux-musl")
+        with self.assertRaisesRegex(RuntimeError, "Invalid Quiet release version"):
+            validate_release_identity("1.0.0+local", "x86_64-unknown-linux-musl")
         validate_release_identity("0.145.0-beta.2", "x86_64-unknown-linux-musl")
+        # A stable release is a bare version. This assertion previously ran in
+        # the opposite direction and required a bare version to be rejected, so
+        # the suite stayed green while making a stable release impossible to
+        # package. Both channels must pass here or the seam reopens.
+        validate_release_identity("1.0.0", "x86_64-unknown-linux-musl")
+        validate_release_identity("0.146.0", "x86_64-unknown-linux-musl")
         with self.assertRaisesRegex(RuntimeError, "Invalid target triple"):
             validate_release_identity("0.145.0-beta.1", "../linux")
 

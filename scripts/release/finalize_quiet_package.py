@@ -19,7 +19,12 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from codex_package.archive import write_archive  # noqa: E402
 
 
-RELEASE_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*$")
+# Both release channels, matching the tag shapes the release workflow accepts:
+# a bare X.Y.Z is stable, X.Y.Z-beta.N is a prerelease. This deliberately allows
+# a bare version. Requiring -beta.N here is what failed the first stable release
+# after the workflow had already learned the stable channel, because the two
+# sides of that seam were only ever tested apart.
+RELEASE_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-beta\.[1-9][0-9]*)?$")
 TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 REQUIRED_LEGAL_FILES = ("LICENSE", "NOTICE", "FORK_CHANGES.md", "THIRD_PARTY.md")
 RUST_LICENSE_FILENAME = "RUST_DEPENDENCY_LICENSES.txt"

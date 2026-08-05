@@ -13,16 +13,16 @@ pub const CODEX_CLI_VERSION: &str = match option_env!("CODEX_QUIET_VERSION") {
 pub const CODEX_CLI_DISPLAY_NAME: &str = "codex-quiet";
 /// The `+local` suffix is load-bearing, not decoration.
 ///
-/// A stable Quiet release carries the bare upstream base version (`0.146.0`),
-/// which is exactly what `CARGO_PKG_VERSION` reports in a source build. Without
-/// a marker, a developer build and a published stable release render the
-/// identical string and there is no way to tell from the UI which one is
-/// running. `+local` is semver build metadata, so it sorts and parses cleanly
-/// while making the three channels distinguishable at a glance:
+/// Quiet carries its own version, separate from the Codex base it is built on,
+/// and a release renders both. A source build has no Quiet release version to
+/// report, so it falls back to `CARGO_PKG_VERSION`, which is the Codex base.
+/// Without a marker that fallback is just a bare version and reads like a
+/// release. `+local` is semver build metadata, so it sorts and parses cleanly
+/// while keeping the channels distinguishable at a glance:
 ///
-/// - local/source build -> `codex-quiet 0.146.0+local`
-/// - prerelease         -> `codex-quiet 0.146.0-beta.5`
-/// - stable release     -> `codex-quiet 0.146.0`
+/// - local/source build -> `codex-quiet 0.146.0+local`  (the number is the Codex base)
+/// - prerelease         -> `codex-quiet 1.0.0-beta.1 (codex 0.146.0)`
+/// - stable release     -> `codex-quiet 1.0.0 (codex 0.146.0)`
 ///
 /// Only the fallback is marked. Release builds set `CODEX_QUIET_DISPLAY_VERSION`
 /// explicitly and are untouched by this.

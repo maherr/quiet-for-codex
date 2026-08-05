@@ -1,23 +1,38 @@
 # Changelog
 
-## 0.146.0 - 2026-08-04
+## 1.0.0 - 2026-08-04
 
-First stable Quiet release. It promotes the 0.146.0 beta line unchanged in
-behavior; everything below shipped and was used daily across beta.1 through
-beta.5.
+First stable Quiet release, based on upstream Codex `rust-v0.146.0`. It promotes
+the 0.146.0 beta line unchanged in behavior; everything below shipped and was
+used daily across beta.1 through beta.5.
+
+Quiet now carries its own version, independent of the Codex version it is built
+on. `codex-quiet --version` reports both, as `codex-quiet 1.0.0 (codex
+0.146.0)`.
 
 ### Added
 
 - A release channel for stable tags. `quiet-vX.Y.Z` now publishes as a stable
   release and becomes the latest pointer, while `quiet-vX.Y.Z-beta.N` continues
   to publish as a prerelease that never claims latest.
+- `QUIET_VERSION` at the repository root, the single source of truth for the
+  Quiet release version. The release workflow refuses any tag that disagrees
+  with it.
 
 ### Changed
 
-- Source builds now render as `codex-quiet <version>+local`. A stable release
-  carries the bare upstream base version, which is exactly what a source build
-  reported before, so the two were indistinguishable in the UI. Release builds
-  are unaffected, and the version used for update comparison is unchanged.
+- Quiet versions independently of Codex. Releases were previously numbered with
+  the upstream Codex version, which left nowhere to record a change that Quiet
+  made on an unchanged base, and no way to ship a second release on that base.
+  Appending to the upstream number cannot solve it: semver ignores build
+  metadata when ordering versions, so `+quiet.2` would compare equal to
+  `+quiet.1`, and a prerelease suffix sorts below the version it is built from,
+  so every Quiet release would look older than the Codex release it shipped
+  from. The Codex base is now recorded separately, in the Cargo workspace
+  version, in `FORK_CHANGES.md`, and in the version string.
+- Source builds now render as `codex-quiet <codex base>+local`, so a local build
+  is never mistaken for a release. Release builds are unaffected, and the
+  version used for update comparison is unchanged.
 - Release notes are generated from this file's entry for the version being
   published, rather than from a fixed string in the release workflow that
   described one specific beta.
