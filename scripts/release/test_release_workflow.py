@@ -388,10 +388,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
             identity_command,
         )
         self.assertNotIn("\n    env:\n      CODEX_QUIET_VERSION:", verify_job)
+        # Verification gates PUBLISH, not build. Build starts as soon as the tag
+        # validates so the six platform compiles overlap the verification
+        # compile; publish still cannot run until verify has passed, so nothing
+        # unverified can reach a released asset.
         build_needs = self.workflow.split("  build:\n", 1)[1].split("    runs-on:", 1)[
             0
         ]
-        self.assertIn("- verify", build_needs)
+        self.assertNotIn("- verify", build_needs)
+        publish_needs = self.workflow.split("  publish:\n", 1)[1].split(
+            "    runs-on:", 1
+        )[0]
+        self.assertIn("- verify", publish_needs)
+        self.assertIn("- build", publish_needs)
 
     def test_tag_tracks_quiet_version_and_cargo_tracks_codex_base(self) -> None:
         """The two version axes must stay separate and independently gated.

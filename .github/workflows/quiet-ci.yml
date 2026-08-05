@@ -98,6 +98,13 @@ jobs:
         with:
           components: rustfmt
           targets: x86_64-unknown-linux-gnu
+      # Candidate checks only. The release workflow is deliberately left
+      # uncached: a release artifact must be built from source on a clean
+      # runner, so a poisoned cache cannot reach a published binary, and the
+      # release re-runs these same tests uncached before publishing.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: codex-rs
       - name: Check Rust formatting
         run: python3 scripts/ci/check_quiet_rustfmt.py
       - name: Test release tooling
@@ -256,6 +263,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           targets: ${{ matrix.target }}
+      # Candidate checks only; see the note in the quality job. These are the
+      # slowest runners, so they benefit most.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: codex-rs
+          key: ${{ matrix.target }}
       - name: Configure MSVC
         if: runner.os == 'Windows'
         uses: ./.github/actions/setup-msvc-env

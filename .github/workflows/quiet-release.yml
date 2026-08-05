@@ -425,10 +425,14 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
+    # Deliberately NOT gated on verify. Verification is a ~29 minute serial
+    # compile that used to block every build from starting, for no safety gain:
+    # publish requires verify directly, so nothing unverified can ship either
+    # way. The only cost of starting early is discarding six builds when
+    # verification fails, and hosted runner minutes are free on a public repo.
     needs:
       - validate
       - licenses
-      - verify
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -596,8 +600,12 @@ jobs:
 
   publish:
     name: Publish GitHub release
+    # verify is required HERE rather than on build. This is the gate that keeps
+    # an unverified tree from being published; moving it off build only lets the
+    # compile start earlier.
     needs:
       - validate
+      - verify
       - build
     runs-on: ubuntu-24.04
     permissions:

@@ -56,6 +56,10 @@ Documentation-only changes do not require a Rust build.
   behavior changes.
 - Keep upstream behavior intact unless the divergence is deliberate and
   documented in `FORK_CHANGES.md`.
+- If the change touches release packaging, the version string, or either
+  workflow, run `scripts/release/preflight.sh`. It runs the release gates
+  locally, including the two that only fail once the release injects its
+  display version, which a plain source build never exercises.
 - Do not include credentials, private session data, user prompts, proprietary
   source code, or personal information in fixtures or screenshots.
 
