@@ -612,6 +612,15 @@ jobs:
       contents: write
       attestations: read
     steps:
+      # Release notes are generated from CHANGELOG.md, so this job needs the
+      # source tree. It previously had none, which was invisible while the notes
+      # were a hardcoded string and failed the moment they were read from the
+      # repository. Checkout MUST stay ahead of download-artifact: it defaults to
+      # clean, so running it second would delete the downloaded archives.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate.outputs.commit }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: quiet-release-*

@@ -114,8 +114,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('echo "commit=$commit"', self.workflow)
         self.assertIn('} >> "$GITHUB_OUTPUT"', self.workflow)
         self.assertGreaterEqual(self.workflow.count("git ls-remote --exit-code"), 2)
+        # validate, verify, build, and publish. Publish joined this set when the
+        # release notes started being read from CHANGELOG.md; every job in the
+        # release path checks out the one validated commit and nothing else.
         self.assertEqual(
-            self.workflow.count("ref: ${{ needs.validate.outputs.commit }}"), 3
+            self.workflow.count("ref: ${{ needs.validate.outputs.commit }}"), 4
         )
         self.assertNotIn("ref: ${{ needs.validate.outputs.tag }}", self.workflow)
         self.assertIn(
@@ -401,6 +404,32 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )[0]
         self.assertIn("- verify", publish_needs)
         self.assertIn("- build", publish_needs)
+
+    def test_publish_checks_out_the_source_it_reads(self) -> None:
+        """Publish reads CHANGELOG.md, so it needs the tree, in the right order.
+
+        The notes used to be a hardcoded string, so the job needed no source and
+        had no checkout. Generating them from CHANGELOG.md made that a
+        FileNotFoundError, and only at the publish step, after six platform
+        builds had already succeeded and the tag was immutable.
+
+        Order is load-bearing: actions/checkout defaults to clean, so a checkout
+        placed after download-artifact deletes the archives being published.
+        """
+        body = self.workflow.split("\n  publish:\n", 1)[1]
+        # Cut at the next top-level job header so this reads only publish.
+        next_job = re.search(r"\n  [a-z][a-z0-9-]*:\n", body)
+        publish = body[: next_job.start()] if next_job else body
+
+        self.assertIn("actions/checkout@", publish)
+        self.assertIn("ref: ${{ needs.validate.outputs.commit }}", publish)
+        self.assertIn("persist-credentials: false", publish)
+        self.assertLess(
+            publish.index("actions/checkout@"),
+            publish.index("actions/download-artifact@"),
+            "checkout must precede download-artifact or it cleans away the archives",
+        )
+        self.assertIn("CHANGELOG.md", publish)
 
     def test_tag_tracks_quiet_version_and_cargo_tracks_codex_base(self) -> None:
         """The two version axes must stay separate and independently gated.
