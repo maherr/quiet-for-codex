@@ -1,13 +1,13 @@
 # Changelog
 
-## 1.0.0 - 2026-08-04
+## 1.0.1 - 2026-08-05
 
 First stable Quiet release, based on upstream Codex `rust-v0.146.0`. It promotes
 the 0.146.0 beta line unchanged in behavior; everything below shipped and was
 used daily across beta.1 through beta.5.
 
 Quiet now carries its own version, independent of the Codex version it is built
-on. `codex-quiet --version` reports both, as `codex-quiet 1.0.0 (codex
+on. `codex-quiet --version` reports both, as `codex-quiet 1.0.1 (codex
 0.146.0)`.
 
 ### Added
@@ -43,6 +43,11 @@ on. `codex-quiet --version` reports both, as `codex-quiet 1.0.0 (codex
   Gatekeeper will warn on first launch. Each archive carries GitHub Actions
   build provenance, which is verifiable with `gh attestation verify`, but
   provenance is not a substitute for platform code signing.
+
+No release assets were published for 1.0.0. All six platform archives built and
+verified, but the publish step generates release notes from this file and its
+job had no checkout, so it could not read it. 1.0.1 supersedes that failed
+attempt.
 
 ## 0.146.0-beta.5 - 2026-08-01
 
