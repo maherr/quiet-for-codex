@@ -559,13 +559,12 @@ strip = false
 
 # Balance parallel release code generation against binary size.
 #
-# Quiet raises this above the upstream value of 4. The release pipeline's
-# critical path is a single platform build, so codegen parallelism is the one
-# knob that shortens it without adding runners, and hosted builders have cores
-# to spare. The cost is a larger binary and marginally less cross-function
-# optimization within a crate; thin LTO still runs across crates. Revert to 4 if
-# a measured release shows the archive growth is not worth the build time.
-codegen-units = 16
+# Do not raise this to "parallelize" the release build. It was measured at 16
+# across a full release and every effect was backwards: with lto = "thin", more
+# codegen units means more units for thin LTO to optimize across, and that link
+# cost swamps the extra codegen parallelism. The critical-path build went from
+# 66.8 to 96.7 minutes, five of six targets got slower, and the archives grew.
+codegen-units = 4
 
 [profile.profiling]
 inherits = "release"

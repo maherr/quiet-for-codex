@@ -63,15 +63,6 @@ Binary beta packages omit the experimental patched-zsh payload. A shared
 configuration that enables the zsh-fork feature falls back to the normal user
 shell instead of failing startup.
 
-### Release build profile
-
-Quiet sets `codegen-units = 16` in the release profile where upstream sets 4.
-The release pipeline's critical path is one platform build, so codegen
-parallelism shortens it without adding runners. The trade is a larger binary and
-marginally less within-crate optimization; thin LTO across crates is unchanged.
-This affects build inputs only, not behavior, and Quiet reverts to the upstream
-value if a measured release shows the archive growth outweighs the build time.
-
 ## Compatibility intent
 
 The fork aims to preserve upstream protocol, authentication, configuration,
