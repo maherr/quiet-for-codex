@@ -545,7 +545,14 @@ split-debuginfo = "off"
 strip = false
 
 # Balance parallel release code generation against binary size.
-codegen-units = 4
+#
+# Quiet raises this above the upstream value of 4. The release pipeline's
+# critical path is a single platform build, so codegen parallelism is the one
+# knob that shortens it without adding runners, and hosted builders have cores
+# to spare. The cost is a larger binary and marginally less cross-function
+# optimization within a crate; thin LTO still runs across crates. Revert to 4 if
+# a measured release shows the archive growth is not worth the build time.
+codegen-units = 16
 
 [profile.profiling]
 inherits = "release"
