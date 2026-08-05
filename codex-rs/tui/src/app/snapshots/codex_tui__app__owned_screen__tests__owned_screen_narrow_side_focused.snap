@@ -6,7 +6,7 @@ expression: terminal.backend()
 "side transcript                                                                   "
 "                                                                                  "
 "╭────────────────────────────────────────────────╮                                "
-"│ >_ Quiet for Codex (codex-quiet 0.146.0+local) │                                "
+"│ >_ Quiet for Codex (codex-quiet 0.146.1+local) │                                "
 "│                                                │                                "
 "│ model:     loading   /model to change          │                                "
 "│ directory: /tmp/project                        │                                "

@@ -11,7 +11,7 @@ scrolling.
 > Codex identify the upstream project and compatible service; they do not imply
 > sponsorship.
 
-Quiet for Codex 1.0.1 is based on upstream [`rust-v0.146.0`](https://github.com/openai/codex/releases/tag/rust-v0.146.0). Quiet carries its own version, so `codex-quiet --version` reports both, as `codex-quiet 1.0.1 (codex 0.146.0)`.
+Quiet for Codex 1.0.1 is based on upstream [`rust-v0.146.1`](https://github.com/openai/codex/releases/tag/rust-v0.146.1). Quiet carries its own version, so `codex-quiet --version` reports both, as `codex-quiet 1.0.1 (codex 0.146.1)`.
 
 ## See the difference
 

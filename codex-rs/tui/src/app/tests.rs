@@ -7965,7 +7965,7 @@ async fn selecting_cyber_model_falls_back_to_user_when_auto_review_is_unavailabl
     let _ = app.config.features.disable(Feature::GuardianApproval);
     app.chat_widget
         .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
-    app.active_thread_id = Some(ThreadId::new());
+    app.chat_widget.active_thread_id = Some(ThreadId::new());
 
     let params = app
         .active_thread_model_setting_update_params("gpt-5.4".to_string())
