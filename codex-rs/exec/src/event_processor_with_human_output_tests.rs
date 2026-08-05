@@ -35,11 +35,19 @@ fn exec_summary_uses_quiet_identity_and_exact_build_version() {
     assert!(display_version.starts_with("codex-quiet "));
     assert!(!display_version.contains("OpenAI Codex"));
     if let Some(version) = option_env!("CODEX_QUIET_VERSION") {
-        assert!(display_version.ends_with(version));
+        // A release renders "codex-quiet <quiet version> (codex <base>)", so the
+        // second whitespace-separated token is the exact build version. This was
+        // an `ends_with` check, which only held while the version was the last
+        // thing on the line and broke the moment the Codex base was appended.
+        assert_eq!(
+            display_version.split_whitespace().nth(1),
+            Some(version),
+            "display must carry the exact Quiet build version: {display_version}"
+        );
     }
 
-    // A stable release carries the bare upstream base version, which is exactly
-    // what a source build reports. Without the `+local` marker the two render
+    // A source build falls back to the Codex base version, which is bare and
+    // reads like a release. Without the `+local` marker the two render
     // identically and the UI cannot say which is running. Assert the marker is
     // present precisely when this is NOT a release build, so neither channel can
     // silently start impersonating the other.

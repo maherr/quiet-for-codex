@@ -67,13 +67,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
         cls.fork_changes = FORK_CHANGES_PATH.read_text(encoding="utf-8")
         cls.bug_report = BUG_REPORT_PATH.read_text(encoding="utf-8")
         changelog = CHANGELOG_PATH.read_text(encoding="utf-8")
+        # Mirror the workflow: the release version is the FIRST released
+        # heading, whichever channel it is. Searching for the first *beta*
+        # heading instead meant that once a stable entry was added on top, this
+        # kept validating the previous beta's install pins while a stable
+        # release was being cut, so the pin checks below silently tested the
+        # wrong version.
         release_heading = re.search(
-            r"^## ([0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*) - ",
+            r"^## ([0-9]+\.[0-9]+\.[0-9]+(?:-beta\.[1-9][0-9]*)?) - ",
             changelog,
             re.MULTILINE,
         )
         if release_heading is None:
-            raise AssertionError("CHANGELOG.md has no canonical Quiet beta heading")
+            raise AssertionError("CHANGELOG.md has no canonical Quiet release heading")
         cls.release_version = release_heading.group(1)
 
     def test_build_matrix_covers_exactly_six_supported_targets(self) -> None:
@@ -377,7 +383,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             identity_command,
         )
         self.assertIn(
-            'CODEX_QUIET_DISPLAY_VERSION="codex-quiet ${{ needs.validate.outputs.version }}"',
+            'CODEX_QUIET_DISPLAY_VERSION="codex-quiet ${{ needs.validate.outputs.version }}'
+            ' (codex ${{ needs.validate.outputs.codex_base }})"',
             identity_command,
         )
         self.assertNotIn("\n    env:\n      CODEX_QUIET_VERSION:", verify_job)
@@ -385,6 +392,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
             0
         ]
         self.assertIn("- verify", build_needs)
+
+    def test_tag_tracks_quiet_version_and_cargo_tracks_codex_base(self) -> None:
+        """The two version axes must stay separate and independently gated.
+
+        The tag carries Quiet's own version and must equal QUIET_VERSION. The
+        Cargo workspace version carries the upstream Codex base and must be what
+        FORK_CHANGES.md documents. Collapsing these was what made a second Quiet
+        release on an unchanged Codex base unexpressible.
+        """
+        quiet_version = (REPO_ROOT / "QUIET_VERSION").read_text(encoding="utf-8").strip()
+        self.assertRegex(quiet_version, r"^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$")
+        self.assertEqual(quiet_version, self.release_version)
+
+        self.assertIn('quiet_version="$(tr -d \'[:space:]\' < QUIET_VERSION)"', self.workflow)
+        self.assertIn("does not match QUIET_VERSION", self.workflow)
+        self.assertIn('if [[ "$documented_release" != "rust-v$codex_base" ]]', self.workflow)
+        # The tag base must no longer be compared against the Cargo version.
+        self.assertNotIn("does not match Cargo version", self.workflow)
+        self.assertIn("codex_base: ${{ steps.tag.outputs.codex_base }}", self.workflow)
 
     def test_full_tui_suite_runs_once_and_serially(self) -> None:
         command = (
