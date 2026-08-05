@@ -83,6 +83,7 @@ jobs:
       version: ${{ steps.tag.outputs.version }}
       commit: ${{ steps.tag.outputs.commit }}
       channel: ${{ steps.tag.outputs.channel }}
+      codex_base: ${{ steps.tag.outputs.codex_base }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -116,9 +117,26 @@ jobs:
             exit 1
           fi
           version="${BASH_REMATCH[1]}"
-          cargo_version="$(python3 -c 'import tomllib; print(tomllib.load(open("codex-rs/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          if [[ "${version%%-*}" != "$cargo_version" ]]; then
-            echo "Tag base ${version%%-*} does not match Cargo version $cargo_version" >&2
+          # Two independent axes. The tag carries Quiet's own version, which is
+          # the only one that increments when the fork changes and the only one
+          # a semver update check can compare. The Cargo workspace version is
+          # the upstream Codex base, maintained by the rebase, and it must never
+          # be treated as Quiet's release number: a bare upstream base leaves no
+          # room to ship a second Quiet release on the same base, and appending
+          # to it is impossible because semver ignores build metadata in
+          # precedence and sorts a prerelease below its own base.
+          quiet_version="$(tr -d '[:space:]' < QUIET_VERSION)"
+          if [[ -z "$quiet_version" ]]; then
+            echo "QUIET_VERSION is empty; it is the source of truth for the release version." >&2
+            exit 1
+          fi
+          if [[ "$version" != "$quiet_version" ]]; then
+            echo "Tag version $version does not match QUIET_VERSION $quiet_version" >&2
+            exit 1
+          fi
+          codex_base="$(python3 -c 'import tomllib; print(tomllib.load(open("codex-rs/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          if [[ ! "$codex_base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Codex base version $codex_base is not a bare upstream release version." >&2
             exit 1
           fi
           changelog_version="$(python3 - <<'PY'
@@ -157,8 +175,9 @@ jobs:
           fi
           documented_release="${documented_releases[0]}"
           upstream_base="${upstream_bases[0]}"
-          if [[ "$documented_release" != "rust-v${version%%-*}" ]]; then
-            echo "Documented base $documented_release does not match tag base ${version%%-*}." >&2
+          if [[ "$documented_release" != "rust-v$codex_base" ]]; then
+            echo "Documented base $documented_release does not match Codex base rust-v$codex_base." >&2
+            echo "The tag no longer carries the upstream base; the Cargo workspace version does." >&2
             exit 1
           fi
           upstream_remote="https://github.com/openai/codex.git"
@@ -210,6 +229,7 @@ jobs:
             echo "version=$version"
             echo "commit=$commit"
             echo "channel=$channel"
+            echo "codex_base=$codex_base"
           } >> "$GITHUB_OUTPUT"
       - name: Refuse an existing release
         shell: bash
@@ -220,7 +240,7 @@ jobs:
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "A release for $TAG already exists. Published assets are immutable." >&2
-            echo "Published assets are immutable: pick a new tag (bump beta.N, or the patch version for a stable) before retrying." >&2
+            echo "Published assets are immutable: bump QUIET_VERSION and tag that before retrying." >&2
             exit 1
           fi
 
@@ -290,7 +310,7 @@ jobs:
             -p codex-tui --lib \
             quiet_commands_are_hidden_from_command_popup
           CODEX_QUIET_VERSION="${{ needs.validate.outputs.version }}" \
-          CODEX_QUIET_DISPLAY_VERSION="codex-quiet ${{ needs.validate.outputs.version }}" \
+          CODEX_QUIET_DISPLAY_VERSION="codex-quiet ${{ needs.validate.outputs.version }} (codex ${{ needs.validate.outputs.codex_base }})" \
             cargo test --locked --target x86_64-unknown-linux-gnu \
             -p codex-exec --lib \
             exec_summary_uses_quiet_identity_and_exact_build_version
@@ -417,7 +437,7 @@ jobs:
       attestations: write
     env:
       CODEX_QUIET_VERSION: ${{ needs.validate.outputs.version }}
-      CODEX_QUIET_DISPLAY_VERSION: codex-quiet ${{ needs.validate.outputs.version }}
+      CODEX_QUIET_DISPLAY_VERSION: codex-quiet ${{ needs.validate.outputs.version }} (codex ${{ needs.validate.outputs.codex_base }})
     strategy:
       fail-fast: false
       matrix:
@@ -726,7 +746,7 @@ jobs:
           fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "A release for $TAG already exists. Published assets are immutable." >&2
-            echo "Published assets are immutable: pick a new tag (bump beta.N, or the patch version for a stable) before retrying." >&2
+            echo "Published assets are immutable: bump QUIET_VERSION and tag that before retrying." >&2
             exit 1
           fi
           assets=(
