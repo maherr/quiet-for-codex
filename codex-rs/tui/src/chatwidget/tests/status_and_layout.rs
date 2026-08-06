@@ -4850,9 +4850,9 @@ async fn hidden_active_hook_does_not_add_transcript_separator() {
     assert_eq!(
         visible_display_snapshots
             .last()
-            .and_then(|snapshot| snapshot.selection_projection.as_ref())
-            .map(crate::conversation_selection::CellSelectionProjection::text),
-        Some("Running PostToolUse hook: checking output policy")
+            .and_then(|snapshot| snapshot.selection_projection.resolve(&snapshot.lines))
+            .map(|projection| projection.text().to_string()),
+        Some("Running PostToolUse hook: checking output policy".to_string())
     );
 }
 

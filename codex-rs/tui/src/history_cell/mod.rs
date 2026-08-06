@@ -10,6 +10,7 @@
 //! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
 //! rendered transcript output can change.
 
+use crate::active_cell_selection::ActiveCellSelectionHandle;
 use crate::diff_model::FileChange;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
@@ -99,6 +100,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
@@ -235,12 +237,28 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         }
     }
 
+    fn display_hyperlink_lines_shared_for_mode(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> Arc<[HyperlinkLine]> {
+        Arc::from(self.display_hyperlink_lines_for_mode(width, mode))
+    }
+
     /// Describes the semantic text this cell contributes to app-owned mouse selection.
     ///
     /// Implementations must explicitly choose between source-backed selectable text and
     /// presentation-only output. Transparent cells may be crossed without contributing clipboard
     /// text.
     fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution;
+
+    fn active_cell_selection_handle(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> ActiveCellSelectionHandle {
+        ActiveCellSelectionHandle::ready(self.selection_contribution(width, mode).into_projection())
+    }
 
     /// Returns the number of viewport rows needed to render this cell.
     ///

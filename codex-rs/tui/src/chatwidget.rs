@@ -53,7 +53,6 @@ use crate::bottom_pane::StatusSurfacePreviewData;
 use crate::bottom_pane::StatusSurfacePreviewItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
-use crate::conversation_selection::CellSelectionProjection;
 use crate::diff_model::FileChange;
 use crate::git_action_directives::parse_assistant_markdown;
 use crate::legacy_core::config::Config;
@@ -804,7 +803,7 @@ pub(crate) struct ActiveCellRenderKey {
 /// mappings instead of flattening all in-flight output into presentation-only terminal lines.
 pub(crate) struct ActiveCellDisplaySnapshot {
     pub(crate) lines: Vec<HyperlinkLine>,
-    pub(crate) selection_projection: Option<CellSelectionProjection>,
+    pub(crate) selection_projection: crate::active_cell_selection::ActiveCellSelectionHandle,
     pub(crate) is_stream_continuation: bool,
 }
 
@@ -2011,7 +2010,7 @@ impl ChatWidget {
             }
             snapshots.push(ActiveCellDisplaySnapshot {
                 lines,
-                selection_projection: cell.selection_contribution(width, mode).into_projection(),
+                selection_projection: cell.active_cell_selection_handle(width, mode),
                 is_stream_continuation: cell.is_stream_continuation(),
             });
         };

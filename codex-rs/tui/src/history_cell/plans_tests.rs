@@ -11,9 +11,9 @@ fn finalized_plan_reuses_lines_primed_by_transcript_height() {
         .cached
         .lock()
         .expect("render cache lock")
-        .as_mut()
+        .back_mut()
         .expect("render cache should be populated")
-        .1 = vec![HyperlinkLine::from("cached")];
+        .1 = Arc::from([HyperlinkLine::from("cached")]);
 
     assert_eq!(
         visible_lines(cell.transcript_hyperlink_lines(width)),

@@ -15,6 +15,8 @@ use ratatui::style::Stylize;
 use serde_json::Value;
 
 use crate::chatwidget::ActiveCellDisplaySnapshot;
+use crate::compact_tool_group_item::ToolGroupItem;
+use crate::compact_tool_group_item::ToolGroupSummary;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::compact_command_for_viewport;
@@ -368,7 +370,9 @@ pub(super) fn compact_active_exec_snapshot(
         selection_contribution_from_display_lines(lines.clone(), width).into_projection();
     Some(ActiveCellDisplaySnapshot {
         lines: plain_hyperlink_lines(lines),
-        selection_projection,
+        selection_projection: crate::active_cell_selection::ActiveCellSelectionHandle::ready(
+            selection_projection,
+        ),
         is_stream_continuation: cell.is_stream_continuation(),
     })
 }
@@ -557,31 +561,6 @@ pub(super) fn append_to_trailing_compact_tool_run(
         remove_count,
         replacement,
     }
-}
-
-#[derive(Default)]
-struct ToolGroupItem {
-    summary: ToolGroupSummary,
-    collapse_single: bool,
-}
-
-#[derive(Default)]
-struct ToolGroupSummary {
-    read_labels: BTreeSet<String>,
-    list_count: usize,
-    search_count: usize,
-    edit_file_count: usize,
-    run_count: usize,
-    test_count: usize,
-    build_count: usize,
-    check_count: usize,
-    install_count: usize,
-    web_search_count: usize,
-    web_open_count: usize,
-    web_find_count: usize,
-    mcp_counts: BTreeMap<String, usize>,
-    dynamic_tool_counts: BTreeMap<String, usize>,
-    actions: usize,
 }
 
 impl ToolGroupSummary {
@@ -869,7 +848,15 @@ fn is_transparent_tool_group_cell(cell: &dyn HistoryCell) -> bool {
 
 #[allow(clippy::redundant_closure_for_method_calls)]
 fn exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
-    if exec.is_active() || exec.iter_calls().any(|call| call.is_user_shell_command()) {
+    if exec.is_active() {
+        return None;
+    }
+
+    exec.get_or_init_compact_tool_group_item(|| classify_exec_tool_group_item(exec))
+}
+
+fn classify_exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
+    if exec.iter_calls().any(|call| call.is_user_shell_command()) {
         return None;
     }
 
@@ -1238,10 +1225,9 @@ fn next_web_url(input: &str) -> Option<(usize, usize)> {
 fn find_ascii_case_insensitive(input: &str, needle: &str) -> Option<usize> {
     let needle = needle.as_bytes();
     (!needle.is_empty()).then_some(())?;
-    input
-        .as_bytes()
-        .windows(needle.len())
-        .position(|window| window.eq_ignore_ascii_case(needle))
+    input.as_bytes().windows(needle.len()).position(|window| {
+        window[0].eq_ignore_ascii_case(&needle[0]) && window.eq_ignore_ascii_case(needle)
+    })
 }
 
 fn is_url_terminator(ch: char) -> bool {
@@ -1249,6 +1235,11 @@ fn is_url_terminator(ch: char) -> bool {
 }
 
 fn mcp_tool_group_item(mcp: &McpToolCallCell) -> Option<ToolGroupItem> {
+    mcp.completed_invocation()?;
+    mcp.get_or_init_compact_tool_group_item(|| classify_mcp_tool_group_item(mcp))
+}
+
+fn classify_mcp_tool_group_item(mcp: &McpToolCallCell) -> Option<ToolGroupItem> {
     let (invocation, success) = mcp.completed_invocation()?;
     if !success || !mcp.is_safe_to_compact() {
         return None;
@@ -1889,7 +1880,12 @@ mod tests {
             .join("\n");
 
         assert_eq!(rendered, "• Work: read app.rs\n  └ Running: cat lib.rs");
-        assert!(snapshot.selection_projection.is_some());
+        assert!(
+            snapshot
+                .selection_projection
+                .resolve(&snapshot.lines)
+                .is_some()
+        );
     }
 
     #[test]
@@ -2123,6 +2119,28 @@ mod tests {
         let _resized = projected[0].display_lines(/*width*/ 40);
         COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), 0));
         COMPACT_PRESENTATION_RENDER_COUNT.with(|count| assert_eq!(count.get(), 2));
+    }
+
+    #[test]
+    fn in_flight_exec_does_not_poison_completed_classification_cache() {
+        let mut cell = active_exploring_exec();
+        COMPACT_OUTPUT_SCAN_COUNT.with(|count| count.set(0));
+
+        assert!(exec_tool_group_item(&cell).is_none());
+        COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), 0));
+
+        assert!(cell.complete_call(
+            "read-2",
+            CommandOutput::new(/*exit_code*/ 0, String::new()),
+            Duration::from_millis(10),
+        ));
+        let classified = exec_tool_group_item(&cell).expect("completed classification");
+        assert_eq!(classified.summary.actions, 2);
+        COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), 2));
+
+        let cached = exec_tool_group_item(&cell).expect("cached classification");
+        assert_eq!(cached.summary.actions, 2);
+        COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), 2));
     }
 
     #[test]

@@ -9,6 +9,12 @@
   existing run. It shows the active phase and crate, test progress, system
   load, and an ETA learned only from successful comparable runs.
 
+### Changed
+
+- Long-session scrolling, text selection, hover handling, and resizing now
+  reuse retained viewport and render data, resolve active Markdown selection
+  lazily, cache completed tool classifications, and debounce resize reflow.
+
 ## 1.0.1 - 2026-08-05
 
 First stable Quiet release, based on upstream Codex `rust-v0.146.0`. It promotes

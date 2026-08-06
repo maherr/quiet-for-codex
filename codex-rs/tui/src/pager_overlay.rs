@@ -520,9 +520,27 @@ impl PagerContent {
         self.view.renderables.len()
     }
 
-    pub(crate) fn renderable_heights(&mut self, width: u16) -> Vec<u16> {
+    pub(crate) fn renderable_heights(&mut self, width: u16) -> &[u16] {
         self.view.layout.ensure(&self.view.renderables, width);
-        self.view.layout.heights().to_vec()
+        self.view.layout.heights()
+    }
+
+    pub(crate) fn renderable_hit(
+        &mut self,
+        width: u16,
+        content_row: usize,
+    ) -> Option<(usize, usize)> {
+        self.view.layout.ensure(&self.view.renderables, width);
+        let index = self
+            .view
+            .layout
+            .first_with_end_at_least(content_row.saturating_add(1));
+        let height = self.view.layout.heights().get(index).copied()?;
+        let top = self.view.layout.start(index);
+        if height == 0 || content_row < top {
+            return None;
+        }
+        Some((index, content_row.saturating_sub(top)))
     }
 
     pub(crate) fn is_following_bottom(&self) -> bool {

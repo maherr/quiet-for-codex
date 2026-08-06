@@ -12,9 +12,9 @@ fn replace_cached_lines(
         .expect("ordinary markdown should be cacheable");
     let mut rendered_lines = rendered_lines.cached.lock().expect("render cache lock");
     let (key, lines) = rendered_lines
-        .as_mut()
+        .back_mut()
         .expect("render cache should be populated");
-    *lines = vec![HyperlinkLine::from("cached")];
+    *lines = Arc::from([HyperlinkLine::from("cached")]);
     update_key(key);
 }
 

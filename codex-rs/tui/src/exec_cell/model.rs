@@ -6,6 +6,7 @@
 //! example, an orphan end that should render as a separate history entry).
 
 use std::borrow::Cow;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -13,6 +14,8 @@ use super::live_output::LiveCommandOutput;
 use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 use itertools::Either;
+
+use crate::compact_tool_group_item::ToolGroupItem;
 
 #[derive(Debug, Default)]
 pub(crate) struct CommandOutput {
@@ -76,6 +79,7 @@ pub(crate) struct ExecCall {
 pub(crate) struct ExecCell {
     pub(crate) calls: Vec<ExecCall>,
     animations_enabled: bool,
+    compact_tool_group_item: OnceLock<Option<ToolGroupItem>>,
 }
 
 impl ExecCell {
@@ -83,6 +87,7 @@ impl ExecCell {
         Self {
             calls: vec![call],
             animations_enabled,
+            compact_tool_group_item: OnceLock::new(),
         }
     }
 
@@ -105,6 +110,7 @@ impl ExecCell {
             interaction_input,
         };
         if self.is_exploring_cell() && Self::is_exploring_call(&call) {
+            self.compact_tool_group_item.take();
             self.calls.push(call);
             true
         } else {
@@ -173,6 +179,13 @@ impl ExecCell {
 
     pub(crate) fn iter_calls(&self) -> impl Iterator<Item = &ExecCall> {
         self.calls.iter()
+    }
+
+    pub(crate) fn get_or_init_compact_tool_group_item(
+        &self,
+        init: impl FnOnce() -> Option<ToolGroupItem>,
+    ) -> Option<ToolGroupItem> {
+        self.compact_tool_group_item.get_or_init(init).clone()
     }
 
     pub(crate) fn contains_call_id(&self, call_id: &str) -> bool {

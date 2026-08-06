@@ -152,6 +152,37 @@ pub(crate) struct ProposedPlanStreamCell {
     body_line_range: Range<usize>,
 }
 
+impl ProposedPlanCell {
+    fn render_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut lines = vec![
+            HyperlinkLine::new(vec!["• ".dim(), "Proposed Plan".bold()].into()),
+            HyperlinkLine::new(Line::from(" ")),
+        ];
+
+        let mut plan_lines = vec![HyperlinkLine::new(Line::from(" "))];
+        let plan_style = proposed_plan_style();
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+        let mut body = crate::markdown::render_markdown_agent_with_links_and_cwd(
+            &self.plan_markdown,
+            Some(wrap_width),
+            Some(self.cwd.as_path()),
+        );
+        if body.is_empty() {
+            body.push(HyperlinkLine::new(Line::from("(empty)".dim().italic())));
+        }
+        plan_lines.extend(prefix_hyperlink_lines(body, "  ".into(), "  ".into()));
+        plan_lines.push(HyperlinkLine::new(Line::from(" ")));
+
+        lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
+        lines
+    }
+
+    fn shared_hyperlink_lines(&self, width: u16) -> Arc<[HyperlinkLine]> {
+        self.rendered_lines
+            .render(width, || self.render_hyperlink_lines(width))
+    }
+}
+
 fn stream_plan_selection_contribution(
     lines: &[HyperlinkLine],
     body_line_range: Range<usize>,
@@ -263,29 +294,18 @@ impl HistoryCell for ProposedPlanCell {
     }
 
     fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
-        self.rendered_lines.render(width, || {
-            let mut lines = vec![
-                HyperlinkLine::new(vec!["• ".dim(), "Proposed Plan".bold()].into()),
-                HyperlinkLine::new(Line::from(" ")),
-            ];
+        self.shared_hyperlink_lines(width).to_vec()
+    }
 
-            let mut plan_lines = vec![HyperlinkLine::new(Line::from(" "))];
-            let plan_style = proposed_plan_style();
-            let wrap_width = width.saturating_sub(4).max(1) as usize;
-            let mut body = crate::markdown::render_markdown_agent_with_links_and_cwd(
-                &self.plan_markdown,
-                Some(wrap_width),
-                Some(self.cwd.as_path()),
-            );
-            if body.is_empty() {
-                body.push(HyperlinkLine::new(Line::from("(empty)".dim().italic())));
-            }
-            plan_lines.extend(prefix_hyperlink_lines(body, "  ".into(), "  ".into()));
-            plan_lines.push(HyperlinkLine::new(Line::from(" ")));
-
-            lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
-            lines
-        })
+    fn display_hyperlink_lines_shared_for_mode(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> Arc<[HyperlinkLine]> {
+        match mode {
+            HistoryRenderMode::Rich => self.shared_hyperlink_lines(width),
+            HistoryRenderMode::Raw => Arc::from(plain_hyperlink_lines(self.raw_lines())),
+        }
     }
 
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {

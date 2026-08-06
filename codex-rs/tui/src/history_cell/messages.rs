@@ -577,6 +577,40 @@ impl AgentMarkdownCell {
             rendered_lines,
         }
     }
+
+    fn render_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let Some(wrap_width) =
+            crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2)
+        else {
+            return prefix_hyperlink_lines(
+                vec![HyperlinkLine::new(Line::default())],
+                agent_message_prefix(),
+                agent_message_continuation_prefix(),
+            );
+        };
+
+        // Re-render markdown from source at the current width. Reserve 2 columns for the "● " /
+        // " " prefix prepended below.
+        let lines = crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations(
+            &self.markdown_source,
+            Some(wrap_width),
+            Some(self.cwd.as_path()),
+            self.inline_visualization_context.as_ref(),
+        );
+        prefix_message_hyperlink_lines(
+            lines,
+            agent_message_prefix(),
+            agent_message_continuation_prefix(),
+        )
+    }
+
+    fn shared_hyperlink_lines(&self, width: u16) -> Arc<[HyperlinkLine]> {
+        if let Some(rendered_lines) = &self.rendered_lines {
+            rendered_lines.render(width, || self.render_hyperlink_lines(width))
+        } else {
+            Arc::from(self.render_hyperlink_lines(width))
+        }
+    }
 }
 
 impl HistoryCell for AgentMarkdownCell {
@@ -585,36 +619,17 @@ impl HistoryCell for AgentMarkdownCell {
     }
 
     fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
-        let render = || {
-            let Some(wrap_width) =
-                crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2)
-            else {
-                return prefix_hyperlink_lines(
-                    vec![HyperlinkLine::new(Line::default())],
-                    agent_message_prefix(),
-                    agent_message_continuation_prefix(),
-                );
-            };
+        self.shared_hyperlink_lines(width).to_vec()
+    }
 
-            // Re-render markdown from source at the current width. Reserve 2 columns for the "● " /
-            // " " prefix prepended below.
-            let lines = crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations(
-                &self.markdown_source,
-                Some(wrap_width),
-                Some(self.cwd.as_path()),
-                self.inline_visualization_context.as_ref(),
-            );
-            prefix_message_hyperlink_lines(
-                lines,
-                agent_message_prefix(),
-                agent_message_continuation_prefix(),
-            )
-        };
-
-        if let Some(rendered_lines) = &self.rendered_lines {
-            rendered_lines.render(width, render)
-        } else {
-            render()
+    fn display_hyperlink_lines_shared_for_mode(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> Arc<[HyperlinkLine]> {
+        match mode {
+            HistoryRenderMode::Rich => self.shared_hyperlink_lines(width),
+            HistoryRenderMode::Raw => Arc::from(plain_hyperlink_lines(self.raw_lines())),
         }
     }
 
@@ -658,6 +673,27 @@ impl HistoryCell for AgentMarkdownCell {
                 )
                 .map(SelectionContribution::Selectable)
                 .unwrap_or(SelectionContribution::Transparent)
+            }
+        }
+    }
+
+    fn active_cell_selection_handle(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> crate::active_cell_selection::ActiveCellSelectionHandle {
+        match mode {
+            HistoryRenderMode::Rich => {
+                crate::active_cell_selection::ActiveCellSelectionHandle::agent_markdown(
+                    &self.markdown_source,
+                    &self.cwd,
+                    width,
+                )
+            }
+            HistoryRenderMode::Raw => {
+                crate::active_cell_selection::ActiveCellSelectionHandle::ready(
+                    self.selection_contribution(width, mode).into_projection(),
+                )
             }
         }
     }

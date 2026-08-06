@@ -12,7 +12,11 @@ use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
+
+use crate::active_cell_selection::ActiveCellSelectionHandle;
 
 use super::*;
 use crate::history_cell::AgentMarkdownCell;
@@ -28,6 +32,31 @@ struct TestCell {
     raw: &'static str,
     transcript: &'static str,
     is_stream_continuation: bool,
+}
+
+#[derive(Debug)]
+struct CountingCell {
+    display: &'static str,
+    display_calls: Arc<AtomicUsize>,
+}
+
+impl HistoryCell for CountingCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        self.display_calls.fetch_add(1, Ordering::Relaxed);
+        vec![self.display.into()]
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        vec![self.display.into()]
+    }
+
+    fn selection_contribution(
+        &self,
+        _width: u16,
+        _mode: HistoryRenderMode,
+    ) -> SelectionContribution {
+        SelectionContribution::Transparent
+    }
 }
 
 impl HistoryCell for TestCell {
@@ -134,11 +163,13 @@ fn live_cell(
 ) -> ActiveCellDisplaySnapshot {
     let lines = vec![HyperlinkLine::from(display)];
     ActiveCellDisplaySnapshot {
-        selection_projection: selection_contribution_from_display_lines(
-            crate::terminal_hyperlinks::visible_lines(lines.clone()),
-            width,
-        )
-        .into_projection(),
+        selection_projection: ActiveCellSelectionHandle::ready(
+            selection_contribution_from_display_lines(
+                crate::terminal_hyperlinks::visible_lines(lines.clone()),
+                width,
+            )
+            .into_projection(),
+        ),
         lines,
         is_stream_continuation,
     }
@@ -150,6 +181,60 @@ fn viewport(cells: Vec<Arc<dyn HistoryCell>>) -> ConversationViewport {
         HistoryRenderMode::Rich,
         crate::keymap::RuntimeKeymap::defaults().pager,
     )
+}
+
+#[test]
+fn committed_hit_measures_each_cell_only_through_the_pager_layout() {
+    let display_calls = Arc::new(AtomicUsize::new(0));
+    let mut viewport = viewport(vec![Arc::new(CountingCell {
+        display: "cell",
+        display_calls: Arc::clone(&display_calls),
+    })]);
+    viewport.content.set_scroll_offset(0);
+
+    assert_eq!(
+        viewport.committed_cell_hit(
+            Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 5
+            ),
+            Position::new(/*x*/ 0, /*y*/ 0),
+        ),
+        Some(ConversationCellHit {
+            index: 0,
+            row_within_cell: 0,
+        })
+    );
+    assert_eq!(display_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn replacing_cells_retains_the_unchanged_prefix_layout() {
+    let first_calls = Arc::new(AtomicUsize::new(0));
+    let second_calls = Arc::new(AtomicUsize::new(0));
+    let replacement_calls = Arc::new(AtomicUsize::new(0));
+    let first = Arc::new(CountingCell {
+        display: "first",
+        display_calls: Arc::clone(&first_calls),
+    }) as Arc<dyn HistoryCell>;
+    let second = Arc::new(CountingCell {
+        display: "second",
+        display_calls: Arc::clone(&second_calls),
+    }) as Arc<dyn HistoryCell>;
+    let mut viewport = viewport(vec![Arc::clone(&first), second]);
+
+    let _initial_heights = viewport.content.renderable_heights(/*width*/ 20);
+    assert_eq!(first_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(second_calls.load(Ordering::Relaxed), 1);
+
+    let replacement = Arc::new(CountingCell {
+        display: "replacement",
+        display_calls: Arc::clone(&replacement_calls),
+    }) as Arc<dyn HistoryCell>;
+    viewport.replace_cells(vec![first, replacement]);
+    let _replacement_heights = viewport.content.renderable_heights(/*width*/ 20);
+
+    assert_eq!(first_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(replacement_calls.load(Ordering::Relaxed), 1);
 }
 
 fn select_entire_projection(projection: CellSelectionProjection) -> String {
@@ -563,12 +648,16 @@ fn preserves_semantic_links_for_committed_and_live_content() {
             Some(vec![ActiveCellDisplaySnapshot {
                 lines: live.display_hyperlink_lines(width),
                 selection_projection: live
-                    .selection_contribution(width, HistoryRenderMode::Rich)
-                    .into_projection(),
+                    .active_cell_selection_handle(width, HistoryRenderMode::Rich),
                 is_stream_continuation: live.is_stream_continuation(),
             }])
         },
     );
+    assert!(matches!(
+        viewport.live_cells[0].selection_projection,
+        ActiveCellSelectionHandle::AgentMarkdown { .. }
+    ));
+    assert!(viewport.selection_projection_cache.is_none());
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 28, /*height*/ 6,
     );
@@ -579,6 +668,14 @@ fn preserves_semantic_links_for_committed_and_live_content() {
     let rendered = buffer_text(&buffer, area);
     assert!(rendered.contains(&format!("\x1b]8;;{committed_destination}\x07")));
     assert!(rendered.contains(&format!("\x1b]8;;{live_destination}\x07")));
+    assert!(viewport.selection_projection_cache.is_none());
+    assert_eq!(
+        viewport.live_cells[0]
+            .selection_projection
+            .resolve(&viewport.live_cells[0].lines)
+            .map(|projection| projection.text().to_string()),
+        Some(live_destination.to_string()),
+    );
 }
 
 #[test]

@@ -1307,6 +1307,18 @@ See the Codex keymap documentation for supported actions and examples."
             | TuiEvent::MouseMove(_)
             | TuiEvent::Draw => {}
         }
+        if self.overlay.is_none() {
+            if matches!(event, TuiEvent::Resize)
+                && self.schedule_owned_resize_draw(&tui.frame_requester())
+            {
+                return Ok(AppRunControl::Continue);
+            }
+            if matches!(event, TuiEvent::Draw)
+                && self.defer_owned_draw_until_resize_quiet(&tui.frame_requester())
+            {
+                return Ok(AppRunControl::Continue);
+            }
+        }
         if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             self.handle_draw_pre_render(tui)?;
         }

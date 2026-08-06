@@ -87,6 +87,7 @@ use uuid::Uuid;
 
 pub(crate) use codex_app_server_client::legacy_core;
 
+mod active_cell_selection;
 mod activity_verbs;
 mod additional_dirs;
 mod app;
@@ -107,6 +108,7 @@ mod clipboard_copy;
 mod clipboard_paste;
 mod collaboration_modes;
 mod color;
+mod compact_tool_group_item;
 mod config_update;
 mod conversation_selection;
 mod conversation_selection_autoscroll;
