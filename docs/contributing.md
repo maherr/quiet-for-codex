@@ -40,6 +40,20 @@ just fix -p <crate-you-touched>
 just test -p <crate-you-touched>
 ```
 
+For a full workspace run, Forge keeps the long compile visible and preserves
+the test command's exit status:
+
+```shell
+just watch-test
+# In another terminal, attach to an existing run:
+just watch-build
+```
+
+It reports the active phase and crate, test progress, system load, and a
+history-based ETA. The first successful run calibrates that estimate. Pressing
+Ctrl-C detaches the dashboard without stopping the build; captured output stays
+under `~/.cache/codex-build-watch/runs/`.
+
 TUI changes must include or update relevant `insta` snapshots. Review every
 changed snapshot rather than accepting them blindly. Platform-specific fixes
 should include a regression test where the behavior can be exercised in CI.

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A live Forge dashboard for long workspace builds and test runs. `just
+  watch-test` launches a run inside it, while `just watch-build` attaches to an
+  existing run. It shows the active phase and crate, test progress, system
+  load, and an ETA learned only from successful comparable runs.
+
 ## 1.0.1 - 2026-08-05
 
 First stable Quiet release, based on upstream Codex `rust-v0.146.0`. It promotes
