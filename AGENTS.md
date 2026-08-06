@@ -44,8 +44,8 @@ In the codex-rs folder where the rust code lives:
 - Do not create small helper methods that are referenced only once.
 - For tracing async work, instrument the function or method definition with
   `#[tracing::instrument(...)]` instead of attaching spans to futures with
-  `.instrument(...)` at call sites. Before adding instrumentation, check whether the callee—or
-  the implementation method it immediately delegates to—is already instrumented.
+  `.instrument(...)` at call sites. Before adding instrumentation, check whether the callee, or
+  the implementation method it immediately delegates to, is already instrumented.
 - Avoid large modules:
   - Prefer adding new modules instead of growing existing ones.
   - Target Rust modules under 500 LoC, excluding tests.
@@ -122,13 +122,12 @@ Avoid test-only functions in the main implementation.
 
 Check whether there are existing helpers to make tests more streamlined and readable.
 
-### Change size guidance (800 lines)
+### Change size guidance
 
-Unless the change is mechanical the total number of changed lines should not exceed 800 lines.
-For complex logic changes the size should be under 500 lines.
-
-If the change is larger, explore whether it can be split into reviewable stages and identify the smallest coherent stage to land first.
-Base the staging suggestion on the actual diff, dependencies, and affected call sites.
+Prefer the smallest coherent diff, but do not impose a numeric line cap or omit cohesive
+functionality solely to shrink a change. Split work only when the stages are independently useful
+and the split genuinely improves reviewability. Judge generated lockfiles, snapshots, fixtures, and
+other mechanical output separately from the implementation they support.
 
 ## TUI style conventions
 
