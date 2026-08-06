@@ -45,6 +45,7 @@ pub(super) struct OwnedScreen {
     last_conversation_area: Rect,
     last_rendered_conversation_area: Rect,
     last_selection_viewport_area: Option<Rect>,
+    last_hover_position: Option<Position>,
 }
 
 struct RenderedOwnedScreen {
@@ -72,6 +73,7 @@ impl OwnedScreen {
             last_conversation_area: Rect::default(),
             last_rendered_conversation_area: Rect::default(),
             last_selection_viewport_area: None,
+            last_hover_position: None,
         }
     }
 
@@ -79,7 +81,7 @@ impl OwnedScreen {
         &mut self,
         cells: Vec<Arc<dyn HistoryCell>>,
         compact_tool_groups: bool,
-    ) {
+    ) -> HashSet<compact_tool_groups::CompactToolGroupId> {
         // Reprojection can move a retained header while the pointer remains stationary. Clear the
         // cue until the terminal reports another coordinate instead of highlighting stale geometry.
         self.clear_tool_group_hover();
@@ -101,6 +103,7 @@ impl OwnedScreen {
         self.source_cells = cells;
         self.compact_tool_groups = compact_tool_groups;
         self.viewport.replace_cells(projected);
+        valid_groups
     }
 
     fn push_source_cell(&mut self, cell: Arc<dyn HistoryCell>, compact_tool_groups: bool) {
@@ -108,7 +111,7 @@ impl OwnedScreen {
         if self.compact_tool_groups != compact_tool_groups {
             self.source_cells.push(cell);
             let cells = self.source_cells.clone();
-            self.replace_source_cells(cells, compact_tool_groups);
+            let _valid_groups = self.replace_source_cells(cells, compact_tool_groups);
             return;
         }
 
@@ -255,6 +258,7 @@ impl OwnedScreen {
             return false;
         }
         self.viewport.handle_mouse_scroll(event.direction);
+        self.last_hover_position = None;
         self.update_tool_group_hover(Position::new(event.column, event.row));
         true
     }
@@ -323,11 +327,21 @@ impl OwnedScreen {
     }
 
     fn update_tool_group_hover(&mut self, position: Position) -> bool {
+        let same_region = self.last_hover_position.is_some_and(|previous| {
+            previous.y == position.y
+                && self.last_conversation_area.contains(previous)
+                    == self.last_conversation_area.contains(position)
+        });
+        if same_region {
+            return false;
+        }
+        self.last_hover_position = Some(position);
         let hovered = self.compact_tool_group_header_at(position);
         self.tool_group_hover.update(hovered)
     }
 
-    fn clear_tool_group_hover(&self) -> bool {
+    fn clear_tool_group_hover(&mut self) -> bool {
+        self.last_hover_position = None;
         self.tool_group_hover.update(None)
     }
 
@@ -354,16 +368,17 @@ impl OwnedScreen {
         group: compact_tool_groups::CompactToolGroupId,
         scroll_offset: usize,
     ) -> bool {
-        if !self.compact_tool_groups
-            || !compact_tool_groups::compact_tool_group_ids(&self.source_cells).contains(&group)
-        {
+        if !self.compact_tool_groups {
             return false;
         }
         if !self.expanded_tool_groups.insert(group) {
             self.expanded_tool_groups.remove(&group);
         }
         let cells = self.source_cells.clone();
-        self.replace_source_cells(cells, /*compact_tool_groups*/ true);
+        let valid_groups = self.replace_source_cells(cells, /*compact_tool_groups*/ true);
+        if !valid_groups.contains(&group) {
+            return false;
+        }
         self.viewport
             .preserve_scroll_offset_through_next_render(scroll_offset);
         true
@@ -827,7 +842,7 @@ impl App {
         let cells = self.chat_widget.transcript_cells.clone();
         let compact_tool_groups = self.compact_tool_groups_enabled();
         if let Some(screen) = &mut self.chat_widget.owned_screen {
-            screen.replace_source_cells(cells, compact_tool_groups);
+            let _valid_groups = screen.replace_source_cells(cells, compact_tool_groups);
         }
     }
 
@@ -838,7 +853,7 @@ impl App {
                 == HistoryRenderMode::Rich
                 && !pane.compact_tool_groups_expanded;
             if let Some(screen) = &mut pane.owned_screen {
-                screen.replace_source_cells(cells, compact_tool_groups);
+                let _valid_groups = screen.replace_source_cells(cells, compact_tool_groups);
             }
         });
     }
@@ -877,6 +892,57 @@ impl App {
         }
         tui.clear_pending_history_lines();
         Ok(true)
+    }
+
+    pub(super) fn schedule_owned_resize_draw(
+        &mut self,
+        frame_requester: &crate::tui::FrameRequester,
+    ) -> bool {
+        if !self.has_owned_screen() {
+            return false;
+        }
+        self.chat_widget.for_each_installed_mut(|pane| {
+            if pane.owned_screen.is_some() {
+                pane.transcript_reflow.schedule_debounced(None);
+            }
+        });
+        frame_requester.schedule_frame_in(crate::transcript_reflow::TRANSCRIPT_REFLOW_DEBOUNCE);
+        true
+    }
+
+    pub(super) fn defer_owned_draw_until_resize_quiet(
+        &mut self,
+        frame_requester: &crate::tui::FrameRequester,
+    ) -> bool {
+        if !self.has_owned_screen() {
+            return false;
+        }
+        let mut latest_deadline = None;
+        self.chat_widget.for_each_installed_mut(|pane| {
+            if pane.owned_screen.is_some()
+                && let Some(deadline) = pane.transcript_reflow.pending_until()
+            {
+                latest_deadline = Some(
+                    latest_deadline.map_or(deadline, |current: std::time::Instant| {
+                        current.max(deadline)
+                    }),
+                );
+            }
+        });
+        let Some(deadline) = latest_deadline else {
+            return false;
+        };
+        let now = std::time::Instant::now();
+        if now < deadline {
+            frame_requester.schedule_frame_in(deadline - now);
+            return true;
+        }
+        self.chat_widget.for_each_installed_mut(|pane| {
+            if pane.owned_screen.is_some() {
+                pane.transcript_reflow.clear_pending_reflow();
+            }
+        });
+        false
     }
 
     pub(super) fn render_owned_screen_frame(&mut self, tui: &mut tui::Tui) -> Result<Option<Rect>> {

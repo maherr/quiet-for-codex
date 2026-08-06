@@ -779,6 +779,54 @@ async fn edge_selection_schedules_frames_and_survives_resize_events() -> Result<
 }
 
 #[tokio::test]
+async fn owned_resize_waits_for_a_quiet_period_before_rendering() -> Result<()> {
+    let mut app = app_with_owned_parent().await;
+    seed_pane(&mut app, PaneSlot::Parent, "", &["one", "two"]);
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create render test TUI");
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Resize)
+        .await?;
+    let first_deadline = app
+        .chat_widget
+        .transcript_reflow
+        .pending_until()
+        .expect("owned resize deadline");
+    assert_eq!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("parent owned screen")
+            .last_rendered_conversation_area,
+        Rect::default(),
+    );
+
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Resize)
+        .await?;
+    assert!(
+        app.chat_widget
+            .transcript_reflow
+            .pending_until()
+            .expect("renewed owned resize deadline")
+            >= first_deadline
+    );
+
+    app.chat_widget.transcript_reflow.set_due_for_test();
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
+        .await?;
+    assert!(
+        !app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("parent owned screen")
+            .last_rendered_conversation_area
+            .is_empty()
+    );
+    assert!(!app.chat_widget.transcript_reflow.has_pending_reflow());
+    Ok(())
+}
+
+#[tokio::test]
 async fn focused_only_layout_cancels_selection_in_the_hidden_pane() {
     let mut app = app_with_owned_side().await;
     seed_pane(&mut app, PaneSlot::Parent, "", &["parent selectable"]);
@@ -2016,9 +2064,10 @@ async fn replacing_sources_prunes_expanded_ids_even_while_showing_all() {
         Arc::from(completed_read_exec("new-2", "new-b.rs")),
     ];
     let screen = app.chat_widget.owned_screen.as_mut().expect("owned screen");
-    screen.replace_source_cells(replacement.clone(), /*compact_tool_groups*/ false);
+    let _valid_groups =
+        screen.replace_source_cells(replacement.clone(), /*compact_tool_groups*/ false);
     assert!(screen.expanded_tool_groups.is_empty());
-    screen.replace_source_cells(replacement, /*compact_tool_groups*/ true);
+    let _valid_groups = screen.replace_source_cells(replacement, /*compact_tool_groups*/ true);
 
     assert_eq!(screen.viewport.committed_cell_count(), 1);
     assert!(

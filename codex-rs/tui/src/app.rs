@@ -1320,6 +1320,18 @@ See the Codex keymap documentation for supported actions and examples."
             | TuiEvent::Resume
             | TuiEvent::Draw => {}
         }
+        if self.overlay.is_none() {
+            if matches!(event, TuiEvent::Resize(_))
+                && self.schedule_owned_resize_draw(&tui.frame_requester())
+            {
+                return Ok(AppRunControl::Continue);
+            }
+            if matches!(event, TuiEvent::Draw)
+                && self.defer_owned_draw_until_resize_quiet(&tui.frame_requester())
+            {
+                return Ok(AppRunControl::Continue);
+            }
+        }
         if !matches!(&event, TuiEvent::Key(_) | TuiEvent::Paste(_)) {
             self.expire_pending_key_chord();
             self.handle_draw_pre_render(tui, screen_size)?;

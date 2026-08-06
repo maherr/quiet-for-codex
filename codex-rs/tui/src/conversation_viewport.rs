@@ -39,7 +39,7 @@ use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
-use crate::terminal_hyperlinks::visible_lines;
+use crate::terminal_hyperlinks::visible_lines_ref;
 use crate::tui::MouseScrollDirection;
 
 pub(crate) struct ConversationViewport {
@@ -211,25 +211,15 @@ impl ConversationViewport {
         if area.is_empty() || !area.contains(position) {
             return None;
         }
-        self.ensure_selection_projections(area.width);
         let screen_row = usize::from(position.y.saturating_sub(area.y));
         let content_row = self.content.scroll_offset().saturating_add(screen_row);
-        let (index, layout) = self
-            .selection_projection_cache
-            .as_ref()?
-            .layout
-            .iter()
-            .copied()
-            .enumerate()
-            .take(self.cells.len())
-            .find(|(_, layout)| {
-                layout.height > 0
-                    && content_row >= layout.top
-                    && content_row < layout.top.saturating_add(layout.height)
-            })?;
+        let (index, row_within_cell) = self.content.renderable_hit(area.width, content_row)?;
+        if index >= self.cells.len() {
+            return None;
+        }
         Some(ConversationCellHit {
             index,
-            row_within_cell: content_row.saturating_sub(layout.top),
+            row_within_cell,
         })
     }
 
@@ -378,9 +368,22 @@ impl ConversationViewport {
         self.take_live_tail_renderables();
         self.live_tail_key = None;
         self.live_cells.clear();
-        self.cells = cells;
-        self.content
-            .replace(Self::render_cells(&self.cells, self.render_mode));
+        let retained_prefix = self
+            .cells
+            .iter()
+            .zip(&cells)
+            .take_while(|(current, replacement)| Arc::ptr_eq(current, replacement))
+            .count();
+        while self.cells.len() > retained_prefix {
+            self.cells.pop();
+            self.content.pop();
+        }
+        for cell in cells.into_iter().skip(retained_prefix) {
+            let has_prior_cells = !self.cells.is_empty();
+            let renderable = Self::cell_renderable(cell.clone(), self.render_mode, has_prior_cells);
+            self.cells.push(cell);
+            self.content.push(renderable);
+        }
         if follow_bottom {
             self.content.scroll_to_bottom();
         }
@@ -644,50 +647,34 @@ impl ConversationViewport {
         let mut content_top = 0usize;
         let mut layout = Vec::with_capacity(selection_cell_count);
         for index in 0..selection_cell_count {
-            let (is_stream_continuation, desired_height) = if let Some(cell) = self.cells.get(index)
-            {
-                (
-                    cell.is_stream_continuation(),
-                    cell.desired_height_for_mode(width, self.render_mode),
-                )
+            let (is_stream_continuation, live_cell) = if let Some(cell) = self.cells.get(index) {
+                (cell.is_stream_continuation(), None)
             } else {
                 let Some(cell) = self.live_cells.get(index.saturating_sub(self.cells.len())) else {
                     return;
                 };
-                (
-                    cell.is_stream_continuation,
-                    HyperlinkLinesRenderable {
-                        lines: cell.lines.clone(),
-                    }
-                    .desired_height(width),
-                )
+                (cell.is_stream_continuation, Some(cell))
             };
             let leading_spacing = usize::from(index > 0 && !is_stream_continuation);
-            let renderable_height = renderable_heights
-                .get(index)
-                .copied()
-                .unwrap_or(desired_height);
+            let renderable_height = if let Some(height) = renderable_heights.get(index).copied() {
+                height
+            } else {
+                let Some(cell) = live_cell else {
+                    return;
+                };
+                HyperlinkLinesRenderable {
+                    lines: cell.lines.clone(),
+                }
+                .desired_height(width)
+            };
             layout.push(SelectionCellLayout {
                 top: content_top.saturating_add(leading_spacing),
                 height: usize::from(renderable_height).saturating_sub(leading_spacing),
             });
             content_top = content_top.saturating_add(usize::from(renderable_height));
         }
-        let mut projections = vec![None; selection_cell_count];
-        let mut computed = vec![false; selection_cell_count];
-        for (live_index, cell) in self.live_cells.iter().enumerate() {
-            let index = self.cells.len().saturating_add(live_index);
-            let separator = if index > 0 && cell.is_stream_continuation {
-                "\n"
-            } else {
-                "\n\n"
-            };
-            projections[index] = cell
-                .selection_projection
-                .clone()
-                .map(|projection| projection.with_default_separator_before(separator));
-            computed[index] = true;
-        }
+        let projections = vec![None; selection_cell_count];
+        let computed = vec![false; selection_cell_count];
         self.selection_projection_cache = Some(SelectionProjectionCache {
             width,
             render_mode: self.render_mode,
@@ -714,18 +701,30 @@ impl ConversationViewport {
         {
             return;
         }
-        let Some(cell) = self.cells.get(index) else {
-            return;
+        let width = cache.width;
+        let render_mode = cache.render_mode;
+        let (projection, is_stream_continuation) = if let Some(cell) = self.cells.get(index) {
+            (
+                cell.selection_contribution(width, render_mode)
+                    .into_projection(),
+                cell.is_stream_continuation(),
+            )
+        } else {
+            let Some(cell) = self.live_cells.get(index.saturating_sub(self.cells.len())) else {
+                return;
+            };
+            (
+                cell.selection_projection.resolve(&cell.lines),
+                cell.is_stream_continuation,
+            )
         };
-        let separator = if index > 0 && cell.is_stream_continuation() {
+        let separator = if index > 0 && is_stream_continuation {
             "\n"
         } else {
             "\n\n"
         };
-        let projection = cell
-            .selection_contribution(cache.width, cache.render_mode)
-            .into_projection()
-            .map(|projection| projection.with_default_separator_before(separator));
+        let projection =
+            projection.map(|projection| projection.with_default_separator_before(separator));
         if let Some(cache) = self.selection_projection_cache.as_mut() {
             cache.projections[index] = projection;
             cache.computed[index] = true;
@@ -839,12 +838,12 @@ impl Renderable for ConversationCellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let hyperlink_lines = self
             .cell
-            .display_hyperlink_lines_for_mode(area.width, self.render_mode);
+            .display_hyperlink_lines_shared_for_mode(area.width, self.render_mode);
         let block_style = match self.render_mode {
             HistoryRenderMode::Rich => self.cell.rich_block_style().unwrap_or_default(),
             HistoryRenderMode::Raw => Default::default(),
         };
-        Paragraph::new(Text::from(visible_lines(hyperlink_lines.clone())))
+        Paragraph::new(Text::from(visible_lines_ref(&hyperlink_lines)))
             .style(block_style)
             .wrap(Wrap { trim: false })
             .render(area, buf);
@@ -873,14 +872,14 @@ struct HyperlinkLinesRenderable {
 
 impl Renderable for HyperlinkLinesRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(Text::from(visible_lines(self.lines.clone())))
+        Paragraph::new(Text::from(visible_lines_ref(&self.lines)))
             .wrap(Wrap { trim: false })
             .render(area, buf);
         mark_buffer_hyperlinks(buf, area, &self.lines, /*scroll_rows*/ 0);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        Paragraph::new(Text::from(visible_lines(self.lines.clone())))
+        Paragraph::new(Text::from(visible_lines_ref(&self.lines)))
             .wrap(Wrap { trim: false })
             .line_count(width)
             .try_into()

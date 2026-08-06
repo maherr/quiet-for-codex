@@ -1,6 +1,9 @@
 //! MCP tool-call, inventory, and output history cells.
 
 use super::*;
+use std::sync::OnceLock;
+
+use crate::compact_tool_group_item::ToolGroupItem;
 
 #[derive(Debug)]
 struct McpImageOutputCell;
@@ -55,6 +58,7 @@ pub(crate) struct McpToolCallCell {
     duration: Option<Duration>,
     result: Option<Result<codex_protocol::mcp::CallToolResult, String>>,
     animations_enabled: bool,
+    compact_tool_group_item: OnceLock<Option<ToolGroupItem>>,
 }
 
 const MCP_VIEWPORT_RESULT_MAX_LINES: usize = 2;
@@ -104,6 +108,7 @@ impl McpToolCallCell {
             duration: None,
             result: None,
             animations_enabled,
+            compact_tool_group_item: OnceLock::new(),
         }
     }
 
@@ -133,6 +138,13 @@ impl McpToolCallCell {
 
     pub(crate) fn completed_invocation(&self) -> Option<(&McpInvocation, bool)> {
         self.success().map(|success| (&self.invocation, success))
+    }
+
+    pub(crate) fn get_or_init_compact_tool_group_item(
+        &self,
+        init: impl FnOnce() -> Option<ToolGroupItem>,
+    ) -> Option<ToolGroupItem> {
+        self.compact_tool_group_item.get_or_init(init).clone()
     }
 
     /// Returns whether a completed MCP call can be represented by a compact work summary without
@@ -400,10 +412,9 @@ pub(crate) fn tool_result_requires_user_action(result: &str) -> bool {
 pub(crate) fn contains_ascii_case_insensitive(input: &str, needle: &str) -> bool {
     let needle = needle.as_bytes();
     !needle.is_empty()
-        && input
-            .as_bytes()
-            .windows(needle.len())
-            .any(|window| window.eq_ignore_ascii_case(needle))
+        && input.as_bytes().windows(needle.len()).any(|window| {
+            window[0].eq_ignore_ascii_case(&needle[0]) && window.eq_ignore_ascii_case(needle)
+        })
 }
 
 impl HistoryCell for McpToolCallCell {

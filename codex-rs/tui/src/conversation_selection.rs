@@ -657,13 +657,18 @@ impl ConversationSelection {
     ) -> Option<Range<usize>> {
         let (start, end) = self.ordered_points()?;
         let selected_rows = start.row..end.row.saturating_add(1);
-        let mut selected = layout
-            .iter()
-            .enumerate()
-            .filter(|(_, cell)| cell.intersects(selected_rows.clone()))
-            .map(|(index, _)| index);
-        let first = selected.next()?;
-        let last = selected.next_back().unwrap_or(first);
+        let mut first = layout.partition_point(|cell| cell.bottom() <= selected_rows.start);
+        let mut past_last = layout.partition_point(|cell| cell.top < selected_rows.end);
+        while first < past_last && !layout[first].intersects(selected_rows.clone()) {
+            first = first.saturating_add(1);
+        }
+        while first < past_last && !layout[past_last - 1].intersects(selected_rows.clone()) {
+            past_last = past_last.saturating_sub(1);
+        }
+        if first == past_last {
+            return None;
+        }
+        let last = past_last.saturating_sub(1);
         Some(first..last.saturating_add(1))
     }
 
