@@ -106,6 +106,7 @@ class Sample:
     disk_read_rate: float
     disk_write_rate: float
     artifacts: int
+    workspace_targets: int
     repo: Path
     tests_done: int
     tests_total: int
@@ -215,6 +216,28 @@ def count_new_artifacts(target_dir: Path, started_at: float) -> int:
         )
     except OSError:
         return 0
+
+
+def workspace_test_targets(repo: Path) -> int:
+    manifest_dir = (
+        repo / "codex-rs" if (repo / "codex-rs" / "Cargo.toml").is_file() else repo
+    )
+    try:
+        output = subprocess.check_output(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+            cwd=manifest_dir,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=15,
+        )
+        metadata = json.loads(output)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return 0
+    return sum(
+        target.get("test") or "test" in target.get("kind", ())
+        for package in metadata.get("packages", ())
+        for target in package.get("targets", ())
+    )
 
 
 def history_key(repo: Path, command: str) -> str:
@@ -383,6 +406,7 @@ class Monitor:
             self.target_dir = self.repo / "target"
         self.key = history_key(self.repo, self.command)
         self.history_rows = load_history().get(self.key, [])
+        self.workspace_targets = workspace_test_targets(self.repo)
         self.facts, self.owned = OutputFacts(), owned
         self.log_tail = LogTail(log_path, self.facts) if log_path else None
         self.previous_time, self.previous_cpu = time.monotonic(), {}
@@ -464,6 +488,7 @@ class Monitor:
             disk_read_rate=read_rate,
             disk_write_rate=write_rate,
             artifacts=count_new_artifacts(self.target_dir, self.started_at),
+            workspace_targets=self.workspace_targets,
             repo=self.repo,
             tests_done=self.facts.tests_done,
             tests_total=self.facts.tests_total,
@@ -479,6 +504,40 @@ def phase_index(phase: str) -> int:
         return PHASES.index(phase)
     except ValueError:
         return 3 if phase == "FAILED" else 0
+
+
+def demo_sample() -> Sample:
+    return Sample(
+        root_pid=4_124_702,
+        alive=True,
+        phase="BUILD",
+        target="codex-cli · login integration suite",
+        elapsed=582,
+        eta="~11m 20s",
+        eta_basis="median of 3 comparable runs",
+        progress=0.61,
+        jobs=2,
+        cpu_percent=186,
+        rss_bytes=6_418_000_000,
+        mem_used=21_900_000_000,
+        mem_total=66_500_000_000,
+        swap_used=7_300_000_000,
+        swap_total=8_500_000_000,
+        disk_read_rate=18_000_000,
+        disk_write_rate=142_000_000,
+        artifacts=94,
+        workspace_targets=220,
+        repo=Path("/home/maher/code/maherr/codex-quiet"),
+        tests_done=0,
+        tests_total=0,
+        recent=(
+            "Compiling codex-core v0.146.1",
+            "Compiling codex-tui v0.146.1",
+            "Linking login-947e0565cc3ca78e",
+        ),
+        cpu_history=(20, 45, 80, 130, 175, 190, 186),
+        io_history=(4, 9, 42, 70, 150, 132, 160),
+    )
 
 
 def phases_renderable(sample: Sample) -> RenderableType:
@@ -508,7 +567,7 @@ def phases_renderable(sample: Sample) -> RenderableType:
     label = (
         f"{sample.tests_done:,}/{sample.tests_total:,} tests"
         if sample.tests_total
-        else f"{sample.artifacts} new executable artifacts"
+        else f"{sample.artifacts} new executable artifacts · {sample.workspace_targets} workspace test targets"
     )
     eta = Text.assemble(
         ("ETA  ", "grey70"),
@@ -626,6 +685,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--once", action="store_true", help="render one sample and exit"
     )
     parser.add_argument(
+        "--demo", action="store_true", help="render a stable demonstration dashboard"
+    )
+    parser.add_argument(
         "--color",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -642,6 +704,9 @@ def main(argv: list[str] | None = None) -> int:
         color_system="truecolor" if terminal and args.color else None,
         no_color=not (terminal and args.color),
     )
+    if args.demo:
+        console.print(dashboard(demo_sample()))
+        return 0
     owned, log_path, pid = None, None, args.pid
     launched_at, launched_command, launched_cwd = None, None, None
     if args.run is not None:

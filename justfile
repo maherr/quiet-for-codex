@@ -85,6 +85,18 @@ test *args:
 test *args:
     $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
 
+# Launch the full test suite inside the Forge build telemetry dashboard.
+[positional-arguments]
+[unix]
+watch-test *args:
+    uv run --project "{{ justfile_directory() }}/scripts" python "{{ justfile_directory() }}/scripts/build_watch.py" --run just test "$@"
+
+# Attach the Forge dashboard to the newest running workspace build.
+[positional-arguments]
+[unix]
+watch-build *args:
+    uv run --project "{{ justfile_directory() }}/scripts" python "{{ justfile_directory() }}/scripts/build_watch.py" "$@"
+
 # Run from the repository root so scripts that resolve paths from `cwd` see
 # the same layout they use in GitHub Actions.
 [no-cd]
