@@ -527,7 +527,7 @@ def demo_sample() -> Sample:
         disk_write_rate=142_000_000,
         artifacts=94,
         workspace_targets=220,
-        repo=Path("/home/maher/code/maherr/codex-quiet"),
+        repo=Path("~/src/codex-quiet").expanduser(),
         tests_done=0,
         tests_total=0,
         recent=(
