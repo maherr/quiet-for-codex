@@ -102,9 +102,19 @@ jobs:
       # uncached: a release artifact must be built from source on a clean
       # runner, so a poisoned cache cannot reach a published binary, and the
       # release re-runs these same tests uncached before publishing.
+      # `prefix-key` evicts the entry poisoned on 2026-08-05. `cache-all-crates` keeps the
+      # v8 crate's build-script OUTPUT in the cache, which is the actual defect: the pinned
+      # rusty_v8 download is a .gz, and the crate's build script is what extracts it into
+      # librusty_v8.a. A full-match cache restore made Cargo treat v8 as fresh, so the script
+      # never ran, nothing extracted the archive, and the link failed with "could not find
+      # native static library `rusty_v8`" ~12s after the artifact step reported success. The key
+      # is Cargo.lock-based rather than per-branch, which is why main, the staging branch and a
+      # dependabot branch all failed identically from one poisoned entry.
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: codex-rs
+          prefix-key: v1-rust
+          cache-all-crates: "true"
       - name: Check Rust formatting
         run: python3 scripts/ci/check_quiet_rustfmt.py
       - name: Test release tooling
@@ -265,10 +275,20 @@ jobs:
           targets: ${{ matrix.target }}
       # Candidate checks only; see the note in the quality job. These are the
       # slowest runners, so they benefit most.
+      # `prefix-key` evicts the entry poisoned on 2026-08-05. `cache-all-crates` keeps the
+      # v8 crate's build-script OUTPUT in the cache, which is the actual defect: the pinned
+      # rusty_v8 download is a .gz, and the crate's build script is what extracts it into
+      # librusty_v8.a. A full-match cache restore made Cargo treat v8 as fresh, so the script
+      # never ran, nothing extracted the archive, and the link failed with "could not find
+      # native static library `rusty_v8`" ~12s after the artifact step reported success. The key
+      # is Cargo.lock-based rather than per-branch, which is why main, the staging branch and a
+      # dependabot branch all failed identically from one poisoned entry.
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: codex-rs
           key: ${{ matrix.target }}
+          prefix-key: v1-rust
+          cache-all-crates: "true"
       - name: Configure MSVC
         if: runner.os == 'Windows'
         uses: ./.github/actions/setup-msvc-env
