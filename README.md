@@ -11,7 +11,7 @@ scrolling.
 > Codex identify the upstream project and compatible service; they do not imply
 > sponsorship.
 
-Quiet for Codex 1.0.1 is based on upstream [`rust-v0.146.1`](https://github.com/openai/codex/releases/tag/rust-v0.146.1). Quiet carries its own version, so `codex-quiet --version` reports both, as `codex-quiet 1.0.1 (codex 0.146.1)`.
+Quiet for Codex 1.0.2 is based on upstream [`rust-v0.146.1`](https://github.com/openai/codex/releases/tag/rust-v0.146.1). Quiet carries its own version, so `codex-quiet --version` reports both, as `codex-quiet 1.0.2 (codex 0.146.1)`.
 
 ## See the difference
 
@@ -107,13 +107,13 @@ replace or remove a `codex` command you already have.
 ### macOS or Linux
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.1/scripts/release/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.2/scripts/release/install.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.1/scripts/release/install.ps1)))
+& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.2/scripts/release/install.ps1)))
 ```
 
 The installers select the matching archive from the newest Quiet for Codex
