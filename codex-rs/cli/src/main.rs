@@ -1159,15 +1159,6 @@ async fn cli_main(
         Some(Subcommand::RemoteControl(_)) => {
             anyhow::bail!(quiet_daemon_disabled_message());
         }
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        Some(Subcommand::App(app_cli)) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "app",
-            )?;
-            app_cmd::run_app(app_cli).await?;
-        }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,

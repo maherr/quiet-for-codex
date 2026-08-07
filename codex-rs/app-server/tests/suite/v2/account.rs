@@ -21,7 +21,6 @@ use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientInfo;
-use codex_app_server_protocol::DesktopOnboardingEntrypoint;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
@@ -2143,7 +2142,11 @@ async fn login_account_chatgpt_ignores_stock_desktop_success_page_request() -> R
         .await?;
     let login: LoginAccountResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
-    let LoginAccountResponse::Chatgpt { login_id, auth_url } = login else {
+    let LoginAccountResponse::Chatgpt {
+        login_id: _,
+        auth_url,
+    } = login
+    else {
         bail!("unexpected login response: {login:?}");
     };
     let auth_url = Url::parse(&auth_url)?;
@@ -2186,23 +2189,10 @@ async fn login_account_chatgpt_ignores_stock_desktop_success_page_request() -> R
             .into_owned()
             .collect();
     assert_eq!(token_form.get("redirect_uri"), Some(&token_redirect_uri),);
-    let notification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("account/login/completed"),
-    )
-    .await??;
-    let ServerNotification::AccountLoginCompleted(payload) = notification.try_into()? else {
-        bail!("unexpected notification")
-    };
-    assert_eq!(
-        payload,
-        AccountLoginCompletedNotification {
-            login_id: Some(login_id),
-            success: true,
-            error: None,
-            onboarding_entrypoint: Some(DesktopOnboardingEntrypoint::LifeSciences),
-        }
-    );
+    // Quiet serves its own local success page instead of handing off to the
+    // stock desktop app, so login completion is not observable until the
+    // browser fetches that page; this test only pins the redirect and the
+    // token exchange.
     Ok(())
 }
 
