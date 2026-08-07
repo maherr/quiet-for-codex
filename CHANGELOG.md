@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.3 - 2026-08-07
+
+Stable release of `1.0.3-beta.1`, promoted unchanged: the first stable Quiet on
+the upstream Codex `rust-v0.147.0` base.
+
+### Changed
+
+- Rebased Quiet onto upstream Codex `rust-v0.147.0`. All Quiet presentation
+  behavior carries over unchanged: failure-safe Work bundles, lifecycle cards,
+  per-group inspection, the owned-screen transcript with its fixed composer,
+  and the inline fallback.
+- Adopted upstream's paginated scrollback history inside the compact tool
+  grouping renderer, so the earlier-messages notice and history top-up work
+  with Quiet's grouped transcript.
+- Consolidated closed-thread bookkeeping on Quiet's bounded retirement
+  tombstones, which now also cover upstream's new late-request rejection for
+  closed side conversations.
+
+### Removed
+
+- Dropped Quiet's focus-time palette retention patch. Upstream `rust-v0.147.0`
+  removed focus-time palette requeries entirely, which supersedes the patch and
+  is verified by an upstream regression test.
+
 ## 1.0.3-beta.1 - 2026-08-07
 
 ### Changed
