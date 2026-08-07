@@ -26,12 +26,12 @@ class GenerateV8NoticesTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertGreater(len(first.encode("utf-8")), 250_000)
         self.assertIn(
-            "rusty_v8 commit: 5d0e31ea6bf67f4559faa759b91e22bc3f1cd696",
+            "rusty_v8 commit: 5c15a6995c9bb4bacd3e341b59fff32c909c80bf",
             first,
         )
-        self.assertIn("V8 commit: 64e3c08f8fbde9e391a490087b317b3c5365f1ba", first)
+        self.assertIn("V8 commit: 0da5ef4358784bb0af0ff5d5d7c49cdad8931d1e", first)
         self.assertIn(
-            "Unix artifact build commit: 1e1b8ed914d7b4aec4d987ffaf3d1c3e97f3fa4d",
+            "Unix artifact build commit: 12b3e88028b983051913fb6bb95d7a11218bdceb",
             first,
         )
         self.assertIn("Component: libc++abi", first)

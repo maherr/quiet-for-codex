@@ -415,14 +415,14 @@ async fn global_warning_renders_in_both_owned_panes() -> Result<()> {
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
     app.handle_app_server_event(
         &app_server,
-        codex_app_server_client::AppServerEvent::ServerNotification(
+        codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
             ServerNotification::ConfigWarning(ConfigWarningNotification {
                 summary: "Shared configuration warning".to_string(),
                 details: None,
                 path: None,
                 range: None,
             }),
-        ),
+        )),
     )
     .await;
     let mut tui = crate::tui::test_support::make_test_tui()?;
@@ -766,7 +766,8 @@ async fn edge_selection_schedules_frames_and_survives_resize_events() -> Result<
         .expect("timed out waiting for autoscroll frame")
         .expect("draw channel closed");
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
-    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Resize)
+    let screen_size = tui.terminal.last_known_screen_size;
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Resize(screen_size))
         .await?;
     assert!(
         app.chat_widget
@@ -785,7 +786,8 @@ async fn owned_resize_waits_for_a_quiet_period_before_rendering() -> Result<()> 
     let mut tui = crate::tui::test_support::make_test_tui().expect("create render test TUI");
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
 
-    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Resize)
+    let screen_size = tui.terminal.last_known_screen_size;
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Resize(screen_size))
         .await?;
     let first_deadline = app
         .chat_widget
@@ -801,7 +803,8 @@ async fn owned_resize_waits_for_a_quiet_period_before_rendering() -> Result<()> 
         Rect::default(),
     );
 
-    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Resize)
+    let screen_size = tui.terminal.last_known_screen_size;
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Resize(screen_size))
         .await?;
     assert!(
         app.chat_widget

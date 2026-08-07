@@ -139,13 +139,14 @@ impl CompactToolGroupCell {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        render_transcript_lines(
+        let (lines, _) = render_transcript_lines(
             &state.source_cells,
             width,
             mode,
             /*compact_tool_groups*/ false,
             /*row_cap*/ None,
-        )
+        );
+        lines
     }
 
     fn append_source(&self, source: Arc<dyn HistoryCell>, detail: String) {
@@ -2060,7 +2061,7 @@ mod tests {
             HistoryRenderMode::Rich,
             true,
             None,
-        ));
+        ).0);
         assert!(rendered.contains("Visible reasoning"));
     }
 
@@ -2417,7 +2418,7 @@ mod tests {
             HistoryRenderMode::Rich,
             true,
             None,
-        ));
+        ).0);
         assert!(rendered.contains("permission denied"));
         assert!(rendered.contains("failed (exit 7)"));
         insta::assert_snapshot!("failed_exec_between_work_bundles", rendered);
@@ -2462,7 +2463,7 @@ mod tests {
             HistoryRenderMode::Rich,
             true,
             None,
-        ));
+        ).0);
         assert!(rendered.contains("Error: permission denied"));
         assert!(rendered.contains("https://example.com/device"));
     }
@@ -2535,7 +2536,7 @@ mod tests {
             HistoryRenderMode::Rich,
             true,
             None,
-        ));
+        ).0);
         assert!(rendered.contains("https://example.com/device"));
     }
 
@@ -2607,7 +2608,7 @@ mod tests {
             HistoryRenderMode::Rich,
             true,
             None,
-        ));
+        ).0);
         assert!(rendered.contains("Approval required"));
         assert!(rendered.contains("https://example.com/deploy/123"));
     }
@@ -2719,7 +2720,7 @@ mod tests {
             HistoryRenderMode::Raw,
             false,
             None,
-        ));
+        ).0);
 
         assert_eq!(inspected.len(), 2);
         assert!(rendered.contains("$ cat main.rs"));
@@ -2734,8 +2735,8 @@ mod tests {
             .map(|index| completed_read_exec(&format!("read-{index}"), &format!("file-{index}.rs")))
             .collect::<Vec<_>>();
 
-        let compact = render_transcript_lines(&cells, 120, HistoryRenderMode::Rich, true, Some(2));
-        let raw = render_transcript_lines(&cells, 120, HistoryRenderMode::Raw, false, None);
+        let (compact, _) = render_transcript_lines(&cells, 120, HistoryRenderMode::Rich, true, Some(2));
+        let (raw, _) = render_transcript_lines(&cells, 120, HistoryRenderMode::Raw, false, None);
         let raw_text = render_lines_text(&raw);
 
         assert!(compact.len() <= 2);

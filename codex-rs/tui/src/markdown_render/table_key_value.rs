@@ -20,6 +20,7 @@ use crate::wrapping::word_wrap_line;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use unicode_width::UnicodeWidthStr;
 
 const FIELD_LEADING_PADDING: usize = 1;
 const FIELD_GAP: usize = 2;

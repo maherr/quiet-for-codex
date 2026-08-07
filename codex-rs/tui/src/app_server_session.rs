@@ -777,7 +777,7 @@ impl AppServerSession {
                 self.remote_cwd_override.as_deref(),
             )
         };
-        let mut response: ThreadForkResponse = match self
+        let response: ThreadForkResponse = match self
             .client
             .request_typed(ClientRequest::ThreadFork {
                 request_id,

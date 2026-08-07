@@ -34,7 +34,8 @@ impl App {
         {
             self.insert_history_cell_lines_with_initial_replay_buffer(tui, cell.as_ref(), width);
         } else if appended_cell_touches_compact_group && self.overlay.is_none() {
-            if let Err(err) = self.reflow_transcript_now(tui) {
+            let terminal_width = tui.terminal.last_known_screen_size.into();
+            if let Err(err) = self.reflow_transcript_now(tui, terminal_width) {
                 tracing::warn!(
                     error = %err,
                     "failed to reflow transcript after compact tool group append"
@@ -77,7 +78,8 @@ impl App {
             self.schedule_lifecycle_history_reflow(tui);
             return Ok(());
         }
-        self.reflow_transcript_now(tui)?;
+        let terminal_width = tui.terminal.last_known_screen_size.into();
+        self.reflow_transcript_now(tui, terminal_width)?;
         tui.frame_requester().schedule_frame();
         Ok(())
     }

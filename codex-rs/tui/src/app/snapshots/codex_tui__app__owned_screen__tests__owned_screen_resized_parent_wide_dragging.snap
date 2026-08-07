@@ -4,7 +4,7 @@ expression: active.backend()
 ---
 " Parent  ⌥ + 1 / ⌥ + 2 focus                                          ┃ Side                                            "
 "parent transcript                                                     ┃╭───────────────────────────────────────────────╮"
-"                                                                      ┃│ >_ Quiet for Codex (codex-quiet 0.146.1+loca… │"
+"                                                                      ┃│ >_ Quiet for Codex (codex-quiet 0.147.0+loca… │"
 "                                                                      ┃│                                               │"
 "                                                                      ┃│ model:     loading   /model to change         │"
 "                                                                      ┃│ directory: /tmp/project                       │"

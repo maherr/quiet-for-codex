@@ -409,9 +409,9 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
     );
     app.enqueue_primary_thread_session(started.session, started.turns)
         .await?;
-    app.transcript_cells = initial_cells;
+    app.chat_widget.transcript_cells = initial_cells;
     assert_eq!(
-        app.transcript_cells
+        app.chat_widget.transcript_cells
             .iter()
             .filter_map(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
             .map(|user| user.message.as_str())
@@ -444,6 +444,7 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
         .await?;
 
     let visible_user_messages = app
+        .chat_widget
         .transcript_cells
         .iter()
         .filter_map(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
@@ -578,7 +579,7 @@ async fn transcript_home_loads_every_older_history_page() -> Result<()> {
     );
     app.enqueue_primary_thread_session(started.session, started.turns)
         .await?;
-    app.transcript_cells = initial_cells;
+    app.chat_widget.transcript_cells = initial_cells;
     app.scrollback_has_older_history = app_server.has_older_history(thread_id);
     assert!(app.scrollback_has_older_history);
     while app_event_rx.try_recv().is_ok() {}
@@ -602,7 +603,7 @@ async fn transcript_home_loads_every_older_history_page() -> Result<()> {
     }
 
     assert!(recorded_params(&requests, "thread/items/list").len() >= initial_page_requests + 3);
-    assert!(app.transcript_cells.iter().any(|cell| {
+    assert!(app.chat_widget.transcript_cells.iter().any(|cell| {
         cell.display_lines(/*width*/ 80)
             .iter()
             .any(|line| line.to_string().contains("history output 0"))
@@ -896,10 +897,10 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
     );
     app.enqueue_primary_thread_session(started.session, started.turns)
         .await?;
-    app.transcript_cells = initial_cells;
+    app.chat_widget.transcript_cells = initial_cells;
     app.scrollback_has_older_history = app_server.has_older_history(thread_id);
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(32);
-    let initial_cell_count = app.transcript_cells.len();
+    let initial_cell_count = app.chat_widget.transcript_cells.len();
     let initial_page_requests = recorded_params(&requests, "thread/items/list").len();
     let mut tui = crate::tui::test_support::make_test_tui()?;
 
@@ -967,7 +968,7 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
     app.handle_event(&mut tui, &mut app_server, loaded).await?;
 
     assert!(app.overlay.is_none());
-    assert!(app.transcript_cells.len() > initial_cell_count);
+    assert!(app.chat_widget.transcript_cells.len() > initial_cell_count);
     assert_eq!(
         recorded_params(&requests, "thread/items/list").len(),
         initial_page_requests + 1
@@ -1431,7 +1432,7 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                 assert!(matches!(control, AppRunControl::Continue));
                 assert_ne!(app.chat_widget.thread_id(), Some(named_fork_id));
                 let name_error = std::iter::from_fn(|| app_event_rx.try_recv().ok())
-                    .find_map(|event| match event {
+                    .find_map(|event| match conversation_event_payload(event) {
                         AppEvent::InsertHistoryCell(cell) => {
                             let rendered =
                                 lines_to_single_string(&cell.display_lines(/*width*/ 80));

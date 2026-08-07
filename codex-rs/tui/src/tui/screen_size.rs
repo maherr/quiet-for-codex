@@ -45,7 +45,12 @@ impl Tui {
                 self.terminal.size()?
             }
             TuiEvent::Draw => self.screen_size.deferred_size.take().unwrap_or(cached),
-            TuiEvent::Key(_) | TuiEvent::Paste(_) => cached,
+            TuiEvent::Key(_)
+            | TuiEvent::Paste(_)
+            | TuiEvent::MouseScroll(_)
+            | TuiEvent::MousePrimary(_)
+            | TuiEvent::MouseMove(_)
+            | TuiEvent::FocusLost => cached,
         };
         self.screen_size.pending_draw_size =
             (!matches!(event, TuiEvent::Key(_) | TuiEvent::Paste(_))).then_some(size);

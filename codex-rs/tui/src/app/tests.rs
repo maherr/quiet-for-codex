@@ -714,9 +714,8 @@ async fn full_thread_channel_drops_transient_hook_start_instead_of_delaying_it()
     let snapshot = channel.store.lock().await.snapshot();
     assert_matches!(
         snapshot.events.as_slice(),
-        [ThreadBufferedEvent::Notification(
-            ServerNotification::HookStarted(_)
-        )]
+        [ThreadBufferedEvent::Notification(notification)]
+            if matches!(notification.as_ref(), ServerNotification::HookStarted(_))
     );
     let mut rx = channel.receiver.take().expect("missing receiver");
 
@@ -4771,8 +4770,8 @@ async fn discard_closed_side_thread_ignores_late_server_events() -> Result<()> {
         crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
     app.handle_app_server_event(
         &app_server,
-        codex_app_server_client::AppServerEvent::ServerNotification(thread_closed_notification(
-            side_thread_id,
+        codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+            thread_closed_notification(side_thread_id),
         )),
     )
     .await;
@@ -4787,7 +4786,7 @@ async fn discard_closed_side_thread_ignores_late_server_events() -> Result<()> {
     );
     app.handle_app_server_event(
         &app_server,
-        codex_app_server_client::AppServerEvent::ServerRequest(late_request.clone()),
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(late_request.clone())),
     )
     .await;
     assert!(!app.thread_event_channels.contains_key(&side_thread_id));
@@ -4867,7 +4866,7 @@ async fn side_thread_closed_removes_only_side_and_keeps_parent_live() -> Result<
     app.handle_active_thread_event(
         &mut tui,
         &mut app_server,
-        ThreadBufferedEvent::Notification(thread_closed_notification(side_thread_id)),
+        ThreadBufferedEvent::Notification(Box::new(thread_closed_notification(side_thread_id))),
     )
     .await?;
 
@@ -4901,7 +4900,7 @@ async fn parent_thread_closed_keeps_side_live_without_exiting() -> Result<()> {
         &mut tui,
         &mut app_server,
         PaneSlot::Parent,
-        ThreadBufferedEvent::Notification(thread_closed_notification(parent_thread_id)),
+        ThreadBufferedEvent::Notification(Box::new(thread_closed_notification(parent_thread_id))),
     )
     .await?;
 

@@ -1689,7 +1689,7 @@ mod tests {
         })]);
         overlay.sync_live_tail(
             /*width*/ 40,
-            Some(ActiveCellTranscriptKey {
+            Some(ActiveCellRenderKey {
                 revision: 1,
                 is_stream_continuation: false,
                 animation_tick: None,

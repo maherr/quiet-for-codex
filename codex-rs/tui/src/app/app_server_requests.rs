@@ -1202,6 +1202,7 @@ mod tests {
                         thread_id: thread_id.to_string(),
                         turn_id: "turn-1".to_string(),
                         item_id: "tool-1".to_string(),
+                        is_blocking: true,
                         questions: Vec::new(),
                         auto_resolution_ms: None,
                     },

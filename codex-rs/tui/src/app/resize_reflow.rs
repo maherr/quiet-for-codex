@@ -101,7 +101,8 @@ impl App {
             if self.has_owned_screen() {
                 self.sync_owned_screen_cells();
             } else {
-                self.reflow_transcript_now(tui)?;
+                let terminal_width = tui.terminal.last_known_screen_size.into();
+                self.reflow_transcript_now(tui, terminal_width)?;
             }
         }
         tui.frame_requester().schedule_frame();
@@ -327,7 +328,7 @@ impl App {
         let viewport_height = self
             .with_chat_widget_frame(width, |desired_height, _| desired_height)
             .min(screen_size.height);
-        self.transcript_reflow.set_visible_history_rows(
+        self.chat_widget.transcript_reflow.set_visible_history_rows(
             screen_size
                 .height
                 .saturating_sub(viewport_height)

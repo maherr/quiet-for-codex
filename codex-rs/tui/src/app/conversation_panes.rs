@@ -111,10 +111,6 @@ impl ConversationPane {
         self.active_thread_rx = receiver;
     }
 
-    pub(super) fn take_thread_receiver(&mut self) -> Option<mpsc::Receiver<ThreadBufferedEvent>> {
-        self.active_thread_rx.take()
-    }
-
     pub(super) fn clear_thread(&mut self) {
         self.active_thread_id = None;
         self.active_thread_rx = None;

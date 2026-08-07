@@ -106,6 +106,7 @@ use std::time::Instant;
 use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use url::Url;
+use unicode_width::UnicodeWidthStr;
 
 // Patch selection reuses the raw renderer as its unwrapped semantic source. Use an effectively
 // unbounded width so even very long authored lines never acquire synthetic clipboard newlines.

@@ -1008,9 +1008,9 @@ impl App {
         if let Some(notification) = notification {
             match sender.try_send(ThreadBufferedEvent::Notification(Box::new(notification))) {
                 Ok(()) => {}
-                Err(TrySendError::Full(ThreadBufferedEvent::Notification(
-                    ServerNotification::HookStarted(_),
-                ))) => {
+                Err(TrySendError::Full(ThreadBufferedEvent::Notification(notification)))
+                    if matches!(notification.as_ref(), ServerNotification::HookStarted(_)) =>
+                {
                     tracing::debug!(
                         %thread_id,
                         "dropping delayed live hook start; replay state retains the notification"
@@ -1650,7 +1650,8 @@ impl App {
             && self.chat_widget.has_side()
             && matches!(
                 &event,
-                ThreadBufferedEvent::Notification(ServerNotification::ThreadClosed(_))
+                ThreadBufferedEvent::Notification(notification)
+                    if matches!(notification.as_ref(), ServerNotification::ThreadClosed(_))
             ))
         .then(|| {
             self.chat_widget
@@ -1692,7 +1693,8 @@ impl App {
 
         if matches!(
             &event,
-            ThreadBufferedEvent::Notification(ServerNotification::ThreadClosed(_))
+            ThreadBufferedEvent::Notification(notification)
+                if matches!(notification.as_ref(), ServerNotification::ThreadClosed(_))
         ) && let Some(side_thread_id) = self.chat_widget.active_thread_id
             && self.side_threads.contains_key(&side_thread_id)
         {

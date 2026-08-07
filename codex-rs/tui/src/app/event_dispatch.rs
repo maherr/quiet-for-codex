@@ -197,7 +197,7 @@ impl App {
                 {
                     Ok(ExternalAgentConfigMigrationFlowOutcome::Started(lines)) => {
                         let (selection_text, prefix_columns) =
-                            crate::external_agent_config_migration_flow::external_agent_config_migration_selection(
+                            crate::external_agent_config_migration::flow::external_agent_config_migration_selection(
                                 &lines,
                             );
                         self.chat_widget.add_semantic_history_lines(

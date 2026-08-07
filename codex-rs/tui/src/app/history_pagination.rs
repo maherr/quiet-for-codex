@@ -134,7 +134,7 @@ impl App {
                 .map(|((item_id, _), cell)| (item_id, cell))
                 .collect::<Vec<_>>();
             let mut hidden_transcript_indices = Vec::new();
-            for (index, cell) in self.transcript_cells.iter().enumerate().rev() {
+            for (index, cell) in self.chat_widget.transcript_cells.iter().enumerate().rev() {
                 let Some(user_cell) = cell.as_any().downcast_ref::<UserHistoryCell>() else {
                     continue;
                 };
@@ -159,14 +159,14 @@ impl App {
             if !hidden_transcript_indices.is_empty() {
                 if self.backtrack.overlay_preview_active {
                     let selected_index = crate::app_backtrack::nth_user_position(
-                        &self.transcript_cells,
+                        &self.chat_widget.transcript_cells,
                         self.backtrack.nth_user_message,
                     );
                     let removed_visible_users = hidden_transcript_indices
                         .iter()
                         .filter(|&&index| {
                             selected_index.is_some_and(|selected| index < selected)
-                                && self.transcript_cells[index].desired_height(width) != 0
+                                && self.chat_widget.transcript_cells[index].desired_height(width) != 0
                         })
                         .count();
                     self.backtrack.nth_user_message = self
@@ -175,10 +175,10 @@ impl App {
                         .saturating_sub(removed_visible_users);
                 }
                 for index in hidden_transcript_indices {
-                    self.transcript_cells.remove(index);
+                    self.chat_widget.transcript_cells.remove(index);
                 }
                 if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
-                    overlay.replace_cells(self.transcript_cells.clone());
+                    overlay.replace_cells(self.chat_widget.transcript_cells.clone());
                 }
             }
         }
@@ -220,7 +220,7 @@ impl App {
         let mut continue_to_start = false;
         if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
             let index = overlay.prepend(cells.clone(), width);
-            self.transcript_cells.splice(index..index, cells);
+            self.chat_widget.transcript_cells.splice(index..index, cells);
             let previous_state = overlay.set_history_state(if self.scrollback_has_older_history {
                 TranscriptHistoryState::Partial
             } else {
@@ -230,11 +230,12 @@ impl App {
                 && self.scrollback_has_older_history;
         } else {
             let index = self
+                .chat_widget
                 .transcript_cells
                 .iter()
                 .rposition(|cell| cell.as_any().is::<SessionInfoCell>())
                 .map_or(/*default*/ 0, |index| index.saturating_add(/*rhs*/ 1));
-            self.transcript_cells.splice(index..index, cells);
+            self.chat_widget.transcript_cells.splice(index..index, cells);
             let wrap_width = self.chat_widget.history_wrap_width(width);
             let rendered_rows = self
                 .render_transcript_lines_for_reflow(wrap_width)

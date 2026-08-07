@@ -26,7 +26,7 @@ fn rendered_line_text(line: &HyperlinkLine) -> String {
 async fn resize_reflow_preserves_configured_scrollback_beyond_the_visible_viewport() {
     let mut app = make_test_app().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(32);
-    app.transcript_cells = plain_history_cells(/*count*/ 64);
+    app.chat_widget.transcript_cells = plain_history_cells(/*count*/ 64);
     let screen_size = Size::new(/*width*/ 80, /*height*/ 24);
     let chat_height = app.with_chat_widget_frame(screen_size.width, |height, _| height);
     let visible_history_rows = screen_size
@@ -53,6 +53,7 @@ async fn initial_resume_replay_retains_scrollback_beyond_the_visible_viewport() 
     let screen_size = Size::new(/*width*/ 80, /*height*/ 24);
     app.update_visible_history_rows(screen_size);
     let visible_history_rows = app
+        .chat_widget
         .transcript_reflow
         .visible_history_rows()
         .expect("visible history row budget");
@@ -68,6 +69,7 @@ async fn initial_resume_replay_retains_scrollback_beyond_the_visible_viewport() 
     }
 
     let retained_lines = &app
+        .chat_widget
         .initial_history_replay_buffer
         .as_ref()
         .expect("initial replay buffer should remain active")
@@ -75,7 +77,7 @@ async fn initial_resume_replay_retains_scrollback_beyond_the_visible_viewport() 
     assert_eq!(retained_lines.len(), 32);
     assert!(retained_lines.len() > usize::from(visible_history_rows));
     assert!(
-        app.initial_history_replay_buffer
+        app.chat_widget.initial_history_replay_buffer
             .as_ref()
             .is_some_and(|buffer| buffer.was_truncated)
     );
@@ -100,7 +102,7 @@ async fn initial_resume_replay_retains_scrollback_beyond_the_visible_viewport() 
 async fn resize_reflow_preserves_configured_scrollback_when_the_terminal_height_changes() {
     let mut app = make_test_app().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(48);
-    app.transcript_cells = plain_history_cells(/*count*/ 64);
+    app.chat_widget.transcript_cells = plain_history_cells(/*count*/ 64);
 
     app.update_visible_history_rows(Size::new(/*width*/ 80, /*height*/ 24));
     let smaller = app.render_transcript_lines_for_reflow(/*width*/ 80);
@@ -131,7 +133,7 @@ async fn resize_reflow_preserves_configured_scrollback_when_the_terminal_height_
 async fn resize_reflow_preserves_explicitly_unlimited_history() {
     let mut app = make_test_app().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
-    app.transcript_cells = plain_history_cells(/*count*/ 20);
+    app.chat_widget.transcript_cells = plain_history_cells(/*count*/ 20);
 
     app.update_visible_history_rows(Size::new(/*width*/ 80, /*height*/ 24));
     let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
@@ -152,12 +154,12 @@ async fn resize_reflow_preserves_explicitly_unlimited_history() {
 async fn capped_resize_reflow_prepends_transcript_notice_without_changing_transcript() {
     let mut app = make_test_app().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(8);
-    app.transcript_cells = plain_history_cells(/*count*/ 12);
+    app.chat_widget.transcript_cells = plain_history_cells(/*count*/ 12);
 
     let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
 
     assert_eq!(rendered.lines.len(), 8);
-    assert_eq!(app.transcript_cells.len(), 12);
+    assert_eq!(app.chat_widget.transcript_cells.len(), 12);
     insta::assert_snapshot!(
         rendered
             .lines
@@ -182,7 +184,7 @@ async fn capped_resize_reflow_prepends_transcript_notice_without_changing_transc
 async fn capped_resize_reflow_counts_wrapped_notice_rows() {
     let mut app = make_test_app().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(8);
-    app.transcript_cells = plain_history_cells(/*count*/ 12);
+    app.chat_widget.transcript_cells = plain_history_cells(/*count*/ 12);
 
     let rendered = app.render_transcript_lines_for_reflow(/*width*/ 28);
 
@@ -212,7 +214,7 @@ async fn one_row_history_cap_preserves_conversation_instead_of_notice() {
     let mut app = make_test_app().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(1);
     app.scrollback_has_older_history = true;
-    app.transcript_cells = plain_history_cells(/*count*/ 2);
+    app.chat_widget.transcript_cells = plain_history_cells(/*count*/ 2);
 
     let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
 
@@ -233,7 +235,7 @@ async fn paginated_resize_reflow_prepends_transcript_notice_for_unloaded_history
     let mut app = make_test_app().await;
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(32);
     app.scrollback_has_older_history = true;
-    app.transcript_cells = plain_history_cells(/*count*/ 2);
+    app.chat_widget.transcript_cells = plain_history_cells(/*count*/ 2);
 
     let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
 

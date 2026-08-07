@@ -2189,10 +2189,10 @@ mod tests {
     #[test]
     fn event_requires_delivery_marks_transcript_and_terminal_events() {
         assert!(!event_requires_delivery(
-            &InProcessServerEvent::ServerNotification(hook_started_notification())
+            &InProcessServerEvent::ServerNotification(Box::new(hook_started_notification()))
         ));
         assert!(event_requires_delivery(
-            &InProcessServerEvent::ServerNotification(hook_completed_notification())
+            &InProcessServerEvent::ServerNotification(Box::new(hook_completed_notification()))
         ));
         assert!(event_requires_delivery(
             &InProcessServerEvent::ServerNotification(Box::new(

@@ -75,7 +75,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
 
