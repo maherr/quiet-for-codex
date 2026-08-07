@@ -999,7 +999,6 @@ mod tests {
 
         assert_eq!(terminal.size().expect("fixed test size"), fixed_size);
         assert_eq!(terminal.backend().size_call_count.get(), 0);
-
     }
 
     #[test]

@@ -2055,13 +2055,9 @@ mod tests {
                 .consumed_cells,
             2
         );
-        let rendered = render_lines_text(&render_transcript_lines(
-            &cells,
-            100,
-            HistoryRenderMode::Rich,
-            true,
-            None,
-        ).0);
+        let rendered = render_lines_text(
+            &render_transcript_lines(&cells, 100, HistoryRenderMode::Rich, true, None).0,
+        );
         assert!(rendered.contains("Visible reasoning"));
     }
 
@@ -2412,13 +2408,9 @@ mod tests {
             2
         );
 
-        let rendered = render_lines_text(&render_transcript_lines(
-            &cells,
-            100,
-            HistoryRenderMode::Rich,
-            true,
-            None,
-        ).0);
+        let rendered = render_lines_text(
+            &render_transcript_lines(&cells, 100, HistoryRenderMode::Rich, true, None).0,
+        );
         assert!(rendered.contains("permission denied"));
         assert!(rendered.contains("failed (exit 7)"));
         insta::assert_snapshot!("failed_exec_between_work_bundles", rendered);
@@ -2457,13 +2449,9 @@ mod tests {
 
         assert!(compact_tool_group_at(&cells, 2, 100).is_none());
         assert!(compact_tool_group_at(&cells, 3, 100).is_none());
-        let rendered = render_lines_text(&render_transcript_lines(
-            &cells,
-            100,
-            HistoryRenderMode::Rich,
-            true,
-            None,
-        ).0);
+        let rendered = render_lines_text(
+            &render_transcript_lines(&cells, 100, HistoryRenderMode::Rich, true, None).0,
+        );
         assert!(rendered.contains("Error: permission denied"));
         assert!(rendered.contains("https://example.com/device"));
     }
@@ -2530,13 +2518,9 @@ mod tests {
         ];
 
         assert!(compact_tool_group_at(&cells, 2, 100).is_none());
-        let rendered = render_lines_text(&render_transcript_lines(
-            &cells,
-            100,
-            HistoryRenderMode::Rich,
-            true,
-            None,
-        ).0);
+        let rendered = render_lines_text(
+            &render_transcript_lines(&cells, 100, HistoryRenderMode::Rich, true, None).0,
+        );
         assert!(rendered.contains("https://example.com/device"));
     }
 
@@ -2602,13 +2586,9 @@ mod tests {
         ];
 
         assert!(compact_tool_group_at(&cells, 2, 100).is_none());
-        let rendered = render_lines_text(&render_transcript_lines(
-            &cells,
-            100,
-            HistoryRenderMode::Rich,
-            true,
-            None,
-        ).0);
+        let rendered = render_lines_text(
+            &render_transcript_lines(&cells, 100, HistoryRenderMode::Rich, true, None).0,
+        );
         assert!(rendered.contains("Approval required"));
         assert!(rendered.contains("https://example.com/deploy/123"));
     }
@@ -2714,13 +2694,9 @@ mod tests {
         ];
 
         let inspected = latest_compact_tool_group_cells(&cells, 100).unwrap();
-        let rendered = render_lines_text(&render_transcript_lines(
-            &inspected,
-            100,
-            HistoryRenderMode::Raw,
-            false,
-            None,
-        ).0);
+        let rendered = render_lines_text(
+            &render_transcript_lines(&inspected, 100, HistoryRenderMode::Raw, false, None).0,
+        );
 
         assert_eq!(inspected.len(), 2);
         assert!(rendered.contains("$ cat main.rs"));
@@ -2735,7 +2711,8 @@ mod tests {
             .map(|index| completed_read_exec(&format!("read-{index}"), &format!("file-{index}.rs")))
             .collect::<Vec<_>>();
 
-        let (compact, _) = render_transcript_lines(&cells, 120, HistoryRenderMode::Rich, true, Some(2));
+        let (compact, _) =
+            render_transcript_lines(&cells, 120, HistoryRenderMode::Rich, true, Some(2));
         let (raw, _) = render_transcript_lines(&cells, 120, HistoryRenderMode::Raw, false, None);
         let raw_text = render_lines_text(&raw);
 

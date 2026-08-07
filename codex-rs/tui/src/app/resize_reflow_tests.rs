@@ -77,7 +77,8 @@ async fn initial_resume_replay_retains_scrollback_beyond_the_visible_viewport() 
     assert_eq!(retained_lines.len(), 32);
     assert!(retained_lines.len() > usize::from(visible_history_rows));
     assert!(
-        app.chat_widget.initial_history_replay_buffer
+        app.chat_widget
+            .initial_history_replay_buffer
             .as_ref()
             .is_some_and(|buffer| buffer.was_truncated)
     );

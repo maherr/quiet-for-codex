@@ -130,13 +130,14 @@ async fn lag_finishes_mcp_startup_in_both_installed_panes() {
     });
     // A lag reports only servers the app server explicitly cancelled, so drive
     // `alpha` through `Cancelled` to interrupt startup in both panes.
-    let cancelled = ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
-        thread_id: None,
-        name: "alpha".to_string(),
-        status: McpServerStartupState::Cancelled,
-        error: None,
-        failure_reason: None,
-    });
+    let cancelled =
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            thread_id: None,
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Cancelled,
+            error: None,
+            failure_reason: None,
+        });
     app.chat_widget.for_each_installed_mut(|pane| {
         pane.handle_server_notification(starting.clone(), /*replay_kind*/ None);
         pane.handle_server_notification(cancelled.clone(), /*replay_kind*/ None);

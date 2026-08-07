@@ -166,7 +166,8 @@ impl App {
                         .iter()
                         .filter(|&&index| {
                             selected_index.is_some_and(|selected| index < selected)
-                                && self.chat_widget.transcript_cells[index].desired_height(width) != 0
+                                && self.chat_widget.transcript_cells[index].desired_height(width)
+                                    != 0
                         })
                         .count();
                     self.backtrack.nth_user_message = self
@@ -220,7 +221,9 @@ impl App {
         let mut continue_to_start = false;
         if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
             let index = overlay.prepend(cells.clone(), width);
-            self.chat_widget.transcript_cells.splice(index..index, cells);
+            self.chat_widget
+                .transcript_cells
+                .splice(index..index, cells);
             let previous_state = overlay.set_history_state(if self.scrollback_has_older_history {
                 TranscriptHistoryState::Partial
             } else {
@@ -235,7 +238,9 @@ impl App {
                 .iter()
                 .rposition(|cell| cell.as_any().is::<SessionInfoCell>())
                 .map_or(/*default*/ 0, |index| index.saturating_add(/*rhs*/ 1));
-            self.chat_widget.transcript_cells.splice(index..index, cells);
+            self.chat_widget
+                .transcript_cells
+                .splice(index..index, cells);
             let wrap_width = self.chat_widget.history_wrap_width(width);
             let rendered_rows = self
                 .render_transcript_lines_for_reflow(wrap_width)

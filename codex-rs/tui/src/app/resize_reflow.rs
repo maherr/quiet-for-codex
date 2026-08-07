@@ -44,7 +44,6 @@ impl From<ratatui::layout::Size> for TerminalWidth {
     }
 }
 
-
 /// Rendered transcript lines ready to be replayed into terminal scrollback.
 ///
 /// This is intentionally line-oriented rather than cell-oriented because the terminal only accepts

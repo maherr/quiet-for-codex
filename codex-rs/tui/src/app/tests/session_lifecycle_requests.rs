@@ -411,7 +411,8 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
         .await?;
     app.chat_widget.transcript_cells = initial_cells;
     assert_eq!(
-        app.chat_widget.transcript_cells
+        app.chat_widget
+            .transcript_cells
             .iter()
             .filter_map(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
             .map(|user| user.message.as_str())

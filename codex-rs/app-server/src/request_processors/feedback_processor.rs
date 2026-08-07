@@ -379,7 +379,6 @@ fn ensure_quiet_feedback_uploads_enabled() -> Result<(), JSONRPCErrorError> {
     }
 }
 
-
 fn tool_cache_feedback_attachments(
     codex_home: &Path,
     chatgpt_base_url: &str,

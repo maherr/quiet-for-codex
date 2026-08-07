@@ -9,13 +9,13 @@ their binaries and update channels remain separate.
 ### macOS or Linux
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.2/scripts/release/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.3-beta.1/scripts/release/install.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.2/scripts/release/install.ps1)))
+& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.3-beta.1/scripts/release/install.ps1)))
 ```
 
 The installers detect the host target, download the matching archive from the
@@ -129,7 +129,7 @@ the downloaded archive and run:
 gh attestation verify PATH_TO_ARCHIVE \
   --repo maherr/quiet-for-codex \
   --signer-workflow maherr/quiet-for-codex/.github/workflows/quiet-release.yml \
-  --source-ref refs/tags/quiet-v1.0.2 \
+  --source-ref refs/tags/quiet-v1.0.3-beta.1 \
   --deny-self-hosted-runners
 ```
 

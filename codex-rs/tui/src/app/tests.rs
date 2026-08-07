@@ -4728,7 +4728,6 @@ async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Resu
 
 #[tokio::test]
 async fn discard_closed_side_thread_ignores_late_server_events() -> Result<()> {
-
     let mut app = make_test_app().await;
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();

@@ -161,7 +161,6 @@ mod imp {
         }
     }
 
-
     /// Queries terminal default colors through the bounded startup probe path.
     ///
     /// The palette cache treats `None` as an attempted-but-unavailable result, so this function

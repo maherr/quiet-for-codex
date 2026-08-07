@@ -280,7 +280,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             if artifact["target"].endswith("-pc-windows-msvc")
         ]
         self.assertEqual(len(windows), 2)
-        self.assertTrue(all("bindingCratePath" in artifact for artifact in windows))
+        # Upstream rust-v0.147.0 builds Windows rusty_v8 artifacts in its own
+        # release (ptrcomp_sandbox_release) with standalone binding files, so the
+        # Windows pins use bindingUrl like the unix targets.
+        self.assertTrue(all("bindingUrl" in artifact for artifact in windows))
 
     def test_release_profile_disables_stock_updates_and_announcements(self) -> None:
         self.assertIn("--cargo-profile release", self.workflow)
