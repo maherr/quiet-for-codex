@@ -1,5 +1,9 @@
 use super::*;
 use serde_json::json;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::sync::Arc;
+use std::sync::Barrier;
 use tempfile::TempDir;
 
 fn record(item_type: &str, payload: Value) -> Value {
@@ -17,6 +21,109 @@ fn write_records(path: &Path, records: &[Value]) -> io::Result<()> {
         text.push('\n');
     }
     std::fs::write(path, text)
+}
+
+#[test]
+fn legacy_tool_history_counters_are_fixed_cardinality_and_concurrent_safe() -> io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let workers = 8;
+    let updates_per_worker = 20;
+    let mut expected_outcomes = [0_u64; 6];
+    for worker in 0..workers {
+        for update in 0..updates_per_worker {
+            expected_outcomes[(worker + update) % 6] += 1;
+        }
+    }
+    let barrier = Arc::new(Barrier::new(workers));
+    let mut handles = Vec::new();
+    for worker in 0..workers {
+        let barrier = Arc::clone(&barrier);
+        let codex_home = temp_dir.path().to_path_buf();
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            for update in 0..updates_per_worker {
+                let outcome = match (worker + update) % 6 {
+                    0 => None,
+                    1 => Some(LegacyToolRestoreOutcome::RestoreSuccess),
+                    2 => Some(LegacyToolRestoreOutcome::InvalidThread),
+                    3 => Some(LegacyToolRestoreOutcome::RestoreReadFailure),
+                    4 => Some(LegacyToolRestoreOutcome::TurnAssignmentConflict),
+                    _ => Some(LegacyToolRestoreOutcome::BaselineMismatch),
+                };
+                update_restore_counters(&codex_home, outcome).expect("counter update");
+            }
+        }));
+    }
+    for handle in handles {
+        handle.join().expect("counter worker");
+    }
+
+    let counters_path = temp_dir.path().join(RESTORE_COUNTERS_FILENAME);
+    let value: Value = serde_json::from_str(&std::fs::read_to_string(&counters_path)?)?;
+    let object = value.as_object().expect("counter object");
+    assert_eq!(object.len(), 6);
+    assert_eq!(
+        object.get("attempts").and_then(Value::as_u64),
+        Some((workers * updates_per_worker) as u64)
+    );
+    for (key, expected) in [
+        ("restore_success", expected_outcomes[1]),
+        ("invalid_thread", expected_outcomes[2]),
+        ("restore_read_failure", expected_outcomes[3]),
+        ("turn_assignment_conflict", expected_outcomes[4]),
+        ("baseline_mismatch", expected_outcomes[5]),
+    ] {
+        assert_eq!(
+            object.get(key).and_then(Value::as_u64),
+            Some(expected),
+            "{key}"
+        );
+    }
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::metadata(&counters_path)?.permissions().mode() & 0o777,
+        0o600
+    );
+    Ok(())
+}
+
+#[test]
+fn legacy_tool_history_counters_do_not_reset_malformed_state() -> io::Result<()> {
+    let temp_dir = TempDir::new()?;
+    let counters_path = temp_dir.path().join(RESTORE_COUNTERS_FILENAME);
+    std::fs::write(&counters_path, "not-json\n")?;
+
+    let error = update_restore_counters(
+        temp_dir.path(),
+        Some(LegacyToolRestoreOutcome::RestoreSuccess),
+    )
+    .expect_err("malformed counters must fail closed");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(std::fs::read_to_string(counters_path)?, "not-json\n");
+    Ok(())
+}
+
+#[test]
+fn legacy_tool_history_counters_preserve_rejected_shapes() -> io::Result<()> {
+    for contents in [
+        r#"{"attempts":1,"restore_success":0,"invalid_thread":0,"restore_read_failure":0,"turn_assignment_conflict":0,"baseline_mismatch":0,"extra":1}"#,
+        r#"{"attempts":0,"restore_success":1,"invalid_thread":0,"restore_read_failure":0,"turn_assignment_conflict":0,"baseline_mismatch":0}"#,
+    ] {
+        let temp_dir = TempDir::new()?;
+        let counters_path = temp_dir.path().join(RESTORE_COUNTERS_FILENAME);
+        std::fs::write(&counters_path, contents)?;
+
+        let error = update_restore_counters(
+            temp_dir.path(),
+            Some(LegacyToolRestoreOutcome::RestoreSuccess),
+        )
+        .expect_err("invalid counter state must fail closed");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read_to_string(counters_path)?, contents);
+    }
+    Ok(())
 }
 
 fn task_started(turn_id: &str) -> Value {

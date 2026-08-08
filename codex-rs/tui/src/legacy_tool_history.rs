@@ -7,8 +7,10 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadHistoryBuilder;
@@ -27,10 +29,75 @@ use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::WorldStateItem;
 use codex_rollout::open_rollout_line_reader;
+use codex_utils_home_dir::find_codex_home;
 use serde::Deserialize;
+use serde::Serialize;
 use serde::de::IgnoredAny;
 use serde_json::Map;
 use serde_json::Value;
+
+const RESTORE_COUNTERS_FILENAME: &str = "quiet-legacy-tool-history-counters.json";
+const RESTORE_COUNTERS_LOCK_FILENAME: &str = ".quiet-legacy-tool-history-counters.lock";
+const RESTORE_COUNTER_LOCK_RETRIES: usize = 50;
+const RESTORE_COUNTER_LOCK_DELAY: Duration = Duration::from_millis(5);
+
+#[derive(Clone, Copy, Debug)]
+enum LegacyToolRestoreOutcome {
+    RestoreSuccess,
+    InvalidThread,
+    RestoreReadFailure,
+    TurnAssignmentConflict,
+    BaselineMismatch,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyToolRestoreCounters {
+    attempts: u64,
+    restore_success: u64,
+    invalid_thread: u64,
+    restore_read_failure: u64,
+    turn_assignment_conflict: u64,
+    baseline_mismatch: u64,
+}
+
+impl LegacyToolRestoreCounters {
+    fn validate(&self) -> io::Result<()> {
+        let outcomes = [
+            self.restore_success,
+            self.invalid_thread,
+            self.restore_read_failure,
+            self.turn_assignment_conflict,
+            self.baseline_mismatch,
+        ]
+        .into_iter()
+        .try_fold(0_u64, |sum, value| {
+            sum.checked_add(value).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "legacy tool history counter outcome total overflowed",
+                )
+            })
+        })?;
+        if outcomes > self.attempts {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "legacy tool history counter outcomes exceed attempts",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn increment_counter(value: &mut u64) -> io::Result<()> {
+    *value = value.checked_add(1).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "legacy tool history counter overflowed",
+        )
+    })?;
+    Ok(())
+}
 
 #[derive(Debug)]
 pub(crate) struct LegacyToolReplay {
@@ -144,6 +211,7 @@ pub(crate) async fn maybe_restore_local_legacy_tool_history(
         return false;
     };
     let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
+        record_restore_attempt(Some(LegacyToolRestoreOutcome::InvalidThread)).await;
         tracing::warn!(
             thread_id = %thread.id,
             "skipping legacy tool history restoration for invalid thread id"
@@ -154,6 +222,7 @@ pub(crate) async fn maybe_restore_local_legacy_tool_history(
     let mut replay = match rebuild_legacy_turns_with_tool_calls(path, thread_id).await {
         Ok(replay) => replay,
         Err(err) => {
+            record_restore_attempt(Some(LegacyToolRestoreOutcome::RestoreReadFailure)).await;
             tracing::warn!(
                 rollout_path = %path.display(),
                 %err,
@@ -163,6 +232,7 @@ pub(crate) async fn maybe_restore_local_legacy_tool_history(
         }
     };
     if replay.turn_assignment_conflict {
+        record_restore_attempt(Some(LegacyToolRestoreOutcome::TurnAssignmentConflict)).await;
         tracing::warn!(
             rollout_path = %path.display(),
             "legacy tool history turn assignment conflict; keeping app-server history"
@@ -170,6 +240,7 @@ pub(crate) async fn maybe_restore_local_legacy_tool_history(
         return false;
     }
     if replay.inserted_call_ids.is_empty() {
+        record_restore_attempt(/*outcome*/ None).await;
         return false;
     }
 
@@ -178,6 +249,7 @@ pub(crate) async fn maybe_restore_local_legacy_tool_history(
     let expected = baseline_turns(&thread.turns, &replay.inserted_call_ids);
     let rebuilt = baseline_turns(&replay.turns, &replay.inserted_call_ids);
     if rebuilt != expected {
+        record_restore_attempt(Some(LegacyToolRestoreOutcome::BaselineMismatch)).await;
         tracing::warn!(
             rollout_path = %path.display(),
             app_server_turns = expected.len(),
@@ -189,12 +261,103 @@ pub(crate) async fn maybe_restore_local_legacy_tool_history(
 
     let restored_call_count = replay.inserted_call_ids.len();
     thread.turns = replay.turns;
+    record_restore_attempt(Some(LegacyToolRestoreOutcome::RestoreSuccess)).await;
     tracing::info!(
         rollout_path = %path.display(),
         restored_call_count,
         "restored compact legacy tool history"
     );
     true
+}
+
+async fn record_restore_attempt(outcome: Option<LegacyToolRestoreOutcome>) {
+    let Ok(codex_home) = find_codex_home() else {
+        tracing::warn!("failed to resolve Codex home for legacy tool history counters");
+        return;
+    };
+    let codex_home = codex_home.to_path_buf();
+    let result =
+        tokio::task::spawn_blocking(move || update_restore_counters(codex_home.as_path(), outcome))
+            .await;
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => tracing::warn!(
+            %err,
+            "failed to persist legacy tool history counters"
+        ),
+        Err(err) => tracing::warn!(
+            %err,
+            "legacy tool history counter task failed"
+        ),
+    }
+}
+
+fn update_restore_counters(
+    codex_home: &Path,
+    outcome: Option<LegacyToolRestoreOutcome>,
+) -> io::Result<()> {
+    std::fs::create_dir_all(codex_home)?;
+    let counters_path = codex_home.join(RESTORE_COUNTERS_FILENAME);
+    let lock_path = codex_home.join(RESTORE_COUNTERS_LOCK_FILENAME);
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let lock_file = options.open(lock_path)?;
+    let mut locked = false;
+    for _ in 0..RESTORE_COUNTER_LOCK_RETRIES {
+        match lock_file.try_lock() {
+            Ok(()) => {
+                locked = true;
+                break;
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                std::thread::sleep(RESTORE_COUNTER_LOCK_DELAY);
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+    if !locked {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "legacy tool history counter lock remained busy",
+        ));
+    }
+
+    let mut counters = match std::fs::read_to_string(&counters_path) {
+        Ok(contents) => serde_json::from_str::<LegacyToolRestoreCounters>(&contents)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => LegacyToolRestoreCounters::default(),
+        Err(err) => return Err(err),
+    };
+    counters.validate()?;
+    increment_counter(&mut counters.attempts)?;
+    match outcome {
+        Some(LegacyToolRestoreOutcome::RestoreSuccess) => {
+            increment_counter(&mut counters.restore_success)?;
+        }
+        Some(LegacyToolRestoreOutcome::InvalidThread) => {
+            increment_counter(&mut counters.invalid_thread)?;
+        }
+        Some(LegacyToolRestoreOutcome::RestoreReadFailure) => {
+            increment_counter(&mut counters.restore_read_failure)?;
+        }
+        Some(LegacyToolRestoreOutcome::TurnAssignmentConflict) => {
+            increment_counter(&mut counters.turn_assignment_conflict)?;
+        }
+        Some(LegacyToolRestoreOutcome::BaselineMismatch) => {
+            increment_counter(&mut counters.baseline_mismatch)?;
+        }
+        None => {}
+    }
+    counters.validate()?;
+    let mut contents = serde_json::to_string(&counters)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    contents.push('\n');
+    codex_utils_path::write_atomically(&counters_path, &contents)
 }
 
 pub(crate) async fn rebuild_legacy_turns_with_tool_calls(
