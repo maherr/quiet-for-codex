@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: popup
 ---
+────────────────────────────────────────────────────────────────────────────────
+
   Delete this session?
   Cannot be undone. Subagent threads will also be deleted.
 

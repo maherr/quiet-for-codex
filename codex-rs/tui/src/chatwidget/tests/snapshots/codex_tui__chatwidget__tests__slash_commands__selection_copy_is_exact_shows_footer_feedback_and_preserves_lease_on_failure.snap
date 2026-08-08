@@ -2,7 +2,7 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: normalized_backend_snapshot(terminal.backend())
 ---
-"                                                "
+"────────────────────────────────────────────────"
 "                                                "
 "› Ask Codex to do anything                      "
 "                                                "

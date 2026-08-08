@@ -9,7 +9,7 @@ expression: terminal.backend()
 "                                         │directory: /tmp/project                  "
 "                                         │                                         "
 "                                         │                                         "
-"                                         │                                         "
+"─────────────────────────────────────────│─────────────────────────────────────────"
 "                                         │                                         "
 "› parent draft                           │› side draft                             "
 "                                         │                                         "

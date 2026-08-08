@@ -1,6 +1,24 @@
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+/// Extend left-aligned line background styles across the available render width.
+///
+/// Rendering a [`Line`] directly applies its style to the whole row, but routing the same line
+/// through a `Paragraph` only styles the cells occupied by its spans. History surfaces use
+/// paragraphs for wrapping, so pad styled rows before rendering to preserve the direct-render
+/// appearance without changing unstyled text or its measured height.
+pub(crate) fn fill_line_backgrounds_to_width(lines: &mut [Line<'_>], width: u16) {
+    for line in lines {
+        if line.style.bg.is_none() || line.alignment.is_some() {
+            continue;
+        }
+        let padding = usize::from(width).saturating_sub(line.width());
+        if padding > 0 {
+            line.push_span(" ".repeat(padding));
+        }
+    }
+}
+
 /// Create a ratatui `Line` that borrows the contents of another line.
 pub fn line_to_borrowed<'a>(line: &'a Line<'_>) -> Line<'a> {
     Line {

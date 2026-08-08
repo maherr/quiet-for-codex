@@ -2802,13 +2802,13 @@ async fn bottom_pane_renderable_can_be_laid_out_independently() {
         .draw(|frame| bottom_pane.render(frame.area(), frame.buffer_mut()))
         .expect("render bottom pane");
 
-    assert_snapshot!(normalized_backend_snapshot(terminal.backend()), @r###"
-"                                                "
-"                                                "
-"› Ask Codex to do anything                      "
-"                                                "
-"  gpt-5.6-sol default · /tmp/project            "
-"###);
+    assert_snapshot!(normalized_backend_snapshot(terminal.backend()), @r#"
+    "────────────────────────────────────────────────"
+    "                                                "
+    "› Ask Codex to do anything                      "
+    "                                                "
+    "  gpt-5.6-sol default · /tmp/project            "
+    "#);
 }
 
 fn buffer_row_containing(buffer: &ratatui::buffer::Buffer, text: &str) -> Option<String> {
@@ -5048,7 +5048,7 @@ fn hook_live_and_history_snapshot(chat: &ChatWidget, phase: &str, history: &str)
 
 // Combined visual snapshot using vt100 for history + direct buffer overlay for UI.
 // This renders the final visual as seen in a terminal: history above, then a blank line,
-// then the exec block, another blank line, the status line, a blank line, and the composer.
+// then the exec block, the fixed-pane separator, the status line, a blank line, and the composer.
 #[tokio::test]
 async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -5139,10 +5139,12 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     })
     .unwrap();
 
-    assert_chatwidget_snapshot!(
-        "chatwidget_exec_and_status_layout_vt100_snapshot",
-        normalize_snapshot_paths(term.backend().vt100().screen().contents())
+    let rendered = normalize_snapshot_paths(term.backend().vt100().screen().contents());
+    assert!(
+        rendered.contains(&"─".repeat(usize::from(width))),
+        "fixed bottom pane should have a full-width separator: {rendered:?}"
     );
+    assert_chatwidget_snapshot!("chatwidget_exec_and_status_layout_vt100_snapshot", rendered);
 }
 
 // E2E vt100 snapshot for complex markdown with indented and nested fenced code blocks

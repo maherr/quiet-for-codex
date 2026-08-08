@@ -9,7 +9,7 @@ expression: expanded.backend()
 "                                                                                "
 "• Explored                                                                      "
 "  └ Read file lib.rs                                                            "
-"                                                                                "
+"────────────────────────────────────────────────────────────────────────────────"
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "

@@ -1,7 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 2918
 expression: popup
 ---
+────────────────────────────────────────────────────────────────────────────────
+
   Experimental features
   Toggle experimental features. Changes are saved to config.toml.
 

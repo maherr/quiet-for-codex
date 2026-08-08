@@ -28,6 +28,7 @@ use crate::key_hint::ShortcutHint;
 use crate::keymap::PagerKeymap;
 use crate::pager_layout::PagerLayoutCache;
 use crate::render::Insets;
+use crate::render::line_utils::fill_line_backgrounds_to_width;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::terminal_hyperlinks::HyperlinkLine;
@@ -696,7 +697,9 @@ impl Renderable for CellRenderable {
             Some(style) => style,
             None => Style::default(),
         };
-        let p = Paragraph::new(Text::from(visible_lines_ref(&hyperlink_lines)))
+        let mut lines = visible_lines_ref(&hyperlink_lines);
+        fill_line_backgrounds_to_width(&mut lines, area.width);
+        let p = Paragraph::new(Text::from(lines))
             .style(style)
             .wrap(Wrap { trim: false });
         p.render(area, buf);
@@ -718,7 +721,9 @@ struct HyperlinkLinesRenderable {
 
 impl Renderable for HyperlinkLinesRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(Text::from(visible_lines_ref(&self.lines)))
+        let mut lines = visible_lines_ref(&self.lines);
+        fill_line_backgrounds_to_width(&mut lines, area.width);
+        Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: false })
             .render(area, buf);
         mark_buffer_hyperlinks(buf, area, &self.lines, /*scroll_rows*/ 0);

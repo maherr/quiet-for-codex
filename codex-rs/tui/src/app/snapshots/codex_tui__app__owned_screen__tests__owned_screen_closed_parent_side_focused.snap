@@ -9,7 +9,7 @@ expression: terminal.backend()
 "                                         ││ model:     loading   /model to change │"
 "                                         ││ directory: /tmp/project               │"
 "                                         │╰───────────────────────────────────────╯"
-"                                         │                                         "
+"─────────────────────────────────────────│─────────────────────────────────────────"
 "                                         │                                         "
 "› Conversation closed.                   │› side draft                             "
 "                                         │                                         "

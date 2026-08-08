@@ -1223,7 +1223,8 @@ pub(super) fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
                 row.push_str(s);
             }
         }
-        if !row.trim().is_empty() {
+        let trimmed = row.trim();
+        if !trimmed.is_empty() && !trimmed.chars().all(|ch| ch == '─') {
             return row;
         }
     }

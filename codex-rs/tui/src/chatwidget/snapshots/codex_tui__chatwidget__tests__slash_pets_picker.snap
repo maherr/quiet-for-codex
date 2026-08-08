@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: popup
 ---
+────────────────────────────────────────────────────────────────────────────────
+
   Select Pet
   Choose a pet to wake in the terminal.
 

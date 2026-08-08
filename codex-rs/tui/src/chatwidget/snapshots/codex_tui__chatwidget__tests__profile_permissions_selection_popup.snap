@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/permissions.rs
 expression: "render_bottom_popup(&chat, 80)"
 ---
+────────────────────────────────────────────────────────────────────────────────
+
   Update Model Permissions
 
 › 1. Ask for approval (current)  Codex can read and edit files in the current

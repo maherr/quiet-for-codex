@@ -4,11 +4,11 @@ use super::*;
 
 impl ChatWidget {
     pub(crate) fn bottom_pane_renderable(&self) -> RenderableItem<'_> {
-        self.bottom_pane
-            .as_renderable_with_composer_right_reserve(self.ambient_pet_wrap_reserved_cols())
-            .inset(Insets::tlbr(
-                /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-            ))
+        RenderableItem::Owned(Box::new(BottomPaneSeparatorRenderable {
+            child: self
+                .bottom_pane
+                .as_renderable_with_composer_right_reserve(self.ambient_pet_wrap_reserved_cols()),
+        }))
     }
 
     pub(crate) fn as_renderable(&self) -> RenderableItem<'_> {
@@ -63,6 +63,48 @@ impl ChatWidget {
     }
 }
 
+struct BottomPaneSeparatorRenderable<'a> {
+    child: RenderableItem<'a>,
+}
+
+impl BottomPaneSeparatorRenderable<'_> {
+    fn child_area(area: Rect) -> Rect {
+        Rect::new(
+            area.x,
+            area.y.saturating_add(1),
+            area.width,
+            area.height.saturating_sub(1),
+        )
+    }
+}
+
+impl Renderable for BottomPaneSeparatorRenderable<'_> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.height > 0 {
+            Line::from("─".repeat(usize::from(area.width)))
+                .dim()
+                .render(Rect::new(area.x, area.y, area.width, 1), buf);
+        }
+        self.child.render(Self::child_area(area), buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.child.desired_height(width).saturating_add(1)
+    }
+
+    fn has_stable_height(&self) -> bool {
+        self.child.has_stable_height()
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.child.cursor_pos(Self::child_area(area))
+    }
+
+    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
+        self.child.cursor_style(Self::child_area(area))
+    }
+}
+
 struct TranscriptAreaRenderable<'a> {
     child: &'a dyn HistoryCell,
     top: u16,
@@ -72,7 +114,8 @@ struct TranscriptAreaRenderable<'a> {
 impl Renderable for TranscriptAreaRenderable<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let area = self.child_area(area);
-        let lines = self.child.display_lines(area.width);
+        let mut lines = self.child.display_lines(area.width);
+        crate::render::line_utils::fill_line_backgrounds_to_width(&mut lines, area.width);
         let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         let y = if area.height == 0 {
             0

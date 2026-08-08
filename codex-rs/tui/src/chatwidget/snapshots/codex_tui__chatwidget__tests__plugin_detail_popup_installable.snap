@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: strip_osc8_for_snapshot(&popup)
 ---
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
   Plugins
   Figma · Can be installed · Local
   Data shared with this app is subject to the app's terms of service and privacy policy. Learn

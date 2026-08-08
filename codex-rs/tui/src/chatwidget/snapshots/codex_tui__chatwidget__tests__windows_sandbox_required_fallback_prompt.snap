@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/permissions.rs
 expression: popup
 ---
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
   Couldn't set up your sandbox with Administrator permissions
 
   Your organization requires the default sandbox before Codex can continue.

@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: popup
 ---
+────────────────────────────────────────────────────────────────────────────────
+
   Archive this session?
   Are you sure? This will archive the current session and exit Codex
 

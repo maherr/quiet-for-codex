@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
-expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
+expression: rendered
 ---
 
 
@@ -35,7 +35,7 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 • Explored
   └ Searched query Change Approved
     Read file diff_render.rs
-
+────────────────────────────────────────────────────────────────────────────────
 • Investigating rendering code (0s • esc to interrupt)
 
 

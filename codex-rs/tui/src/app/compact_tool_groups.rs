@@ -858,15 +858,14 @@ fn exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
     exec.get_or_init_compact_tool_group_item(|| classify_exec_tool_group_item(exec))
 }
 
+#[allow(clippy::redundant_closure_for_method_calls)]
 fn classify_exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
     if exec.iter_calls().any(|call| call.is_user_shell_command()) {
         return None;
     }
 
     let mut summary = ToolGroupSummary::default();
-    let mut call_count = 0usize;
     for call in exec.iter_calls() {
-        call_count += 1;
         let output = call.output.as_ref()?;
         if output.exit_code != 0 {
             return None;
@@ -887,7 +886,7 @@ fn classify_exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
     }
 
     Some(ToolGroupItem {
-        collapse_single: exec.is_exploring_cell() && summary.actions > 1 || call_count > 1,
+        collapse_single: true,
         summary,
     })
 }
@@ -1253,7 +1252,7 @@ fn classify_mcp_tool_group_item(mcp: &McpToolCallCell) -> Option<ToolGroupItem> 
     summary.actions = 1;
     Some(ToolGroupItem {
         summary,
-        collapse_single: false,
+        collapse_single: true,
     })
 }
 
@@ -1264,7 +1263,7 @@ fn dynamic_tool_group_item(tool: &DynamicToolCallCell) -> Option<ToolGroupItem> 
     summary.actions = 1;
     Some(ToolGroupItem {
         summary,
-        collapse_single: false,
+        collapse_single: true,
     })
 }
 
@@ -1282,7 +1281,7 @@ fn web_tool_group_item(web: &WebSearchCell) -> Option<ToolGroupItem> {
     }
     Some(ToolGroupItem {
         summary,
-        collapse_single: false,
+        collapse_single: true,
     })
 }
 
@@ -1297,6 +1296,8 @@ fn patch_tool_group_item(patch: &PatchHistoryCell) -> Option<ToolGroupItem> {
             actions: 1,
             ..Default::default()
         },
+        // Patch cells are committed at apply-begin and do not carry completion state.
+        // Keep an isolated patch visible until the cell gains explicit completion state.
         collapse_single: false,
     })
 }
@@ -1490,6 +1491,9 @@ mod tests {
     use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::plan_tool::PlanItemArg;
+    use codex_protocol::plan_tool::StepStatus;
+    use codex_protocol::plan_tool::UpdatePlanArgs;
     use serde_json::json;
 
     use super::*;
@@ -1499,6 +1503,7 @@ mod tests {
     use crate::history_cell::McpInvocation;
     use crate::history_cell::new_active_mcp_tool_call;
     use crate::history_cell::new_patch_event;
+    use crate::history_cell::new_plan_update;
     use crate::history_cell::new_web_search_call;
 
     fn render_line_text(line: &Line<'static>) -> String {
@@ -1825,6 +1830,86 @@ mod tests {
             render_group_text(group),
             "▸ Work: read 2 files · called gmail.read_thread · Alt+I inspect · Alt+O all"
         );
+    }
+
+    #[test]
+    fn safe_single_tools_fold_while_plan_updates_remain_expanded() {
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+            completed_read_exec("read-before", "before.rs"),
+            Arc::new(new_plan_update(UpdatePlanArgs {
+                explanation: None,
+                plan: vec![PlanItemArg {
+                    step: "Keep this checklist visible".to_string(),
+                    status: StepStatus::InProgress,
+                }],
+            })),
+            completed_read_exec("read-after", "after.rs"),
+        ];
+
+        let projected = project_owned_cells(&cells, /*compact_tool_groups*/ true);
+        let rendered = render_transcript_lines(
+            &projected,
+            /*width*/ 100,
+            HistoryRenderMode::Rich,
+            /*compact_tool_groups*/ false,
+            /*row_cap*/ None,
+        )
+        .0;
+
+        insta::assert_snapshot!(render_lines_text(&rendered), @r###"
+        ▸ Work: read before.rs · Alt+I inspect · Alt+O all
+
+        • Updated Plan
+          └ □ Keep this checklist visible
+
+        ▸ Work: read after.rs · Alt+I inspect · Alt+O all
+        "###);
+    }
+
+    #[test]
+    fn completed_safe_single_tool_kinds_with_lifecycle_fold() {
+        let cases: Vec<(&str, Arc<dyn HistoryCell>)> = vec![
+            ("exec", completed_read_exec("read", "app.rs")),
+            ("mcp", completed_mcp("mcp", "files", "read")),
+            (
+                "dynamic",
+                dynamic_tool(
+                    Some("functions"),
+                    "exec",
+                    codex_app_server_protocol::DynamicToolCallStatus::Completed,
+                ),
+            ),
+            (
+                "web",
+                Arc::new(new_web_search_call(
+                    "web".to_string(),
+                    "quiet visual hierarchy".to_string(),
+                    codex_app_server_protocol::WebSearchAction::Search {
+                        query: Some("quiet visual hierarchy".to_string()),
+                        queries: None,
+                    },
+                )),
+            ),
+        ];
+
+        for (label, cell) in cases {
+            let projected = project_owned_cells(&[cell], /*compact_tool_groups*/ true);
+            assert_eq!(projected.len(), 1, "{label} projection changed cardinality");
+            assert!(
+                projected[0].as_any().is::<CompactToolGroupCell>(),
+                "{label} singleton stayed expanded"
+            );
+        }
+    }
+
+    #[test]
+    fn patch_singletons_remain_expanded_without_completion_state() {
+        let cell = completed_patch(&["src/app.rs"]);
+
+        let projected = project_owned_cells(&[cell], /*compact_tool_groups*/ true);
+
+        assert_eq!(projected.len(), 1);
+        assert!(projected[0].as_any().is::<PatchHistoryCell>());
     }
 
     #[test]

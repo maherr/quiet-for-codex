@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/guardian.rs
 expression: popup
 ---
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
   Auto-review Denials
   Select a denied action to approve.
 

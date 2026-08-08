@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
+────────────────────────────────────────────────────────────────────────────────
+
   Select Personality
   Choose a communication style for Codex.
 

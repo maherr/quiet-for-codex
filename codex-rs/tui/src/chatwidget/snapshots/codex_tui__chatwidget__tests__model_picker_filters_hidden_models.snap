@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
+────────────────────────────────────────────────────────────────────────────────
+
   Select Model and Effort
   Access legacy models by running codex-quiet -m <model_name> or in your confi
 

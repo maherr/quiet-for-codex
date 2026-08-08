@@ -1226,7 +1226,7 @@ async fn plugins_popup_remote_section_fallback_states_when_remote_plugin_disable
         let header = popup
             .lines()
             .map(str::trim)
-            .filter(|line| !line.is_empty())
+            .filter(|line| !line.is_empty() && !line.chars().all(|ch| ch == '─'))
             .nth(1)
             .expect("expected remote section header");
         let item = popup

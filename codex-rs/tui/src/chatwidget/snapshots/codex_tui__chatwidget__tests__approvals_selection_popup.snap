@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/permissions.rs
 expression: popup
 ---
+────────────────────────────────────────────────────────────────────────────────
+
   Update Model Permissions
 
 › 1. Ask for approval  Codex can read and edit files in the current workspace,

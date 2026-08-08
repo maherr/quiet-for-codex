@@ -86,6 +86,7 @@ use crate::render::highlight::DiffScopeBackgroundRgbs;
 use crate::render::highlight::diff_scope_background_rgbs;
 use crate::render::highlight::exceeds_highlight_limits;
 use crate::render::highlight::highlight_code_to_styled_spans;
+use crate::render::line_utils::fill_line_backgrounds_to_width;
 use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::InsetRenderable;
@@ -310,6 +311,7 @@ impl Renderable for FileChange {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let mut lines = vec![];
         render_change(self, &mut lines, area.width as usize, /*lang*/ None);
+        fill_line_backgrounds_to_width(&mut lines, area.width);
         Paragraph::new(lines).render(area, buf);
     }
 

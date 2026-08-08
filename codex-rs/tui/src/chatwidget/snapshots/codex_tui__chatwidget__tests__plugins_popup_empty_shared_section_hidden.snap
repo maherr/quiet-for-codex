@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: loaded_popup
 ---
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
   Plugins
   Workspace.
   This section loaded successfully.

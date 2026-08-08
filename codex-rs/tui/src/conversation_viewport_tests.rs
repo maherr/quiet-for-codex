@@ -84,6 +84,9 @@ impl HistoryCell for TestCell {
 #[derive(Debug)]
 struct BlockStyleCell;
 
+#[derive(Debug)]
+struct LineStyleCell;
+
 impl HistoryCell for BlockStyleCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         vec![
@@ -106,6 +109,24 @@ impl HistoryCell for BlockStyleCell {
 
     fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
         selection_contribution_from_display_lines(self.display_lines_for_mode(width, mode), width)
+    }
+}
+
+impl HistoryCell for LineStyleCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec![Line::from("patch").style(Style::default().bg(Color::Red))]
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        vec![Line::from("patch")]
+    }
+
+    fn selection_contribution(
+        &self,
+        _width: u16,
+        _mode: HistoryRenderMode,
+    ) -> SelectionContribution {
+        SelectionContribution::Transparent
     }
 }
 
@@ -469,6 +490,25 @@ raw background:
 ................
 ................
 "###);
+}
+
+#[test]
+fn rich_line_background_reaches_the_owned_viewport_edge() {
+    let mut viewport = viewport(vec![Arc::new(LineStyleCell)]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 12, /*height*/ 1,
+    );
+    let mut buffer = Buffer::empty(area);
+
+    viewport.render(area, &mut buffer);
+
+    let background_mask = (area.x..area.right())
+        .map(|x| match buffer[(x, area.y)].style().bg {
+            Some(Color::Red) => '#',
+            _ => '.',
+        })
+        .collect::<String>();
+    assert_snapshot!(background_mask, @"############");
 }
 
 #[test]
