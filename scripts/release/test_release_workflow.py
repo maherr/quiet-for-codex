@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -27,9 +28,12 @@ TUI_UPDATE_PROMPT_PATH = REPO_ROOT / "codex-rs" / "tui" / "src" / "update_prompt
 TUI_TOOLTIPS_PATH = REPO_ROOT / "codex-rs" / "tui" / "src" / "tooltips.rs"
 README_PATH = REPO_ROOT / "README.md"
 INSTALL_DOC_PATH = REPO_ROOT / "docs" / "install.md"
+SUPPORT_PATH = REPO_ROOT / "SUPPORT.md"
 CHANGELOG_PATH = REPO_ROOT / "CHANGELOG.md"
 FORK_CHANGES_PATH = REPO_ROOT / "FORK_CHANGES.md"
 BUG_REPORT_PATH = REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "bug-report.yml"
+JUSTFILE_PATH = REPO_ROOT / "justfile"
+TUI_MANIFEST_PATH = REPO_ROOT / "codex-rs" / "tui" / "Cargo.toml"
 INSTALLER_PATHS = (
     REPO_ROOT / "scripts" / "release" / "install.sh",
     POWERSHELL_INSTALLER_PATH,
@@ -64,8 +68,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         cls.tui_tooltips = TUI_TOOLTIPS_PATH.read_text(encoding="utf-8")
         cls.readme = README_PATH.read_text(encoding="utf-8")
         cls.install_doc = INSTALL_DOC_PATH.read_text(encoding="utf-8")
+        cls.support = SUPPORT_PATH.read_text(encoding="utf-8")
         cls.fork_changes = FORK_CHANGES_PATH.read_text(encoding="utf-8")
         cls.bug_report = BUG_REPORT_PATH.read_text(encoding="utf-8")
+        cls.justfile = JUSTFILE_PATH.read_text(encoding="utf-8")
+        cls.tui_manifest = tomllib.loads(TUI_MANIFEST_PATH.read_text(encoding="utf-8"))
         changelog = CHANGELOG_PATH.read_text(encoding="utf-8")
         # Mirror the workflow: the release version is the FIRST released
         # heading, whichever channel it is. Searching for the first *beta*
@@ -442,13 +449,21 @@ class ReleaseWorkflowTests(unittest.TestCase):
         FORK_CHANGES.md documents. Collapsing these was what made a second Quiet
         release on an unchanged Codex base unexpressible.
         """
-        quiet_version = (REPO_ROOT / "QUIET_VERSION").read_text(encoding="utf-8").strip()
-        self.assertRegex(quiet_version, r"^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$")
+        quiet_version = (
+            (REPO_ROOT / "QUIET_VERSION").read_text(encoding="utf-8").strip()
+        )
+        self.assertRegex(
+            quiet_version, r"^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$"
+        )
         self.assertEqual(quiet_version, self.release_version)
 
-        self.assertIn('quiet_version="$(tr -d \'[:space:]\' < QUIET_VERSION)"', self.workflow)
+        self.assertIn(
+            "quiet_version=\"$(tr -d '[:space:]' < QUIET_VERSION)\"", self.workflow
+        )
         self.assertIn("does not match QUIET_VERSION", self.workflow)
-        self.assertIn('if [[ "$documented_release" != "rust-v$codex_base" ]]', self.workflow)
+        self.assertIn(
+            'if [[ "$documented_release" != "rust-v$codex_base" ]]', self.workflow
+        )
         # The tag base must no longer be compared against the Cargo version.
         self.assertNotIn("does not match Cargo version", self.workflow)
         self.assertIn("codex_base: ${{ steps.tag.outputs.codex_base }}", self.workflow)
@@ -562,14 +577,50 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_readme_has_compact_before_after_comparison(self) -> None:
         for text in (
             "Before: Official Codex (8 blocks, 16 timeline lines)",
-            "After: Quiet for Codex (1 row, 3 timeline lines)",
-            "That is 81% less vertical timeline",
-            "Alt+I inspect",
-            "Alt+O all",
+            "After settlement: Quiet for Codex (1 row, 1 timeline line)",
+            "That is 94% less vertical timeline",
+            "completed row stable",
+            "clicked, hovered, visible, or latest compact group",
+            "Alt+O",
             "Ctrl+T",
         ):
             self.assertIn(text, self.readme)
         self.assertNotIn("official-vs-quiet.png", self.readme)
+
+    def test_support_uses_stable_product_framing_with_target_specific_beta_tiers(
+        self,
+    ) -> None:
+        self.assertIn(
+            "Quiet for Codex is an unofficial, community-maintained release",
+            self.support,
+        )
+        self.assertNotIn("Quiet for Codex is a public beta", self.support)
+        self.assertIn("Tested beta", self.support)
+        self.assertIn("CI beta", self.support)
+        self.assertIn("CI preview", self.support)
+
+    def test_quiet_benchmark_isolated_from_normal_tui_targets(self) -> None:
+        self.assertFalse(self.tui_manifest["package"]["autobenches"])
+        self.assertEqual(self.tui_manifest["features"]["quiet-bench"], ["dep:divan"])
+        self.assertTrue(self.tui_manifest["dependencies"]["divan"]["optional"])
+
+        bins = {target["name"]: target for target in self.tui_manifest["bin"]}
+        self.assertFalse(bins["codex-tui"]["bench"])
+        self.assertFalse(bins["md-events"]["bench"])
+        self.assertEqual(
+            bins["quiet-render-bench"]["required-features"], ["quiet-bench"]
+        )
+        self.assertFalse(bins["quiet-render-bench"]["test"])
+        self.assertFalse(bins["quiet-render-bench"]["bench"])
+        self.assertNotIn("bench", self.tui_manifest)
+
+        self.assertIn(
+            "cargo run --release --jobs 1 -p codex-tui --bin quiet-render-bench "
+            "--features quiet-bench {{ args }}",
+            self.justfile,
+        )
+        self.assertIn("just quiet-bench {{ args }}", self.justfile)
+        self.assertNotIn("--features codex-tui/quiet-bench", self.justfile)
 
     def test_manual_install_docs_verify_checksums_on_every_platform(self) -> None:
         for required in (

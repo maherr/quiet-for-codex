@@ -9,13 +9,13 @@ their binaries and update channels remain separate.
 ### macOS or Linux
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.3/scripts/release/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.1.0/scripts/release/install.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.3/scripts/release/install.ps1)))
+& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.1.0/scripts/release/install.ps1)))
 ```
 
 The installers detect the host target, download the matching archive from the
@@ -34,9 +34,9 @@ On Windows, packages live under
 `current.txt`, and adds that bin directory to the user `PATH`. Override the
 root with `CODEX_QUIET_INSTALL_ROOT`.
 
-To install a specific release instead of the latest beta, set
-`CODEX_QUIET_RELEASE` to a version such as `0.146.0-beta.5`. The Unix installer
-also accepts `--release 0.146.0-beta.5` when downloaded and run as a file.
+To install a specific release instead of the latest release, set
+`CODEX_QUIET_RELEASE` to a version such as `1.1.0`. The Unix installer also
+accepts `--release 1.1.0` when downloaded and run as a file.
 
 Run the installed command:
 
@@ -47,7 +47,7 @@ codex-quiet
 
 ## Manual installation
 
-1. Open the newest Quiet for Codex beta on the
+1. Open the newest Quiet for Codex release on the
    [releases page](https://github.com/maherr/quiet-for-codex/releases).
 2. Select the archive matching your Rust target triple.
 3. Download the archive and the release checksum file.
@@ -129,7 +129,7 @@ the downloaded archive and run:
 gh attestation verify PATH_TO_ARCHIVE \
   --repo maherr/quiet-for-codex \
   --signer-workflow maherr/quiet-for-codex/.github/workflows/quiet-release.yml \
-  --source-ref refs/tags/quiet-v1.0.3 \
+  --source-ref refs/tags/quiet-v1.1.0 \
   --deny-self-hosted-runners
 ```
 
@@ -143,7 +143,7 @@ binaries remain unsigned, so also review the
 
 The package includes `codex-code-mode-host` beside the main executable and
 platform resources used by sandboxing, shell integration, and file search. Do
-not copy only the main executable if you need those features. Beta packages do
+not copy only the main executable if you need those features. Binary packages do
 not include upstream's experimental patched-zsh payload; an enabled zsh-fork
 flag falls back to the normal user shell.
 

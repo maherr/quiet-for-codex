@@ -1,5 +1,74 @@
 # Changelog
 
+## 1.1.0 - 2026-08-10
+
+### Added
+
+- Added pane-scoped tool-run identities and explicit semantic settlement
+  markers. Replay, raw mode, transcript inspection, and selection continue to
+  use the original source cells.
+- Added fixed-schema local outcome counters for bounded legacy tool-history
+  restoration, without retaining commands, paths, or output bodies.
+- Added content-blind debug counters and a dedicated retained-frame benchmark
+  for render latency, input-to-draw latency, prepared-line cache reuse, and the
+  owned-frame overhead above a footer-only diagnostic control. The release
+  decision still uses a real owned-versus-inline terminal comparison.
+
+### Changed
+
+- Completed tool calls now remain as stable chronological rows while a tool
+  succession is live. Eligible work folds once when the succession reaches an
+  assistant, plan, reasoning, barrier, interruption, replay, or explicit turn
+  boundary, instead of growing and rewriting a live `Work` group.
+- A single ordinary action stays as its normal completed row. Two or more safe
+  semantic actions fold, including a single command source that contains
+  multiple actions. Failures, user-shell commands, approvals, warnings,
+  action-required output, visible reasoning, and unfinished patches remain
+  visible.
+- Collapsed `Work` headers now occupy exactly one responsive terminal row.
+  `Alt+I` prefers the last clicked group, then the hovered group, the last
+  visible group, and finally the latest group. Repeated shortcut text moved to
+  the contextual footer.
+- Rich history and diff backgrounds now extend to the owned viewport edge, with
+  a full-width divider separating retained history from the composer.
+- Ordinary running state and routine hook progress now reuse the composer's
+  existing footer lane, so idle and running transitions do not change the
+  bottom pane's height. Quiet hook success disappears immediately, while
+  failed, blocked, stopped, actionable, or output-bearing hook results remain
+  in history.
+- Running motion is capped at 10 frames per second under animations. The
+  separate hook animation loop and transcript activity animation were removed;
+  reduced-motion status is event-driven apart from optional elapsed seconds.
+- Retained projection now updates only affected ranges, preserves scroll and
+  selection anchors, reuses stable wrapper and prepared-line caches, and keeps
+  hook, token, rate-limit, and primary-tool invalidation independent. Inline
+  mode performs no grouping reflow while a run is open and at most one when it
+  settles.
+- Initial and thread-switch replay now builds settled groups before the first
+  visible frame, avoiding an expanded-then-collapsed flash.
+
+### Fixed
+
+- Preserved pending tool-run settlement across selection-safe deferred commits,
+  so a run that begins during text selection still folds exactly once after its
+  source cells enter the viewport.
+- Kept ordinary running and routine hook status visible when a composer popup
+  or special footer mode temporarily occupies the normal footer lane.
+- Prevented invisible tool-run settlement markers from adding blank rows to the
+  complete transcript overlay.
+- Invalidated completed exec and MCP classification memos whenever output,
+  completion, or failure state changes, and bypassed those memos while a call
+  is still active.
+- Replaced pointer-derived group identity with stable run IDs, preserving
+  hover and expansion state through background-terminal promotion and local
+  lifecycle updates.
+- Kept finalized live cells visible until their history commit is acknowledged,
+  closing the one-frame tail gap between active and retained history.
+- Corrected the variadic benchmark recipe so smoke-test and filter arguments
+  reach Cargo instead of silently triggering an unfiltered workspace run, and
+  isolated the retained-render benchmark behind a feature-gated binary so it
+  does not compile unrelated TUI binaries or test dependencies.
+
 ## 1.0.3 - 2026-08-07
 
 Stable release of `1.0.3-beta.1`, promoted unchanged: the first stable Quiet on

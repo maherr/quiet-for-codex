@@ -26,19 +26,27 @@ text is retained.
 
 The TUI can own an alternate screen with a pinned composer and retained,
 scrollable conversation history. It maps rendered cells back to source text so
-mouse selection and copying remain useful after wrapping and resize.
+mouse selection and copying remain useful after wrapping and resize. Ordinary
+idle, running, and hook-progress transitions reuse the composer's footer and do
+not change the bottom pane's height.
 
 ### Compact activity presentation
 
-Successful commands can fold into outcome-first `Work` groups. Failures and
-results requiring attention remain expanded. Background terminals, hooks, and
-collaborator activity use compact lifecycle presentation.
+Tool calls remain chronological and append-stable while a succession is live.
+At a semantic boundary, two or more safe actions fold once into a one-line,
+outcome-first `Work` group; a single ordinary action stays as its normal row.
+Failures, user-shell commands, approvals, warnings, action-required output,
+visible reasoning, and unfinished patches remain expanded. Routine hook
+progress uses the fixed footer, while non-routine hook results remain durable.
+Background terminals and collaborator activity use compact lifecycle
+presentation.
 
 ### Conversation panes and inspection
 
 Conversation panes can remain live, receive focus, resize, and preserve their
 own navigation state. Compact work can be inspected in place or through the
-complete transcript.
+complete transcript. Settlement preserves viewport and selection anchors, and
+`Alt+I` follows the clicked, hovered, visible, then latest group priority.
 
 ### Fork identity and distribution
 
@@ -46,7 +54,7 @@ The display version identifies `codex-quiet`. Public packages install a
 `codex-quiet` command beside the official `codex` command. Fork releases use
 their own repository, checksums, installers, support policy, and update channel.
 Quiet disables the upstream self-update path and remote announcement feed. It
-also omits the `app` CLI subcommand and hides `/app`, so this beta cannot
+also omits the `app` CLI subcommand and hides `/app`, so Quiet cannot
 download, install, or hand a session to the official Desktop app. Browser login
 success stays on the local confirmation page, including when an app-server
 client requests the upstream hosted Desktop handoff.
@@ -59,7 +67,7 @@ Daemon-managed app-server and daemon-backed remote-control commands are hidden
 and fail closed. The matching upstream routes manage a stock standalone Codex
 installation and updater, which would cross Quiet's separate-install and
 separate-update boundary. Foreground app-server operation remains available.
-Binary beta packages omit the experimental patched-zsh payload. A shared
+Binary packages omit the experimental patched-zsh payload. A shared
 configuration that enables the zsh-fork feature falls back to the normal user
 shell instead of failing startup.
 

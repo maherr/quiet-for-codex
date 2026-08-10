@@ -11,7 +11,7 @@ scrolling.
 > Codex identify the upstream project and compatible service; they do not imply
 > sponsorship.
 
-Quiet for Codex 1.0.3 is based on upstream [`rust-v0.147.0`](https://github.com/openai/codex/releases/tag/rust-v0.147.0). Quiet carries its own version, so `codex-quiet --version` reports both, as `codex-quiet 1.0.3 (codex 0.147.0)`.
+Quiet for Codex 1.1.0 is based on upstream [`rust-v0.147.0`](https://github.com/openai/codex/releases/tag/rust-v0.147.0). Quiet carries its own version, so `codex-quiet --version` reports both, as `codex-quiet 1.1.0 (codex 0.147.0)`.
 
 ## See the difference
 
@@ -48,26 +48,28 @@ count, or token use.
   └ passed
 ```
 
-### After: Quiet for Codex (1 row, 3 timeline lines)
+### After settlement: Quiet for Codex (1 row, 1 timeline line)
 
 ```text
-▸ Work: read 3 files · searched · 3 files edited
-  tests passed · build passed · check passed · ran command
-  Alt+I inspect · Alt+O all
+▸ Work: read 3 files · searched · 3 files edited · tests passed
 ```
 
-That is 81% less vertical timeline for this illustrative turn. Quiet folds
-eligible successful work into one outcome-first row without discarding the
-underlying details. Click the `Work` row or press `Alt+I` for exact commands,
-outputs, and durations; `Alt+O` temporarily opens all groups, and `Ctrl+T`
-opens the complete transcript. During the turn, the composer stays anchored
-below retained, selectable history.
+That is 94% less vertical timeline after this illustrative turn settles. While
+the turn is live, Quiet shows its calls chronologically and keeps every
+completed row stable. It folds eligible successful work once at the next
+semantic boundary without discarding the underlying details. Click the `Work`
+row or press `Alt+I` for exact commands, outputs, and durations; `Alt+O`
+temporarily opens all groups, and `Ctrl+T` opens the complete transcript. The
+composer stays anchored below retained, selectable history throughout.
 
 ## What changes
 
 - The composer stays pinned to the bottom in an app-owned alternate screen.
-- Eligible successful commands collapse into outcome-first `▸ Work` groups.
-  Failures and results that need action stay expanded.
+- Rich transcript and diff backgrounds reach the viewport edges, with a
+  full-width divider above the composer.
+- Live tool calls append as stable chronological rows. Eligible success folds
+  once into an outcome-first `▸ Work` row after the succession ends; failures
+  and results that need action stay expanded.
 - A `Work` header expands in place when clicked and collapses when clicked
   again. Dragging from the row still selects text.
 - Background terminals and collaborator fleets render as compact lifecycle
@@ -75,12 +77,14 @@ below retained, selectable history.
 - The current command remains visible during long multi-command exploration.
 - Terminal scrolling, resize reflow, mouse selection, copying, and transcript
   replay work inside retained history.
-- Noisy successful output and routine hook rows take less space.
+- Ordinary progress and routine hooks share the composer's fixed-height footer.
+  Quiet hook success disappears; actionable or output-bearing hook results stay
+  in history.
 
 The retained-interface changes are concentrated in the Rust TUI. Except for the
 fork-safety divergences documented in [Fork changes](FORK_CHANGES.md),
 configuration, sessions, tools, and compatible service access track the
-corresponding upstream Codex CLI release. Binary beta packages omit the
+corresponding upstream Codex CLI release. Binary packages omit the
 experimental patched-zsh backend; if that upstream feature is enabled in shared
 configuration, Quiet falls back to the normal user shell.
 
@@ -88,7 +92,7 @@ configuration, Quiet falls back to the normal user shell.
 
 | If you care most about | Official Codex | Quiet for Codex |
 | --- | --- | --- |
-| Official distribution and support | OpenAI release and support channels | Unofficial, community-maintained beta |
+| Official distribution and support | OpenAI release and support channels | Unofficial, community-maintained release |
 | Long tool-heavy turns | Successful calls remain as individual blocks in the main flow | Eligible successful work folds into outcome-first `Work` rows |
 | Failure visibility | Failed and successful calls use the normal upstream presentation | Failures stay visible while eligible routine success folds |
 | Inspecting details | Inline previews and the complete transcript | Click, `Alt+I`, `Alt+O`, or the complete transcript |
@@ -107,13 +111,13 @@ replace or remove a `codex` command you already have.
 ### macOS or Linux
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.3/scripts/release/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.1.0/scripts/release/install.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.0.3/scripts/release/install.ps1)))
+& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.1.0/scripts/release/install.ps1)))
 ```
 
 The installers select the matching archive from the newest Quiet for Codex
@@ -156,7 +160,7 @@ alternate_screen = "never"
 | Control | Action |
 | --- | --- |
 | Click a `Work` header | Expand or collapse that group |
-| `Alt+I` | Inspect the latest compact group |
+| `Alt+I` | Inspect the clicked, hovered, visible, or latest compact group |
 | `Alt+O` | Temporarily show all groups, then restore individual folds |
 | `Ctrl+T` | Open the complete transcript |
 | Mouse drag | Select source text for copying |
@@ -164,9 +168,9 @@ alternate_screen = "never"
 ## Platform status
 
 Linux x86_64 and macOS on Apple Silicon receive real-machine smoke tests for
-this beta. Other published targets have narrower validation. Native Windows is
-supported as a beta target, not only through WSL2. See [Support](SUPPORT.md) for
-the exact matrix and what each tier means.
+each release. Other published targets have narrower validation. Native Windows
+is supported as a beta target, not only through WSL2. See [Support](SUPPORT.md)
+for the exact matrix and what each tier means.
 
 No release is claimed to support every Linux distribution, CPU architecture,
 terminal emulator, or enterprise policy. If your platform is outside the

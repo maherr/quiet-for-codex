@@ -1,7 +1,8 @@
 # Support
 
-Quiet for Codex is a public beta. Support tiers describe completed validation
-and mandatory release gates, not what Rust can theoretically compile. A target
+Quiet for Codex is an unofficial, community-maintained release. Support tiers
+describe completed validation and mandatory release gates, not what Rust can
+theoretically compile. A target
 is not published unless its listed release gate passes for that exact archive.
 
 ## Platform matrix
