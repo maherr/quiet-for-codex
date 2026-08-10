@@ -329,13 +329,49 @@ jobs:
             --zsh-manifest scripts/release/no-zsh.json \
             --bwrap-bin "$QUIET_BWRAP_BIN" \
             --force
-          expected="codex-quiet $CODEX_QUIET_VERSION (codex $CODEX_BASE_VERSION)"
+          expected="codex-quiet $CODEX_QUIET_VERSION"
           actual="$("$package_dir/bin/codex" --version)"
           if [[ "$actual" != "$expected" ]]; then
             echo "Candidate identity mismatch: expected '$expected', got '$actual'" >&2
             exit 1
           fi
+          python3 - "$package_dir/codex-package.json" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          metadata = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected = {
+              "entrypoint": "bin/codex",
+              "target": os.environ["TARGET"],
+              "version": os.environ["CODEX_BASE_VERSION"],
+          }
+          actual = {key: metadata.get(key) for key in expected}
+          if actual != expected:
+              raise SystemExit(
+                  f"Candidate package metadata mismatch: expected {expected!r}, "
+                  f"got {actual!r}"
+              )
+          PY
           printf '%s\n' "$GITHUB_SHA" > candidate-dist/source-sha.txt
+          python3 - candidate-dist/candidate-identity.json <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          identity = {
+              "quietVersion": os.environ["CODEX_QUIET_VERSION"],
+              "sourceSha": os.environ["GITHUB_SHA"],
+              "target": os.environ["TARGET"],
+              "upstreamVersion": os.environ["CODEX_BASE_VERSION"],
+          }
+          Path(sys.argv[1]).write_text(
+              json.dumps(identity, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
           (
             cd candidate-dist
             sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256"

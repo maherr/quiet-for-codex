@@ -603,13 +603,23 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "--cargo-profile release",
             "--zsh-manifest scripts/release/no-zsh.json",
             "codex-quiet-candidate-$GITHUB_SHA-$TARGET.tar.gz",
+            'expected="codex-quiet $CODEX_QUIET_VERSION"',
             'actual="$("$package_dir/bin/codex" --version)"',
+            "Candidate package metadata mismatch",
+            '"version": os.environ["CODEX_BASE_VERSION"]',
+            "candidate-dist/candidate-identity.json",
+            '"quietVersion": os.environ["CODEX_QUIET_VERSION"]',
+            '"upstreamVersion": os.environ["CODEX_BASE_VERSION"]',
             "candidate-dist/source-sha.txt",
             "sha256sum",
             "quiet-linux-candidate-${{ github.sha }}",
             "retention-days: 7",
         ):
             self.assertIn(required, candidate)
+        self.assertNotIn(
+            'expected="codex-quiet $CODEX_QUIET_VERSION (codex $CODEX_BASE_VERSION)"',
+            candidate,
+        )
         self.assertNotIn("contents: write", candidate)
         self.assertNotIn("session", candidate.lower())
 
