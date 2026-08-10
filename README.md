@@ -11,7 +11,7 @@ scrolling.
 > Codex identify the upstream project and compatible service; they do not imply
 > sponsorship.
 
-Quiet for Codex 1.1.0 is based on upstream [`rust-v0.147.0`](https://github.com/openai/codex/releases/tag/rust-v0.147.0). Quiet carries its own version, so `codex-quiet --version` reports both, as `codex-quiet 1.1.0 (codex 0.147.0)`.
+Quiet for Codex 1.2.0 is based on upstream [`rust-v0.147.0`](https://github.com/openai/codex/releases/tag/rust-v0.147.0). `codex-quiet --version` reports `codex-quiet 1.2.0`; the startup card also identifies the upstream base as `codex 0.147.0`.
 
 ## See the difference
 
@@ -80,6 +80,12 @@ composer stays anchored below retained, selectable history throughout.
 - Ordinary progress and routine hooks share the composer's fixed-height footer.
   Quiet hook success disappears; actionable or output-bearing hook results stay
   in history.
+- Assistant replies use a large blue marker, and the active row uses a bright
+  one-cell spinner with one phrase per turn plus the effective model and effort.
+- Scrolled history shows a `↓ newer` cue, with `End` offered only when it cannot
+  overwrite a draft.
+- Paginated resume keeps completed replies anchored while dense newer work is
+  restored, without duplicating the final answer.
 
 The retained-interface changes are concentrated in the Rust TUI. Except for the
 fork-safety divergences documented in [Fork changes](FORK_CHANGES.md),
@@ -111,13 +117,13 @@ replace or remove a `codex` command you already have.
 ### macOS or Linux
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.1.0/scripts/release/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.2.0/scripts/release/install.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.1.0/scripts/release/install.ps1)))
+& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.2.0/scripts/release/install.ps1)))
 ```
 
 The installers select the matching archive from the newest Quiet for Codex

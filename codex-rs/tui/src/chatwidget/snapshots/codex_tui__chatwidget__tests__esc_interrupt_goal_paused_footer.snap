@@ -1,9 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 2469
 expression: snapshot
 ---
 "────────────────────────────────────────────────────────────────────────────────"
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  • Working (0s • esc to interrupt)                 Goal paused (/goal resume)  "
+"  ⠋ esc interrupt · gpt-5.6-sol · default · Workin… Goal paused (/goal resume)  "

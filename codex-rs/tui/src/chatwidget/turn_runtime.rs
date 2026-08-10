@@ -85,6 +85,7 @@ impl ChatWidget {
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
         self.session_telemetry.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
+        self.bottom_pane.begin_activity_turn();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
         self.update_task_running_state();

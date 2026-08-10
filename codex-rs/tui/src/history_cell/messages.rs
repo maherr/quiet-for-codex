@@ -417,7 +417,7 @@ pub(crate) struct AgentMessageCell {
 }
 
 fn agent_message_prefix() -> Span<'static> {
-    "● ".cyan().bold()
+    "● ".fg(crate::style::quiet_blue_color()).bold()
 }
 
 fn agent_message_continuation_prefix() -> Span<'static> {

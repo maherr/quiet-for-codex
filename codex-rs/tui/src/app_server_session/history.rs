@@ -48,6 +48,22 @@ pub(crate) fn thread_items_page_params(
     }
 }
 
+pub(crate) fn thread_turns_page_params(
+    thread_id: ThreadId,
+    cursor: Option<String>,
+) -> ThreadTurnsListParams {
+    ThreadTurnsListParams {
+        thread_id: thread_id.to_string(),
+        cursor,
+        limit: Some(INITIAL_HISTORY_TURN_LIMIT),
+        sort_direction: Some(SortDirection::Desc),
+        // A summary carries each turn's first user item and final assistant item. That durable
+        // fence keeps completed replies visible even when a newer busy turn exhausts the bounded
+        // item-page row budget; full item pages merge by item id below without duplicates.
+        items_view: Some(TurnItemsView::Summary),
+    }
+}
+
 fn advancing_cursor(
     current: Option<&str>,
     next: Option<String>,
@@ -57,6 +73,30 @@ fn advancing_cursor(
         seen_cursors.insert(current.to_string());
     }
     next.filter(|next| seen_cursors.insert(next.clone()))
+}
+
+fn merge_item_into_loaded_turns(
+    turns: &mut [Turn],
+    turn_id: &str,
+    item: ThreadItem,
+) -> Option<ThreadItem> {
+    let turn = turns.iter_mut().find(|turn| turn.id == turn_id)?;
+    if turn.items.iter().any(|loaded| loaded.id() == item.id()) {
+        return None;
+    }
+    let merged = item.clone();
+    // Item pages arrive newest first. Repeated insertion immediately after the
+    // summary's first user item therefore reconstructs each page in ascending
+    // transcript order, while older follow-up pages naturally land before the
+    // already loaded newer suffix. The summary final remains the last anchor.
+    let insert_at = turn
+        .items
+        .iter()
+        .position(|loaded| matches!(loaded, ThreadItem::UserMessage { .. }))
+        .map_or(/*default*/ 0, |user_index| user_index + 1);
+    turn.items.insert(insert_at, item);
+    turn.items_view = TurnItemsView::Summary;
+    Some(merged)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -139,13 +179,7 @@ impl AppServerSession {
         self.client
             .request_typed(ClientRequest::ThreadTurnsList {
                 request_id,
-                params: ThreadTurnsListParams {
-                    thread_id: thread_id.to_string(),
-                    cursor,
-                    limit: Some(INITIAL_HISTORY_TURN_LIMIT),
-                    sort_direction: Some(SortDirection::Desc),
-                    items_view: Some(TurnItemsView::NotLoaded),
-                },
+                params: thread_turns_page_params(thread_id, cursor),
             })
             .await
             .wrap_err("failed to load a bounded thread history page")
@@ -179,12 +213,8 @@ impl AppServerSession {
                 );
                 turns.splice(0..0, page.data.into_iter().rev());
             }
-            if let Some(turn) = turns.iter_mut().find(|turn| turn.id == entry.turn_id)
-                && !turn.items.iter().any(|item| item.id() == entry.item.id())
-            {
-                items.push(entry.item.clone());
-                turn.items.insert(/*index*/ 0, entry.item);
-                turn.items_view = TurnItemsView::Summary;
+            if let Some(item) = merge_item_into_loaded_turns(turns, &entry.turn_id, entry.item) {
+                items.push(item);
             }
         }
         items.reverse();

@@ -44,6 +44,7 @@ pub(super) struct OwnedScreen {
     replay_in_progress: bool,
     last_pane_area: Rect,
     last_conversation_area: Rect,
+    last_bottom_area: Rect,
     last_rendered_conversation_area: Rect,
     last_selection_viewport_area: Option<Rect>,
     last_hover_position: Option<Position>,
@@ -73,6 +74,7 @@ impl OwnedScreen {
             replay_in_progress: false,
             last_pane_area: Rect::default(),
             last_conversation_area: Rect::default(),
+            last_bottom_area: Rect::default(),
             last_rendered_conversation_area: Rect::default(),
             last_selection_viewport_area: None,
             last_hover_position: None,
@@ -507,7 +509,8 @@ impl OwnedScreen {
             self.clear_tool_group_hover();
         }
 
-        let bottom_pane = chat_widget.bottom_pane_renderable();
+        let bottom_pane =
+            chat_widget.bottom_pane_renderable_with_newer_hint(/*show_newer_hint*/ false);
         let bottom_height = bottom_pane.desired_height(area.width).min(area.height);
         let conversation_height = area.height.saturating_sub(bottom_height);
         let conversation_area = Rect::new(
@@ -522,6 +525,7 @@ impl OwnedScreen {
             area.width,
             bottom_height,
         );
+        self.last_bottom_area = bottom_area;
         if self.last_rendered_conversation_area != conversation_area {
             self.clear_tool_group_hover();
         }
@@ -553,6 +557,9 @@ impl OwnedScreen {
                     .prepare_selection_autoscroll(conversation_area, now)
             };
         self.viewport.render(conversation_area, buffer);
+        let bottom_pane = chat_widget.bottom_pane_renderable_with_newer_hint(
+            /*show_newer_hint*/ !self.viewport.is_following_bottom(),
+        );
         bottom_pane.render(bottom_area, buffer);
 
         RenderedOwnedScreen {
@@ -562,15 +569,33 @@ impl OwnedScreen {
         }
     }
 
+    fn render_activity_bottom_pane(
+        &self,
+        chat_widget: &ChatWidget,
+        buffer: &mut Buffer,
+    ) -> Option<RenderedOwnedScreen> {
+        let area = self.last_bottom_area;
+        if area.is_empty() {
+            return None;
+        }
+        Clear.render(area, buffer);
+        let bottom_pane = chat_widget.bottom_pane_renderable_with_newer_hint(
+            /*show_newer_hint*/ !self.viewport.is_following_bottom(),
+        );
+        bottom_pane.render(area, buffer);
+        Some(RenderedOwnedScreen {
+            cursor: bottom_pane.cursor_pos(area),
+            cursor_style: bottom_pane.cursor_style(area),
+            selection_autoscroll_active: false,
+        })
+    }
+
     fn handle_navigation_key(&mut self, key_event: KeyEvent) -> bool {
-        // Composer history and cursor movement own arrows and Home/End. The transcript handles
-        // paging keys and non-conflicting custom pager bindings while the composer is empty.
+        // Composer history and cursor movement own arrows and Home. While the composer is empty,
+        // End is an explicit transcript jump matching the visible newer-history footer cue.
         if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             || is_plain_text_key_event(key_event)
-            || matches!(
-                key_event.code,
-                KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End
-            )
+            || matches!(key_event.code, KeyCode::Up | KeyCode::Down | KeyCode::Home)
         {
             return false;
         }
@@ -671,6 +696,7 @@ impl OwnedScreen {
     fn clear_last_render_areas(&mut self) {
         self.last_pane_area = Rect::default();
         self.last_conversation_area = Rect::default();
+        self.last_bottom_area = Rect::default();
     }
 
     fn update_tool_group_hover(&mut self, position: Position) -> bool {
@@ -928,6 +954,50 @@ fn render_layout(
     }
 }
 
+fn activity_bottom_band(panes: &ConversationPanes) -> Option<Rect> {
+    let mut band: Option<Rect> = None;
+    for slot in [PaneSlot::Parent, PaneSlot::Side] {
+        let Some(area) = panes
+            .by_slot(slot)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .map(|screen| screen.last_bottom_area)
+            .filter(|area| !area.is_empty())
+        else {
+            continue;
+        };
+        band = Some(match band {
+            Some(current) => {
+                let x = current.x.min(area.x);
+                let y = current.y.min(area.y);
+                let right = current.right().max(area.right());
+                let bottom = current.bottom().max(area.bottom());
+                Rect::new(x, y, right.saturating_sub(x), bottom.saturating_sub(y))
+            }
+            None => area,
+        });
+    }
+    band
+}
+
+fn render_activity_bottom_panes(
+    panes: &mut ConversationPanes,
+    focused: PaneSlot,
+    buffer: &mut Buffer,
+) -> Option<RenderedOwnedScreen> {
+    let mut focused_rendered = None;
+    for slot in [PaneSlot::Parent, PaneSlot::Side] {
+        let rendered = panes.by_slot_mut(slot).and_then(|pane| {
+            pane.owned_screen
+                .as_ref()?
+                .render_activity_bottom_pane(&pane.chat_widget, buffer)
+        });
+        if slot == focused {
+            focused_rendered = rendered;
+        }
+    }
+    focused_rendered
+}
+
 impl App {
     pub(super) fn owned_screen_for_behavior(
         alt_screen_behavior: AltScreenBehavior,
@@ -944,6 +1014,17 @@ impl App {
         self.chat_widget
             .by_slot(PaneSlot::Parent)
             .is_some_and(|pane| pane.owned_screen.is_some())
+    }
+
+    pub(super) fn owned_activity_animation_active(&self) -> bool {
+        [PaneSlot::Parent, PaneSlot::Side].into_iter().any(|slot| {
+            self.chat_widget.by_slot(slot).is_some_and(|pane| {
+                pane.owned_screen
+                    .as_ref()
+                    .is_some_and(|screen| !screen.last_bottom_area.is_empty())
+                    && pane.chat_widget.activity_animation_active()
+            })
+        })
     }
 
     pub(super) fn owned_screen_push_cell(&mut self, cell: Arc<dyn HistoryCell>) {
@@ -1433,6 +1514,23 @@ impl App {
                 .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
         }
         Ok(Some(rendered_area))
+    }
+
+    pub(super) fn render_owned_activity_frame(&mut self, tui: &mut tui::Tui) -> Result<bool> {
+        let Some(area) = activity_bottom_band(&self.chat_widget) else {
+            return Ok(false);
+        };
+        let focused = self.chat_widget.focused_slot();
+        let chat_widget = &mut self.chat_widget;
+        Ok(tui.draw_partial(area, |frame| {
+            if let Some(rendered) =
+                render_activity_bottom_panes(chat_widget, focused, frame.buffer_mut())
+                && let Some((x, y)) = rendered.cursor
+            {
+                frame.set_cursor_style(rendered.cursor_style);
+                frame.set_cursor_position((x, y));
+            }
+        })?)
     }
 }
 

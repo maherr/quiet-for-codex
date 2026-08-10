@@ -60,15 +60,22 @@ rel = re.findall(r'^- Base release: \`(rust-v[0-9]+\.[0-9]+\.[0-9]+)\`\$', t, re
 raise SystemExit(0 if rel == ['rust-v$CODEX_BASE'] else f'FORK_CHANGES base {rel} != rust-v$CODEX_BASE')
 "
 run "no em or en dash in public text" bash -c '
-! grep -rn $'"'"'—\|–'"'"' CHANGELOG.md README.md docs/install.md SUPPORT.md 2>/dev/null'
+! grep -rnP '\''\x{2014}|\x{2013}'\'' CHANGELOG.md README.md docs/install.md SUPPORT.md 2>/dev/null'
 
 # --- Source-only gates, mirroring the release verify job ---
 run "rustfmt" python3 scripts/ci/check_quiet_rustfmt.py
 run "embedded skill identity" python3 scripts/ci/check_embedded_skill_identity.py
-for t in test_generate_v8_notices test_prepare_v8_artifacts test_finalize_quiet_package \
-         test_smoke_quiet_package test_install_sh test_release_workflow; do
+for t in test_generate_v8_notices test_prepare_v8_artifacts test_archive_release_symbols \
+         test_finalize_quiet_package test_smoke_quiet_package test_watch_workflow_run \
+         test_install_sh test_release_workflow; do
   run "$t" python3 "scripts/release/$t.py"
 done
+run "release Python syntax" python3 -m py_compile \
+  scripts/release/finalize_quiet_package.py \
+  scripts/release/generate_v8_notices.py \
+  scripts/release/prepare_v8_artifacts.py \
+  scripts/release/smoke_quiet_package.py \
+  scripts/release/watch_workflow_run.py
 run "ripgrep packaging" python3 scripts/codex_package/test_ripgrep.py
 run "install.sh syntax" sh -n scripts/release/install.sh
 run "release workflow parses" python3 -c "import yaml; yaml.safe_load(open('.github/workflows/quiet-release.yml'))"

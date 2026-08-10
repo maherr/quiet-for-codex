@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 #[cfg(test)]
@@ -29,7 +30,7 @@ const FS_CHANGED_NOTIFICATION_DEBOUNCE: Duration = Duration::from_millis(200);
 #[derive(Clone)]
 pub(crate) struct FsWatchManager {
     outgoing: Arc<OutgoingMessageSender>,
-    file_watcher: Arc<FileWatcher>,
+    file_watcher: Arc<OnceLock<Arc<FileWatcher>>>,
     state: Arc<AsyncMutex<FsWatchState>>,
 }
 
@@ -52,25 +53,38 @@ struct WatchKey {
 
 impl FsWatchManager {
     pub(crate) fn new(outgoing: Arc<OutgoingMessageSender>) -> Self {
-        let file_watcher = match FileWatcher::new() {
+        Self {
+            outgoing,
+            file_watcher: Arc::new(OnceLock::new()),
+            state: Arc::new(AsyncMutex::new(FsWatchState::default())),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_with_file_watcher(
+        outgoing: Arc<OutgoingMessageSender>,
+        file_watcher: Arc<FileWatcher>,
+    ) -> Self {
+        let initialized = OnceLock::new();
+        assert!(
+            initialized.set(file_watcher).is_ok(),
+            "fresh filesystem watcher cell"
+        );
+        Self {
+            outgoing,
+            file_watcher: Arc::new(initialized),
+            state: Arc::new(AsyncMutex::new(FsWatchState::default())),
+        }
+    }
+
+    fn file_watcher(&self) -> Arc<FileWatcher> {
+        Arc::clone(self.file_watcher.get_or_init(|| match FileWatcher::new() {
             Ok(file_watcher) => Arc::new(file_watcher),
             Err(err) => {
                 warn!("filesystem watch manager falling back to noop core watcher: {err}");
                 Arc::new(FileWatcher::noop())
             }
-        };
-        Self::new_with_file_watcher(outgoing, file_watcher)
-    }
-
-    fn new_with_file_watcher(
-        outgoing: Arc<OutgoingMessageSender>,
-        file_watcher: Arc<FileWatcher>,
-    ) -> Self {
-        Self {
-            outgoing,
-            file_watcher,
-            state: Arc::new(AsyncMutex::new(FsWatchState::default())),
-        }
+        }))
     }
 
     pub(crate) async fn watch(
@@ -84,7 +98,8 @@ impl FsWatchManager {
             watch_id: watch_id.clone(),
         };
         let outgoing = self.outgoing.clone();
-        let (subscriber, rx) = self.file_watcher.add_subscriber();
+        let file_watcher = self.file_watcher();
+        let (subscriber, rx) = file_watcher.add_subscriber();
         let watch_root = params.path.clone();
         let registration = subscriber.register_paths(vec![WatchPath {
             path: params.path.to_path_buf(),
@@ -200,6 +215,33 @@ mod tests {
             )),
             Arc::new(FileWatcher::noop()),
         )
+    }
+
+    #[tokio::test]
+    async fn watcher_starts_only_after_first_watch_request() {
+        const OUTGOING_BUFFER: usize = 1;
+        let (tx, _rx) = mpsc::channel(OUTGOING_BUFFER);
+        let manager = FsWatchManager::new(Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        )));
+        assert!(manager.file_watcher.get().is_none());
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let head_path = temp_dir.path().join("HEAD");
+        std::fs::write(&head_path, "ref: refs/heads/main\n").expect("write HEAD");
+        manager
+            .watch(
+                ConnectionId(1),
+                FsWatchParams {
+                    watch_id: "watch-head".to_string(),
+                    path: absolute_path(head_path),
+                },
+            )
+            .await
+            .expect("watch should succeed");
+
+        assert!(manager.file_watcher.get().is_some());
     }
 
     #[tokio::test]

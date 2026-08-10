@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 5276
 expression: rendered
 ---
 
@@ -37,4 +38,4 @@ expression: rendered
 
 › Summarize recent commits
 
-  • Investigating rendering code (0s • esc to interrupt)     100% context left
+  ⠋ esc interrupt · gpt-5.6-sol · default · Investigating r… 100% context left

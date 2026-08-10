@@ -1,9 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/mcp_startup.rs
+assertion_line: 121
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "────────────────────────────────────────────────────────────────────────────────"
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  • Booting MCP server: alpha (0s • esc to interrupt)        100% context left  "
+"  ⠋ esc interrupt · gpt-5.6-sol · default · Booting MCP ser… 100% context left  "

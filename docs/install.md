@@ -9,13 +9,13 @@ their binaries and update channels remain separate.
 ### macOS or Linux
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.1.0/scripts/release/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.2.0/scripts/release/install.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.1.0/scripts/release/install.ps1)))
+& ([scriptblock]::Create((irm -UseBasicParsing https://raw.githubusercontent.com/maherr/quiet-for-codex/quiet-v1.2.0/scripts/release/install.ps1)))
 ```
 
 The installers detect the host target, download the matching archive from the
@@ -35,8 +35,8 @@ On Windows, packages live under
 root with `CODEX_QUIET_INSTALL_ROOT`.
 
 To install a specific release instead of the latest release, set
-`CODEX_QUIET_RELEASE` to a version such as `1.1.0`. The Unix installer also
-accepts `--release 1.1.0` when downloaded and run as a file.
+`CODEX_QUIET_RELEASE` to a version such as `1.2.0`. The Unix installer also
+accepts `--release 1.2.0` when downloaded and run as a file.
 
 Run the installed command:
 
@@ -129,7 +129,7 @@ the downloaded archive and run:
 gh attestation verify PATH_TO_ARCHIVE \
   --repo maherr/quiet-for-codex \
   --signer-workflow maherr/quiet-for-codex/.github/workflows/quiet-release.yml \
-  --source-ref refs/tags/quiet-v1.1.0 \
+  --source-ref refs/tags/quiet-v1.2.0 \
   --deny-self-hosted-runners
 ```
 

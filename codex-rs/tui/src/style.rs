@@ -12,6 +12,7 @@ use ratatui::style::Color;
 use ratatui::style::Style;
 
 const LIGHT_BG_ACCENT_RGB: (u8, u8, u8) = (0, 95, 135);
+const QUIET_BLUE_RGB: (u8, u8, u8) = (47, 104, 194);
 const LIGHT_BG_HOVER_ALPHA: f32 = 0.06;
 const DARK_BG_HOVER_ALPHA: f32 = 0.10;
 // Decorative table rules should remain visible without competing with cell content.
@@ -38,6 +39,20 @@ pub(crate) fn accent_style() -> Style {
 /// Returns a neutral, theme-aware style for a full-width interactive hover target.
 pub(crate) fn interactive_hover_style() -> Style {
     interactive_hover_style_for(default_bg(), effective_stdout_color_level())
+}
+
+/// Returns Codex Quiet's reply/activity blue, with a legible ANSI fallback.
+pub(crate) fn quiet_blue_color() -> Color {
+    quiet_blue_color_for_level(effective_stdout_color_level())
+}
+
+fn quiet_blue_color_for_level(color_level: StdoutColorLevel) -> Color {
+    match color_level {
+        StdoutColorLevel::TrueColor | StdoutColorLevel::Ansi256 => {
+            best_color_for_level(QUIET_BLUE_RGB, color_level)
+        }
+        StdoutColorLevel::Ansi16 | StdoutColorLevel::Unknown => Color::LightBlue,
+    }
 }
 
 /// Returns the style for a user-authored message using the provided terminal background.
@@ -139,6 +154,22 @@ mod tests {
 
         assert_eq!(accent_style_for(Some((0, 0, 0))), expected);
         assert_eq!(accent_style_for(/*terminal_bg*/ None), expected);
+    }
+
+    #[test]
+    fn quiet_blue_is_exact_in_truecolor_and_bright_blue_in_ansi() {
+        assert_eq!(
+            quiet_blue_color_for_level(StdoutColorLevel::TrueColor),
+            rgb_color(QUIET_BLUE_RGB)
+        );
+        assert_eq!(
+            quiet_blue_color_for_level(StdoutColorLevel::Ansi16),
+            Color::LightBlue
+        );
+        assert_eq!(
+            quiet_blue_color_for_level(StdoutColorLevel::Unknown),
+            Color::LightBlue
+        );
     }
 
     #[test]

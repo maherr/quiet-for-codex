@@ -1,8 +1,7 @@
-//! Rotating in-progress labels for the codex-quiet status row.
+//! Per-turn in-progress labels for the codex-quiet status row.
 
-use std::time::Duration;
-
-const VERB_INTERVAL: Duration = Duration::from_millis(1800);
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 const SPINNER_VERBS: &[&str] = &[
     "Accomplishing",
@@ -192,6 +191,8 @@ const SPINNER_VERBS: &[&str] = &[
     "Zigzagging",
 ];
 
+static NEXT_SPINNER_VERB: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) fn spinner_verbs_enabled() -> bool {
     if cfg!(test) || crate::version::CODEX_CLI_DISPLAY_NAME != "codex-quiet" {
         return false;
@@ -200,10 +201,12 @@ pub(crate) fn spinner_verbs_enabled() -> bool {
         .is_ok_and(|value| matches!(value.as_str(), "0" | "false" | "off" | "no"))
 }
 
-pub(crate) fn spinner_verb_for_elapsed(elapsed: Duration) -> &'static str {
-    let interval_ms = VERB_INTERVAL.as_millis().max(1);
-    let index = (elapsed.as_millis() / interval_ms) as usize;
+pub(crate) fn spinner_verb_for_turn(index: usize) -> &'static str {
     SPINNER_VERBS[index % SPINNER_VERBS.len()]
+}
+
+pub(crate) fn next_spinner_verb() -> &'static str {
+    spinner_verb_for_turn(NEXT_SPINNER_VERB.fetch_add(1, Ordering::Relaxed))
 }
 
 #[cfg(test)]
@@ -211,17 +214,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spinner_verb_rotates_by_elapsed_interval() {
-        assert_eq!(spinner_verb_for_elapsed(Duration::ZERO), "Accomplishing");
-        assert_eq!(
-            spinner_verb_for_elapsed(VERB_INTERVAL + Duration::from_millis(1)),
-            "Actioning"
-        );
+    fn spinner_verb_changes_by_turn_index() {
+        assert_eq!(spinner_verb_for_turn(0), "Accomplishing");
+        assert_eq!(spinner_verb_for_turn(1), "Actioning");
     }
 
     #[test]
     fn spinner_verb_wraps_at_end() {
-        let elapsed = VERB_INTERVAL * SPINNER_VERBS.len() as u32;
-        assert_eq!(spinner_verb_for_elapsed(elapsed), "Accomplishing");
+        assert_eq!(spinner_verb_for_turn(SPINNER_VERBS.len()), "Accomplishing");
     }
 }

@@ -2903,7 +2903,11 @@ mod tests {
             )
             .await?;
         let loaded_items: usize = resumed.turns.iter().map(|turn| turn.items.len()).sum();
-        assert!(loaded_items <= HISTORY_ITEM_PAGE_LIMIT as usize);
+        assert_eq!(
+            loaded_items,
+            HISTORY_ITEM_PAGE_LIMIT as usize + 1,
+            "the bounded detail page should retain the summary's oldest user anchor",
+        );
         assert!(app_server.has_older_history(source_thread_id));
 
         let mut side_config = config;

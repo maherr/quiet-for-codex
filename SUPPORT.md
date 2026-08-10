@@ -17,14 +17,16 @@ is not published unless its listed release gate passes for that exact archive.
 | Windows arm64 | `aarch64-pc-windows-msvc` | CI preview | Gate: native GitHub-hosted arm64 build, package smoke, and exact-archive PowerShell installer smoke. No completed owner-operated arm64 Windows test |
 | WSL2 x86_64 | Linux x86_64 package | Compatibility path | Uses the Linux package; there is no separate WSL release gate |
 
-The six target archives are published as one release only after every native
-build, package command/helper-host smoke, and installer smoke passes. Each
-installer test routes the exact finalized archive and generated checksum through
-an offline downloader fixture. The POSIX test covers checksum validation,
-layout, command and current symlinks, reinstall, version output, and helper-host
-EOF. The PowerShell test covers checksum validation, layout, the command shim,
-reinstall, and version output. These gates do not exercise GitHub's live asset
-delivery, which requires a separate post-publication download probe.
+The six target archives and six matching debug-symbol sidecars are published as
+one release only after every native build, package command/helper-host smoke,
+persisted resume/replay smoke, and installer smoke passes. Each installer test
+routes the exact finalized archive and generated checksum through an offline
+downloader fixture. The POSIX test covers checksum validation, layout, command
+and current symlinks, reinstall, version output, helper-host EOF, and a real TUI
+replay. The PowerShell test covers checksum validation, layout, the command
+shim, reinstall, version output, and app-server replay. These gates do not
+exercise GitHub's live asset delivery, which requires a separate
+post-publication download probe.
 
 ## Not currently supported
 
@@ -66,6 +68,10 @@ policy may warn or block it. Verify the release checksum and repository source.
 Do not disable a managed security policy to install Quiet for Codex.
 
 Linux, macOS, and Windows archives publish SHA-256 checksums with the release.
+Each target also publishes a `codex-symbols-*` archive containing debug data and
+a manifest that binds it to the main executable and code-mode host platform
+identity, checksums, and source revision. Symbol archives are intended for
+postmortem debugging and are not installed by the normal installer.
 
 ## What belongs here
 

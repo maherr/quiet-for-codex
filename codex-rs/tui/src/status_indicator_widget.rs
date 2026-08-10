@@ -18,16 +18,13 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
-use crate::activity_verbs::spinner_verb_for_elapsed;
-use crate::activity_verbs::spinner_verbs_enabled;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::key_hint::ShortcutHint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
+use crate::motion::ACTIVITY_FRAME_INTERVAL;
 use crate::motion::MotionMode;
-use crate::motion::ReducedMotionIndicator;
-use crate::motion::activity_indicator;
-use crate::motion::shimmer_text;
+use crate::motion::working_activity_indicator_for_elapsed;
 use crate::render::renderable::Renderable;
 use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;
@@ -45,8 +42,12 @@ pub(crate) enum StatusDetailsCapitalization {
 
 /// Displays a single-line in-progress status with optional wrapped details.
 pub(crate) struct StatusIndicatorWidget {
-    /// Animated header text (defaults to "Working").
+    /// Explicit header text (defaults to "Working").
     header: String,
+    /// The stable label selected once for this user turn.
+    activity_phrase: &'static str,
+    /// Effective runtime model and reasoning effort.
+    runtime_label: Option<String>,
     details: Option<String>,
     details_max_lines: usize,
     /// Optional suffix rendered after the elapsed/interrupt segment.
@@ -87,6 +88,8 @@ impl StatusIndicatorWidget {
     ) -> Self {
         Self {
             header: String::from("Working"),
+            activity_phrase: "Working",
+            runtime_label: None,
             details: None,
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             inline_message: None,
@@ -139,6 +142,16 @@ impl StatusIndicatorWidget {
         self.inline_message = message
             .map(|message| message.trim().to_string())
             .filter(|message| !message.is_empty());
+    }
+
+    pub(crate) fn update_runtime_label(&mut self, label: Option<String>) {
+        self.runtime_label = label
+            .map(|label| label.trim().to_string())
+            .filter(|label| !label.is_empty());
+    }
+
+    pub(crate) fn update_activity_phrase(&mut self, phrase: &'static str) {
+        self.activity_phrase = phrase;
     }
 
     pub(crate) fn header(&self) -> &str {
@@ -247,30 +260,28 @@ impl Renderable for StatusIndicatorWidget {
         }
 
         if self.animations_enabled {
-            // Schedule next animation frame.
             self.frame_requester
-                .schedule_frame_in(Duration::from_millis(100));
+                .schedule_activity_frame_in(ACTIVITY_FRAME_INTERVAL);
         }
         let now = Instant::now();
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
         let motion_mode = MotionMode::from_animations_enabled(self.animations_enabled);
 
-        let mut spans = Vec::with_capacity(5);
-        if let Some(indicator) = activity_indicator(
-            Some(self.last_resume_at),
-            motion_mode,
-            ReducedMotionIndicator::Hidden,
-        ) {
-            spans.push(indicator);
-            spans.push(" ".into());
-        }
-        let header = if self.header == "Working" && spinner_verbs_enabled() {
-            spinner_verb_for_elapsed(elapsed_duration)
+        let mut spans = Vec::with_capacity(10);
+        let indicator = working_activity_indicator_for_elapsed(elapsed_duration, motion_mode);
+        spans.push(indicator.clone());
+        spans.push(" ".into());
+        let header = if self.header == "Working" {
+            self.activity_phrase
         } else {
             self.header.as_str()
         };
-        spans.extend(shimmer_text(header, motion_mode));
+        spans.push(header.to_string().into());
+        if let Some(runtime_label) = &self.runtime_label {
+            spans.push(" · ".dim());
+            spans.push(runtime_label.clone().into());
+        }
         if !spans.is_empty() {
             spans.push(" ".into());
         }
@@ -297,13 +308,21 @@ impl Renderable for StatusIndicatorWidget {
             full_line
         } else {
             // Narrow terminals use semantic priority rather than left-to-right clipping:
-            // interrupt first, then hook/background context, then routine Working/elapsed text.
+            // activity, interrupt, runtime identity, hook context, then routine elapsed text.
             let mut compact = Vec::new();
+            compact.push(indicator);
+            compact.push(" ".into());
             if self.show_interrupt_hint
                 && let Some(interrupt_binding) = self.interrupt_binding
             {
                 compact.push(interrupt_binding.into());
                 compact.push(" interrupt".dim());
+            }
+            if let Some(runtime_label) = &self.runtime_label {
+                if !compact.is_empty() {
+                    compact.push(" · ".dim());
+                }
+                compact.push(runtime_label.clone().into());
             }
             if let Some(message) = &self.inline_message {
                 if !compact.is_empty() {
@@ -314,7 +333,7 @@ impl Renderable for StatusIndicatorWidget {
             if !compact.is_empty() {
                 compact.push(" · ".dim());
             }
-            compact.extend(shimmer_text(header, motion_mode));
+            compact.push(header.to_string().into());
             compact.push(format!(" {pretty_elapsed}").dim());
             Line::from(compact)
         };
@@ -462,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_without_spinner_when_animations_disabled() {
+    fn renders_static_activity_dot_when_animations_disabled() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut w = StatusIndicatorWidget::new(
@@ -482,11 +501,11 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
 
-        assert!(line.starts_with("Working (0s • esc to interrupt)"));
+        assert!(line.starts_with("● Working (0s • esc to interrupt)"));
     }
 
     #[test]
-    fn animated_status_schedules_no_faster_than_ten_frames_per_second() {
+    fn animated_status_schedules_at_eight_frames_per_second() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let (frame_requester, mut scheduled) = crate::tui::FrameRequester::test_channel();
@@ -499,21 +518,77 @@ mod tests {
             .draw(|f| w.render(f.area(), f.buffer_mut()))
             .expect("draw");
 
-        let deadline = scheduled.try_recv().expect("scheduled status frame");
+        let schedule = scheduled.try_recv().expect("scheduled status frame");
         assert!(
-            deadline >= before + Duration::from_millis(100),
-            "status requested a frame sooner than the 10 fps budget"
+            schedule.at >= before + ACTIVITY_FRAME_INTERVAL,
+            "status requested a frame sooner than the 8 fps budget"
         );
         assert!(
-            deadline <= Instant::now() + Duration::from_millis(100),
-            "status deadline should be the next 100 ms motion key"
+            schedule.at <= Instant::now() + ACTIVITY_FRAME_INTERVAL,
+            "status deadline should be the next 125 ms motion key"
         );
+        assert_eq!(schedule.scope, crate::tui::FrameScope::Activity);
         assert_eq!(
             crate::quiet_metrics::get_for_test(
                 crate::quiet_metrics::QuietMetric::FrameRequestDelayed,
             ),
             1
         );
+    }
+
+    #[test]
+    fn runtime_model_and_effort_remain_visible_while_working() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        w.update_runtime_label(Some("gpt-5.6-sol · max".to_string()));
+        w.is_paused = true;
+        w.elapsed_running = Duration::ZERO;
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
+        terminal
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        let line = terminal.backend().buffer().content()[..80]
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+
+        assert!(line.contains("Working · gpt-5.6-sol · max (0s"), "{line:?}");
+    }
+
+    #[test]
+    fn activity_phrase_stays_fixed_when_elapsed_time_changes() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        w.activity_phrase = "Accomplishing";
+        w.is_paused = true;
+
+        let render_at = |widget: &mut StatusIndicatorWidget, elapsed| {
+            widget.elapsed_running = elapsed;
+            let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
+            terminal
+                .draw(|frame| widget.render(frame.area(), frame.buffer_mut()))
+                .expect("draw");
+            terminal.backend().buffer().content()[..80]
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+        };
+
+        let first = render_at(&mut w, Duration::ZERO);
+        let later = render_at(&mut w, Duration::from_secs(61));
+        assert!(first.contains("Accomplishing"), "{first:?}");
+        assert!(later.contains("Accomplishing"), "{later:?}");
     }
 
     #[test]

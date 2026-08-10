@@ -26,7 +26,7 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   CARGO_TARGET_DIR: ${{ github.workspace }}/.cargo-target
   CARGO_INCREMENTAL: "0"
-  CARGO_PROFILE_RELEASE_DEBUG: "none"
+  CARGO_PROFILE_RELEASE_DEBUG: "line-tables-only"
 
 jobs:
   attestation-canary:
@@ -268,8 +268,10 @@ jobs:
           python3 scripts/codex_package/test_ripgrep.py
           python3 scripts/release/test_generate_v8_notices.py
           python3 scripts/release/test_prepare_v8_artifacts.py
+          python3 scripts/release/test_archive_release_symbols.py
           python3 scripts/release/test_finalize_quiet_package.py
           python3 scripts/release/test_smoke_quiet_package.py
+          python3 scripts/release/test_watch_workflow_run.py
           python3 scripts/release/test_install_sh.py
           python3 scripts/release/test_release_workflow.py
           python3 -m py_compile \
@@ -279,10 +281,13 @@ jobs:
             scripts/release/finalize_quiet_package.py \
             scripts/release/generate_v8_notices.py \
             scripts/release/prepare_v8_artifacts.py \
+            scripts/release/test_archive_release_symbols.py \
             scripts/release/smoke_quiet_package.py \
             scripts/release/test_generate_v8_notices.py \
             scripts/release/test_prepare_v8_artifacts.py \
             scripts/release/test_smoke_quiet_package.py \
+            scripts/release/watch_workflow_run.py \
+            scripts/release/test_watch_workflow_run.py \
             scripts/release/test_install_sh.py \
             scripts/release/test_release_workflow.py
           sh -n scripts/release/install.sh
@@ -537,21 +542,29 @@ jobs:
             export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
           fi
           "$python_bin" "${args[@]}"
-      - name: Strip Unix release executables
-        if: runner.os != 'Windows'
+      - name: Archive debug symbols and strip release executables
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           package_dir="$RUNNER_TEMP/quiet-package"
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            strip -S -x \
-              "$package_dir/bin/codex" \
-              "$package_dir/bin/codex-code-mode-host"
-          else
-            strip --strip-debug --strip-unneeded \
-              "$package_dir/bin/codex" \
-              "$package_dir/bin/codex-code-mode-host"
+          release_dir="$CARGO_TARGET_DIR/$TARGET/release"
+          mkdir -p dist
+          bash .github/scripts/archive-release-symbols-and-strip-binaries.sh \
+            --target "$TARGET" \
+            --artifact-name "$VERSION-$TARGET" \
+            --release-dir "$release_dir" \
+            --archive-dir dist \
+            --binaries "codex codex-code-mode-host"
+          suffix=""
+          if [[ "$TARGET" == *-pc-windows-msvc ]]; then
+            suffix=".exe"
           fi
+          cp "$release_dir/codex$suffix" "$package_dir/bin/codex$suffix"
+          cp "$release_dir/codex-code-mode-host$suffix" \
+            "$package_dir/bin/codex-code-mode-host$suffix"
       - name: Finalize, launch-test, and archive
         shell: bash
         env:
@@ -591,11 +604,11 @@ jobs:
       - name: Generate build provenance
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
-          subject-path: dist/codex-quiet-*
+          subject-path: dist/codex-*
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: quiet-release-${{ matrix.target }}
-          path: dist/codex-quiet-*
+          path: dist/codex-*
           if-no-files-found: error
 
   publish:
@@ -643,6 +656,12 @@ jobs:
             "codex-quiet-$VERSION-aarch64-apple-darwin.tar.gz"
             "codex-quiet-$VERSION-x86_64-pc-windows-msvc.zip"
             "codex-quiet-$VERSION-aarch64-pc-windows-msvc.zip"
+            "codex-symbols-$VERSION-x86_64-unknown-linux-musl.tar.gz"
+            "codex-symbols-$VERSION-aarch64-unknown-linux-musl.tar.gz"
+            "codex-symbols-$VERSION-x86_64-apple-darwin.tar.gz"
+            "codex-symbols-$VERSION-aarch64-apple-darwin.tar.gz"
+            "codex-symbols-$VERSION-x86_64-pc-windows-msvc.tar.gz"
+            "codex-symbols-$VERSION-aarch64-pc-windows-msvc.tar.gz"
           )
           for archive in "${expected[@]}"; do
             if [[ ! -s "dist/$archive" ]]; then
@@ -650,10 +669,10 @@ jobs:
               exit 1
             fi
           done
-          mapfile -t actual < <(find dist -maxdepth 1 -type f -name 'codex-quiet-*' -printf '%f\n' | sort)
+          mapfile -t actual < <(find dist -maxdepth 1 -type f -name 'codex-*' -printf '%f\n' | sort)
           mapfile -t wanted < <(printf '%s\n' "${expected[@]}" | sort)
           if [[ "${actual[*]}" != "${wanted[*]}" ]]; then
-            echo "Release archive set does not match the six expected targets" >&2
+            echo "Release archive set does not match the six packages and six symbol sidecars" >&2
             printf 'Expected: %s\n' "${wanted[*]}" >&2
             printf 'Actual:   %s\n' "${actual[*]}" >&2
             exit 1
@@ -773,6 +792,12 @@ jobs:
             "dist/codex-quiet-$VERSION-aarch64-apple-darwin.tar.gz"
             "dist/codex-quiet-$VERSION-x86_64-pc-windows-msvc.zip"
             "dist/codex-quiet-$VERSION-aarch64-pc-windows-msvc.zip"
+            "dist/codex-symbols-$VERSION-x86_64-unknown-linux-musl.tar.gz"
+            "dist/codex-symbols-$VERSION-aarch64-unknown-linux-musl.tar.gz"
+            "dist/codex-symbols-$VERSION-x86_64-apple-darwin.tar.gz"
+            "dist/codex-symbols-$VERSION-aarch64-apple-darwin.tar.gz"
+            "dist/codex-symbols-$VERSION-x86_64-pc-windows-msvc.tar.gz"
+            "dist/codex-symbols-$VERSION-aarch64-pc-windows-msvc.tar.gz"
             "dist/SHA256SUMS"
           )
           # Channel decides both flags together. A prerelease stays off "latest"

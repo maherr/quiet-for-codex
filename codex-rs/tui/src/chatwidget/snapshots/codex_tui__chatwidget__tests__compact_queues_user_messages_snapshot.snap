@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 2985
 expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
 
@@ -19,4 +20,4 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 
 › Ask Codex to do anything
 
-  • Working (0s • esc to interrupt)                          100% context left
+  ⠋ Working · gpt-5.6-sol · default (0s • esc to interrupt)  100% context left

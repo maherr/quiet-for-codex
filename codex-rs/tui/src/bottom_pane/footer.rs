@@ -53,6 +53,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
@@ -671,6 +672,30 @@ pub(crate) fn render_context_right(area: Rect, buf: &mut Buffer, line: &Line<'st
         buf.set_span(x, y, span, draw_width);
         x = x.saturating_add(span_width);
     }
+}
+
+pub(crate) fn replace_context_right(
+    area: Rect,
+    buf: &mut Buffer,
+    previous: Option<&Line<'static>>,
+    replacement: &Line<'static>,
+) {
+    let clear_width = previous
+        .map(|line| line.width())
+        .unwrap_or_default()
+        .max(replacement.width()) as u16;
+    if let Some(x) = right_aligned_x(area, clear_width) {
+        Clear.render(
+            Rect::new(
+                x,
+                area.bottom().saturating_sub(1),
+                area.right().saturating_sub(x),
+                1,
+            ),
+            buf,
+        );
+    }
+    render_context_right(area, buf, replacement);
 }
 
 pub(crate) fn inset_footer_hint_area(mut area: Rect) -> Rect {

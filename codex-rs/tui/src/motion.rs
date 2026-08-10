@@ -3,12 +3,16 @@
 //! Callers choose an explicit reduced-motion fallback here instead of reaching
 //! directly for time-varying spinner or shimmer helpers.
 
+use std::time::Duration;
 use std::time::Instant;
 
 use ratatui::style::Stylize;
 use ratatui::text::Span;
 
 use crate::shimmer::shimmer_spans;
+
+pub(crate) const ACTIVITY_FRAME_INTERVAL: Duration = Duration::from_millis(125);
+const BRAILLE_SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MotionMode {
@@ -46,6 +50,19 @@ pub(crate) fn activity_indicator(
     }
 }
 
+/// Main working-row activity mark. This deliberately stays separate from
+/// `activity_indicator` so compact tool/status cells keep their established
+/// shimmer/bullet treatment.
+pub(crate) fn working_activity_indicator_for_elapsed(
+    elapsed: Duration,
+    motion_mode: MotionMode,
+) -> Span<'static> {
+    match motion_mode {
+        MotionMode::Animated => animated_working_activity_indicator_for_elapsed(elapsed),
+        MotionMode::Reduced => "●".fg(crate::style::quiet_blue_color()).bold(),
+    }
+}
+
 pub(crate) fn shimmer_text(text: &str, motion_mode: MotionMode) -> Vec<Span<'static>> {
     match motion_mode {
         MotionMode::Animated => shimmer_spans(text),
@@ -75,6 +92,13 @@ fn animated_activity_indicator(start_time: Option<Instant>) -> Span<'static> {
     }
 }
 
+fn animated_working_activity_indicator_for_elapsed(elapsed: Duration) -> Span<'static> {
+    let frame = (elapsed.as_millis() / ACTIVITY_FRAME_INTERVAL.as_millis()) as usize;
+    BRAILLE_SPINNER_FRAMES[frame % BRAILLE_SPINNER_FRAMES.len()]
+        .fg(crate::style::quiet_blue_color())
+        .bold()
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -102,6 +126,25 @@ mod tests {
                 ReducedMotionIndicator::StaticBullet,
             ),
             Some("•".dim())
+        );
+    }
+
+    #[test]
+    fn animated_activity_indicator_changes_only_its_braille_cell() {
+        assert_eq!(
+            animated_working_activity_indicator_for_elapsed(Duration::ZERO).content,
+            "⠋"
+        );
+        assert_eq!(
+            animated_working_activity_indicator_for_elapsed(ACTIVITY_FRAME_INTERVAL).content,
+            "⠙"
+        );
+        assert_eq!(
+            animated_working_activity_indicator_for_elapsed(
+                ACTIVITY_FRAME_INTERVAL * BRAILLE_SPINNER_FRAMES.len() as u32,
+            )
+            .content,
+            "⠋"
         );
     }
 

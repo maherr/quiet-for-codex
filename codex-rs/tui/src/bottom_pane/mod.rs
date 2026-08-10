@@ -253,6 +253,10 @@ pub(crate) struct BottomPane {
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
+    /// Effective model and effort copied into each active status indicator.
+    active_runtime_label: Option<String>,
+    /// Activity phrase selected once at the start of the active agent turn.
+    active_activity_phrase: &'static str,
     /// Unified exec session summary source.
     ///
     /// When a status row exists, this summary is mirrored inline in that row;
@@ -318,6 +322,8 @@ impl BottomPane {
             disable_paste_burst,
             is_task_running: false,
             status: None,
+            active_runtime_label: None,
+            active_activity_phrase: "Working",
             unified_exec_footer: UnifiedExecFooter::new(),
             hook_status: None,
             pending_input_preview: PendingInputPreview::new(),
@@ -1085,6 +1091,8 @@ impl BottomPane {
                     ));
                 }
                 if let Some(status) = self.status.as_mut() {
+                    status.update_activity_phrase(self.active_activity_phrase);
+                    status.update_runtime_label(self.active_runtime_label.clone());
                     status.set_interrupt_hint_visible(/*visible*/ true);
                     status.set_interrupt_binding(
                         self.keymap
@@ -1119,6 +1127,8 @@ impl BottomPane {
                 self.animations_enabled,
             ));
             if let Some(status) = self.status.as_mut() {
+                status.update_activity_phrase(self.active_activity_phrase);
+                status.update_runtime_label(self.active_runtime_label.clone());
                 status.set_interrupt_binding(
                     self.keymap
                         .primary_hint(KeymapContext::Chat, "interrupt_turn"),
@@ -1129,11 +1139,37 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn begin_activity_turn(&mut self) {
+        self.active_activity_phrase = if crate::activity_verbs::spinner_verbs_enabled() {
+            crate::activity_verbs::next_spinner_verb()
+        } else {
+            "Working"
+        };
+        if let Some(status) = self.status.as_mut() {
+            status.update_activity_phrase(self.active_activity_phrase);
+        }
+        self.request_redraw();
+    }
+
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
         if let Some(status) = self.status.as_mut() {
             status.set_interrupt_hint_visible(visible);
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn set_active_runtime_label(&mut self, label: Option<String>) {
+        let label = label
+            .map(|label| label.trim().to_string())
+            .filter(|label| !label.is_empty());
+        if self.active_runtime_label == label {
+            return;
+        }
+        self.active_runtime_label = label.clone();
+        if let Some(status) = self.status.as_mut() {
+            status.update_runtime_label(label);
+        }
+        self.request_redraw();
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
@@ -1410,6 +1446,10 @@ impl BottomPane {
 
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
+    }
+
+    pub(crate) fn activity_animation_active(&self) -> bool {
+        self.animations_enabled && self.is_task_running && self.status.is_some()
     }
 
     pub(crate) fn should_interrupt_running_task(&self, key_event: KeyEvent) -> bool {
@@ -1798,6 +1838,17 @@ impl BottomPane {
         &'_ self,
         composer_right_reserve: u16,
     ) -> RenderableItem<'_> {
+        self.as_renderable_with_composer_options(
+            composer_right_reserve,
+            /*show_newer_hint*/ false,
+        )
+    }
+
+    pub(crate) fn as_renderable_with_composer_options(
+        &'_ self,
+        composer_right_reserve: u16,
+        show_newer_hint: bool,
+    ) -> RenderableItem<'_> {
         if let Some(view) = self.active_view() {
             RenderableItem::Borrowed(view)
         } else {
@@ -1856,6 +1907,7 @@ impl BottomPane {
                     right_reserve: composer_right_reserve,
                     ordinary_status: ordinary_status.filter(|_| footer_lane_available),
                     fallback: footer_lane_available.then_some(fallback).flatten(),
+                    show_newer_hint,
                 }));
             flex2.push(/*flex*/ 0, composer);
             RenderableItem::Owned(Box::new(flex2))
@@ -1902,6 +1954,7 @@ struct ChatComposerRightReserveRenderable<'a> {
     right_reserve: u16,
     ordinary_status: Option<&'a StatusIndicatorWidget>,
     fallback: Option<Line<'static>>,
+    show_newer_hint: bool,
 }
 
 impl Renderable for ChatComposerRightReserveRenderable<'_> {
@@ -1912,14 +1965,32 @@ impl Renderable for ChatComposerRightReserveRenderable<'_> {
             /*mask_char*/ None,
             self.right_reserve,
         );
-        if self.ordinary_status.is_none() && self.fallback.is_none() {
+        if self.ordinary_status.is_none() && self.fallback.is_none() && !self.show_newer_hint {
             return;
         }
         let Some(footer_area) = self.composer.runtime_footer_area(area, self.right_reserve) else {
             return;
         };
+        let composer_right_line = self.composer.runtime_footer_right_line();
+        let newer_hint = self.show_newer_hint.then(|| {
+            let mut spans = vec![
+                "↓ ".fg(crate::style::quiet_blue_color()).bold(),
+                "newer".bold(),
+            ];
+            if self.composer.is_empty() {
+                spans.push(" · ".dim());
+                spans.push("End".bold());
+            }
+            Line::from(spans)
+        });
+        let right_line = newer_hint.clone().or_else(|| composer_right_line.clone());
+        if self.ordinary_status.is_none() && self.fallback.is_none() {
+            if let Some(line) = newer_hint.as_ref() {
+                footer::replace_context_right(footer_area, buf, composer_right_line.as_ref(), line);
+            }
+            return;
+        }
         Clear.render(footer_area, buf);
-        let right_line = self.composer.runtime_footer_right_line();
         let left_width = right_line
             .as_ref()
             .and_then(|line| footer::max_left_width_for_right(footer_area, line.width() as u16))
@@ -2843,6 +2914,32 @@ mod tests {
             "queued_messages_visible_when_status_hidden_snapshot",
             render_snapshot(&pane, area)
         );
+    }
+
+    #[test]
+    fn activity_phrase_survives_status_widget_recreation_within_a_turn() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: false,
+            skills: Some(Vec::new()),
+        });
+        pane.active_activity_phrase = "Accomplishing";
+        pane.set_task_running(/*running*/ true);
+
+        let area = Rect::new(0, 0, 80, pane.desired_height(80));
+        assert!(render_snapshot(&pane, area).contains("Accomplishing"));
+
+        pane.hide_status_indicator();
+        pane.ensure_status_indicator();
+        let area = Rect::new(0, 0, 80, pane.desired_height(80));
+        assert!(render_snapshot(&pane, area).contains("Accomplishing"));
     }
 
     #[test]

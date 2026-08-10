@@ -165,7 +165,7 @@ impl ChatWidget {
 
     /// Set the reasoning effort for the non-Plan collaboration mode.
     ///
-    /// Does not touch the active Plan mask — Plan reasoning is controlled
+    /// Does not touch the active Plan mask. Plan reasoning is controlled
     /// exclusively by the Plan preset and `set_plan_mode_reasoning_effort`.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
@@ -478,8 +478,15 @@ impl ChatWidget {
         self.sync_service_tier_commands();
         self.refresh_terminal_title();
         let effort = self.effective_reasoning_effort();
+        let runtime_label = format!(
+            "{} · {}",
+            self.model_display_name(),
+            Self::status_line_reasoning_effort_label(effort.as_ref()),
+        );
         self.bottom_pane
             .set_active_reasoning_effort(effort.as_ref());
+        self.bottom_pane
+            .set_active_runtime_label(Some(runtime_label));
     }
 
     /// Refresh every UI surface that depends on the effective model, reasoning

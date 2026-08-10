@@ -1,9 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 924
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "────────────────────────────────────────────────────────────────────────────────"
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  • Working (0s • esc to interrupt)                          100% context left  "
+"  ⠋ Working · gpt-5.6-sol · default (0s • esc to interrupt)  100% context left  "

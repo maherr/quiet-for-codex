@@ -124,8 +124,10 @@ jobs:
           python3 scripts/codex_package/test_ripgrep.py
           python3 scripts/release/test_generate_v8_notices.py
           python3 scripts/release/test_prepare_v8_artifacts.py
+          python3 scripts/release/test_archive_release_symbols.py
           python3 scripts/release/test_finalize_quiet_package.py
           python3 scripts/release/test_smoke_quiet_package.py
+          python3 scripts/release/test_watch_workflow_run.py
           python3 scripts/release/test_install_sh.py
           python3 scripts/release/test_release_workflow.py
           python3 -m py_compile \
@@ -135,10 +137,13 @@ jobs:
             scripts/release/finalize_quiet_package.py \
             scripts/release/generate_v8_notices.py \
             scripts/release/prepare_v8_artifacts.py \
+            scripts/release/test_archive_release_symbols.py \
             scripts/release/smoke_quiet_package.py \
             scripts/release/test_generate_v8_notices.py \
             scripts/release/test_prepare_v8_artifacts.py \
             scripts/release/test_smoke_quiet_package.py \
+            scripts/release/watch_workflow_run.py \
+            scripts/release/test_watch_workflow_run.py \
             scripts/release/test_install_sh.py \
             scripts/release/test_release_workflow.py
           sh -n scripts/release/install.sh
@@ -252,6 +257,95 @@ jobs:
           cargo test --locked --target x86_64-unknown-linux-gnu \
             -p codex-app-server --test all \
             login_account_chatgpt_ignores_stock_desktop_success_page_request
+
+  linux-candidate:
+    name: Build hosted Linux candidate
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/tui/quiet-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cargo-target
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "line-tables-only"
+      TARGET: x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Resolve candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          quiet_version="$(tr -d '[:space:]' < QUIET_VERSION)"
+          codex_base="$(python3 -c 'import tomllib; print(tomllib.load(open("codex-rs/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          test -n "$quiet_version"
+          test -n "$codex_base"
+          {
+            echo "CODEX_QUIET_VERSION=$quiet_version"
+            echo "CODEX_BASE_VERSION=$codex_base"
+            echo "CODEX_QUIET_DISPLAY_VERSION=codex-quiet $quiet_version (codex $codex_base)"
+          } >> "$GITHUB_ENV"
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+      - name: Install musl build tools
+        shell: bash
+        env:
+          APT_UPDATE_ARGS: -o Acquire::Retries=3
+          APT_INSTALL_ARGS: --no-install-recommends
+        run: bash .github/scripts/install-musl-build-tools.sh
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-musl
+      - name: Build and hash bundled bubblewrap
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target "$TARGET" --bin bwrap
+          bwrap="$CARGO_TARGET_DIR/$TARGET/release/bwrap"
+          strip --strip-debug --strip-unneeded "$bwrap"
+          digest="$(sha256sum "$bwrap" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=$digest" >> "$GITHUB_ENV"
+          echo "QUIET_BWRAP_BIN=$bwrap" >> "$GITHUB_ENV"
+      - name: Build, identify, and archive candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/quiet-candidate-package"
+          mkdir -p candidate-dist
+          archive="candidate-dist/codex-quiet-candidate-$GITHUB_SHA-$TARGET.tar.gz"
+          python3 scripts/build_codex_package.py \
+            --target "$TARGET" \
+            --cargo-profile release \
+            --package-dir "$package_dir" \
+            --archive-output "$archive" \
+            --zsh-manifest scripts/release/no-zsh.json \
+            --bwrap-bin "$QUIET_BWRAP_BIN" \
+            --force
+          expected="codex-quiet $CODEX_QUIET_VERSION (codex $CODEX_BASE_VERSION)"
+          actual="$("$package_dir/bin/codex" --version)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Candidate identity mismatch: expected '$expected', got '$actual'" >&2
+            exit 1
+          fi
+          printf '%s\n' "$GITHUB_SHA" > candidate-dist/source-sha.txt
+          (
+            cd candidate-dist
+            sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256"
+          )
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: quiet-linux-candidate-${{ github.sha }}
+          path: candidate-dist
+          if-no-files-found: error
+          retention-days: 7
 
   platform-check:
     name: Check ${{ matrix.target }}

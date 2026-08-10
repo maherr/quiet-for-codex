@@ -2874,7 +2874,7 @@ async fn navigation_preserves_composer_keys_and_draft_input() {
         (KeyCode::Up, false),
         (KeyCode::Down, false),
         (KeyCode::Home, false),
-        (KeyCode::End, false),
+        (KeyCode::End, true),
         (KeyCode::PageUp, true),
         (KeyCode::PageDown, true),
     ];
@@ -2893,6 +2893,10 @@ async fn navigation_preserves_composer_keys_and_draft_input() {
     assert!(!app.handle_owned_screen_navigation_key(
         &mut tui,
         KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+    ));
+    assert!(!app.handle_owned_screen_navigation_key(
+        &mut tui,
+        KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
     ));
 }
 
@@ -2951,9 +2955,18 @@ async fn mouse_wheel_scrolls_transcript_without_changing_draft() {
     "                                        "
     "› draft sentinel                        "
     "                                        "
-    "  gpt-5.6-sol default · /tmp/project    "
+    "  gpt-5.6-sol default          ↓ newer  "
     "#);
     assert!(!screen.viewport.is_following_bottom());
+    let scrolled_with_draft = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert!(scrolled_with_draft.contains("↓ newer"));
+    assert!(!scrolled_with_draft.contains("↓ newer · End"));
     assert!(!screen.handle_mouse_scroll(MouseScrollEvent {
         direction: MouseScrollDirection::Up,
         column: 2,
@@ -2971,4 +2984,54 @@ async fn mouse_wheel_scrolls_transcript_without_changing_draft() {
         })
         .expect("render restored bottom");
     assert!(screen.viewport.is_following_bottom());
+}
+
+#[tokio::test]
+async fn scrolled_transcript_shows_newer_cue_and_end_returns_to_bottom() {
+    let (chat_widget, _app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    let mut screen = OwnedScreen::new(&chat_widget, crate::keymap::RuntimeKeymap::defaults().pager);
+    for text in ["oldest", "older", "middle", "newer", "LATEST"] {
+        screen.viewport.push_cell(Arc::new(TestCell(text)));
+    }
+    let mut terminal =
+        Terminal::new(TestBackend::new(/*width*/ 40, /*height*/ 8)).expect("create terminal");
+    terminal
+        .draw(|frame| {
+            screen.render(&chat_widget, frame.area(), frame.buffer_mut());
+        })
+        .expect("render bottom");
+    assert!(screen.handle_mouse_scroll(MouseScrollEvent {
+        direction: MouseScrollDirection::Up,
+        column: 2,
+        row: 2,
+    }));
+    terminal
+        .draw(|frame| {
+            screen.render(&chat_widget, frame.area(), frame.buffer_mut());
+        })
+        .expect("render scrolled");
+    let scrolled = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert!(scrolled.contains("↓ newer · End"), "{scrolled:?}");
+
+    assert!(screen.handle_navigation_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE,)));
+    terminal
+        .draw(|frame| {
+            screen.render(&chat_widget, frame.area(), frame.buffer_mut());
+        })
+        .expect("render restored bottom");
+    let restored = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert!(screen.viewport.is_following_bottom());
+    assert!(!restored.contains("↓ newer"), "{restored:?}");
 }

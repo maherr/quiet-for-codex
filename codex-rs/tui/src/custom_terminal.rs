@@ -360,6 +360,52 @@ where
         })
     }
 
+    /// Redraw one retained region without rebuilding the rest of the frame.
+    ///
+    /// The previous buffer is the terminal's authoritative visible state after a
+    /// normal draw. Rendering directly into that buffer keeps the next full-frame
+    /// diff coherent while limiting both layout work and diffing to `area`.
+    pub(crate) fn draw_partial_with_size<F>(
+        &mut self,
+        screen_size: Size,
+        area: Rect,
+        render: F,
+    ) -> io::Result<bool>
+    where
+        F: FnOnce(&mut Frame),
+    {
+        if screen_size != self.last_known_screen_size
+            || area.is_empty()
+            || self.previous_buffer().area.intersection(area) != area
+        {
+            return Ok(false);
+        }
+
+        let before = copy_buffer_region(self.previous_buffer(), area);
+        let mut frame = Frame {
+            cursor_position: None,
+            cursor_style: SetCursorStyle::DefaultUserShape,
+            viewport_area: area,
+            buffer: self.previous_buffer_mut(),
+        };
+        render(&mut frame);
+        let cursor_position = frame.cursor_position;
+        let cursor_style = frame.cursor_style;
+        let after = copy_buffer_region(self.previous_buffer(), area);
+
+        draw(&mut self.backend, diff_buffers(&before, &after).into_iter())?;
+        match cursor_position {
+            None => self.hide_cursor()?,
+            Some(position) => {
+                self.set_cursor_style(cursor_style)?;
+                self.show_cursor()?;
+                self.set_cursor_position(position)?;
+            }
+        }
+        Backend::flush(&mut self.backend)?;
+        Ok(true)
+    }
+
     /// Tries to draw a single frame to the terminal.
     ///
     /// Returns [`Result::Ok`] containing a [`CompletedFrame`] if successful, otherwise
@@ -563,6 +609,16 @@ where
 }
 
 use ratatui::buffer::Cell;
+
+fn copy_buffer_region(buffer: &Buffer, area: Rect) -> Buffer {
+    let mut copy = Buffer::empty(area);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            copy[(x, y)] = buffer[(x, y)].clone();
+        }
+    }
+    copy
+}
 
 #[derive(Debug, IsVariant)]
 enum DrawCommand {
@@ -983,6 +1039,47 @@ mod tests {
         alpha
         beta
         ");
+    }
+
+    #[test]
+    fn partial_draw_updates_only_the_retained_region_and_keeps_next_diff_coherent() {
+        let size = Size::new(/*width*/ 12, /*height*/ 4);
+        let full = Rect::new(0, 0, size.width, size.height);
+        let bottom = Rect::new(0, 3, size.width, 1);
+        let mut terminal =
+            Terminal::with_options(CaptureBackend::new(size.width, size.height)).expect("terminal");
+        terminal.set_viewport_area(full);
+        terminal
+            .draw_with_size(size, |frame| {
+                Paragraph::new("KEEP").render(Rect::new(0, 0, 4, 1), frame.buffer_mut());
+                Paragraph::new("old").render(bottom, frame.buffer_mut());
+                frame.set_cursor_position((3, 3));
+            })
+            .expect("initial draw");
+        terminal.backend_mut().output.clear();
+
+        assert!(
+            terminal
+                .draw_partial_with_size(size, bottom, |frame| {
+                    Paragraph::new("new").render(bottom, frame.buffer_mut());
+                    frame.set_cursor_position((3, 3));
+                })
+                .expect("partial draw")
+        );
+        assert_eq!(terminal.previous_buffer()[(0, 0)].symbol(), "K");
+        assert_eq!(terminal.previous_buffer()[(0, 3)].symbol(), "n");
+        assert!(terminal.backend().output().contains("new"));
+        assert!(!terminal.backend().output().contains("KEEP"));
+
+        terminal
+            .draw_with_size(size, |frame| {
+                Paragraph::new("KEEP").render(Rect::new(0, 0, 4, 1), frame.buffer_mut());
+                Paragraph::new("new").render(bottom, frame.buffer_mut());
+                frame.set_cursor_position((3, 3));
+            })
+            .expect("full draw after partial");
+        assert_eq!(terminal.previous_buffer()[(0, 0)].symbol(), "K");
+        assert_eq!(terminal.previous_buffer()[(0, 3)].symbol(), "n");
     }
 
     #[test]

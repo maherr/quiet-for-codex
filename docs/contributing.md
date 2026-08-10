@@ -60,6 +60,30 @@ should include a regression test where the behavior can be exercised in CI.
 
 Documentation-only changes do not require a Rust build.
 
+## Release workflow monitoring
+
+Pushes to a `tui/quiet-*` branch produce a seven-day
+`quiet-linux-candidate-<source-sha>` artifact. GitHub builds the runnable
+x86_64 Linux musl package, verifies its embedded Quiet and Codex versions, and
+ships a checksum plus `source-sha.txt`. Use that hosted binary for private
+real-session and terminal verification; never upload session data to Actions.
+
+After a release tag starts the hosted workflow, use the repository's API-based
+watcher rather than `gh run watch`:
+
+```shell
+python3 scripts/release/watch_workflow_run.py RUN_ID \
+  --repo maherr/quiet-for-codex \
+  --sha CANDIDATE_SHA \
+  --ref RELEASE_TAG
+```
+
+The watcher first binds the run to the expected source SHA and tag, waits for the
+workflow's final conclusion, discovers every matrix job through the paginated
+jobs API, and rejects failed, cancelled, or unknown skipped jobs. A
+successful-looking notification or an incomplete fixed job list is not a
+release verdict.
+
 ## Pull request checklist
 
 - State the problem and the behavior after the change.

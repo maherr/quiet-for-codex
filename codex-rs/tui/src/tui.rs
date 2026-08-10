@@ -39,6 +39,7 @@ use tokio::sync::broadcast;
 use tokio_stream::Stream;
 
 pub use self::frame_requester::FrameRequester;
+pub(crate) use self::frame_requester::FrameScope;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::insert_history::HistoryLineWrapPolicy;
@@ -701,6 +702,10 @@ impl Tui {
         self.frame_requester.clone()
     }
 
+    pub(crate) fn take_frame_scope(&self) -> FrameScope {
+        self.frame_requester.take_emitted_scope()
+    }
+
     #[cfg(test)]
     pub(crate) fn subscribe_draws_for_test(&self) -> broadcast::Receiver<()> {
         self.draw_tx.subscribe()
@@ -1023,6 +1028,22 @@ impl Tui {
             terminal.draw_with_size(screen_size, |frame| {
                 draw_fn(frame);
             })
+        })?
+    }
+
+    pub(crate) fn draw_partial(
+        &mut self,
+        area: Rect,
+        draw_fn: impl FnOnce(&mut custom_terminal::Frame),
+    ) -> Result<bool> {
+        let screen_size = self.take_event_screen_size()?;
+        if !self.screen_session.is_active() || !self.pending_history_lines.is_empty() {
+            return Ok(false);
+        }
+        ensure_virtual_terminal_processing()?;
+        stdout().sync_update(|_| {
+            self.terminal
+                .draw_partial_with_size(screen_size, area, draw_fn)
         })?
     }
 

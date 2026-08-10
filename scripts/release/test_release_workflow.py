@@ -18,8 +18,14 @@ POWERSHELL_INSTALLER_TEST_PATH = (
     REPO_ROOT / "scripts" / "release" / "test_install_ps1.ps1"
 )
 SMOKE_PATH = REPO_ROOT / "scripts" / "release" / "smoke_quiet_package.py"
+WORKFLOW_WATCHER_PATH = (
+    REPO_ROOT / "scripts" / "release" / "watch_workflow_run.py"
+)
 SETUP_V8_ACTION_PATH = (
     REPO_ROOT / ".github" / "actions" / "setup-rusty-v8" / "action.yml"
+)
+SYMBOL_ARCHIVER_PATH = (
+    REPO_ROOT / ".github" / "scripts" / "archive-release-symbols-and-strip-binaries.sh"
 )
 V8_MANIFEST_PATH = REPO_ROOT / "scripts" / "release" / "v8-notices-manifest.json"
 TUI_UPDATE_ACTION_PATH = REPO_ROOT / "codex-rs" / "tui" / "src" / "update_action.rs"
@@ -60,7 +66,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         cls.smoke = SMOKE_PATH.read_text(encoding="utf-8")
+        cls.workflow_watcher = WORKFLOW_WATCHER_PATH.read_text(encoding="utf-8")
         cls.setup_v8_action = SETUP_V8_ACTION_PATH.read_text(encoding="utf-8")
+        cls.symbol_archiver = SYMBOL_ARCHIVER_PATH.read_text(encoding="utf-8")
         cls.v8_manifest = json.loads(V8_MANIFEST_PATH.read_text(encoding="utf-8"))
         cls.tui_update_action = TUI_UPDATE_ACTION_PATH.read_text(encoding="utf-8")
         cls.tui_updates = TUI_UPDATES_PATH.read_text(encoding="utf-8")
@@ -109,7 +117,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_release_is_created_once_after_asset_validation(self) -> None:
         self.assertEqual(self.workflow.count('gh release create "$TAG"'), 1)
         self.assertIn(
-            "Release archive set does not match the six expected targets", self.workflow
+            "Release archive set does not match the six packages and six symbol sidecars",
+            self.workflow,
         )
         self.assertIn("sha256sum --check SHA256SUMS", self.workflow)
         self.assertIn("--verify-tag", self.workflow)
@@ -190,7 +199,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_release_attests_and_verifies_every_archive(self) -> None:
         action = "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
         self.assertEqual(self.workflow.count(action), 2)
-        self.assertEqual(self.workflow.count("subject-path: dist/codex-quiet-*"), 2)
+        self.assertEqual(self.workflow.count("subject-path: dist/codex-quiet-*"), 1)
+        self.assertEqual(self.workflow.count("subject-path: dist/codex-*"), 1)
 
         canary = self.workflow.split("  attestation-canary:\n", 1)[1].split(
             "  validate:\n", 1
@@ -260,7 +270,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_every_platform_uses_manifest_pinned_v8_archive_and_binding(self) -> None:
         setup_action = "uses: ./.github/actions/setup-rusty-v8"
         self.assertEqual(self.workflow.count(setup_action), 2)
-        self.assertEqual(self.quiet_ci.count(setup_action), 3)
+        self.assertEqual(self.quiet_ci.count(setup_action), 4)
         self.assertIn("prepare_v8_artifacts.py", self.setup_v8_action)
         self.assertIn('--github-env "${GITHUB_ENV}"', self.setup_v8_action)
         self.assertNotIn("rusty_v8_release_${TARGET}.sha256", self.setup_v8_action)
@@ -294,7 +304,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_release_profile_disables_stock_updates_and_announcements(self) -> None:
         self.assertIn("--cargo-profile release", self.workflow)
-        self.assertIn('CARGO_PROFILE_RELEASE_DEBUG: "none"', self.workflow)
+        self.assertIn(
+            'CARGO_PROFILE_RELEASE_DEBUG: "line-tables-only"', self.workflow
+        )
+        self.assertNotIn('CARGO_PROFILE_RELEASE_DEBUG: "none"', self.workflow)
         self.assertRegex(
             self.tui_update_action,
             r"(?s)#\[cfg\(not\(debug_assertions\)\)\]\s+"
@@ -312,6 +325,51 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.tui_update_prompt,
         )
         self.assertIn('CODEX_CLI_DISPLAY_NAME != "codex-quiet"', self.tui_tooltips)
+
+    def test_every_release_has_a_build_id_keyed_symbol_sidecar(self) -> None:
+        self.assertIn(
+            "archive-release-symbols-and-strip-binaries.sh", self.workflow
+        )
+        self.assertIn('--binaries "codex codex-code-mode-host"', self.workflow)
+        self.assertEqual(self.workflow.count('"codex-symbols-$VERSION-'), 6)
+        self.assertEqual(self.workflow.count('"dist/codex-symbols-$VERSION-'), 6)
+        self.assertIn("BUILD_IDS.txt", self.symbol_archiver)
+        self.assertIn("readelf -n", self.symbol_archiver)
+        self.assertIn("dwarfdump --uuid", self.symbol_archiver)
+        self.assertIn("dsymutil", self.symbol_archiver)
+        self.assertIn(".pdb", self.symbol_archiver)
+        self.assertIn("shipped_binary_sha256", self.symbol_archiver)
+
+    def test_packaged_smoke_replays_real_paginated_history(self) -> None:
+        for required in (
+            '"history_mode": "paginated"',
+            '"type": "AgentMessage"',
+            '"phase": "final_answer"',
+            '"type": "Reasoning"',
+            '"method": "thread/resume"',
+            '"sandbox": "read-only"',
+            '"--no-alt-screen"',
+            "RESTORING_HISTORY_MARKER",
+            "SMOKE_FINAL_MARKER",
+        ):
+            self.assertIn(required, self.smoke)
+        self.assertNotIn("Replay smoke skipped", self.smoke)
+
+    def test_release_watcher_polls_api_to_a_dynamic_conclusion(self) -> None:
+        self.assertIn('CANONICAL_REPOSITORY = "maherr/quiet-for-codex"', self.workflow_watcher)
+        self.assertIn('["gh", "api", endpoint]', self.workflow_watcher)
+        self.assertNotIn("gh run watch", self.workflow_watcher)
+        self.assertIn('state[0] == "completed"', self.workflow_watcher)
+        self.assertIn('state[1] != "success"', self.workflow_watcher)
+        self.assertIn('run.get("head_sha")', self.workflow_watcher)
+        self.assertIn('run.get("head_branch")', self.workflow_watcher)
+        self.assertIn('parser.add_argument("--sha", required=True', self.workflow_watcher)
+        self.assertIn('parser.add_argument("--ref", required=True', self.workflow_watcher)
+        self.assertIn("fetch_all_jobs", self.workflow_watcher)
+        self.assertIn("page={page}", self.workflow_watcher)
+        self.assertIn("no dynamically discovered Build matrix jobs", self.workflow_watcher)
+        self.assertIn("conclusion == \"skipped\"", self.workflow_watcher)
+        self.assertIn("ALLOWED_SKIPPED_JOBS", self.workflow_watcher)
 
     def test_all_daemon_managed_routes_are_black_box_denied(self) -> None:
         routes = (
@@ -368,8 +426,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "scripts/codex_package/test_ripgrep.py",
             "test_generate_v8_notices.py",
             "test_prepare_v8_artifacts.py",
+            "test_archive_release_symbols.py",
             "test_finalize_quiet_package.py",
             "test_smoke_quiet_package.py",
+            "test_watch_workflow_run.py",
             "test_install_sh.py",
             "test_release_workflow.py",
             "codex-tui --lib",
@@ -527,6 +587,31 @@ class ReleaseWorkflowTests(unittest.TestCase):
             ),
             2,
         )
+
+    def test_quiet_ci_builds_source_bound_hosted_linux_candidate(self) -> None:
+        candidate = self.quiet_ci.split("  linux-candidate:\n", 1)[1].split(
+            "  platform-check:\n", 1
+        )[0]
+        for required in (
+            "github.event_name == 'push'",
+            "refs/heads/tui/quiet-",
+            "x86_64-unknown-linux-musl",
+            'CARGO_INCREMENTAL: "0"',
+            'CARGO_PROFILE_RELEASE_DEBUG: "line-tables-only"',
+            "CODEX_QUIET_DISPLAY_VERSION=codex-quiet",
+            "scripts/build_codex_package.py",
+            "--cargo-profile release",
+            "--zsh-manifest scripts/release/no-zsh.json",
+            "codex-quiet-candidate-$GITHUB_SHA-$TARGET.tar.gz",
+            'actual="$("$package_dir/bin/codex" --version)"',
+            "candidate-dist/source-sha.txt",
+            "sha256sum",
+            "quiet-linux-candidate-${{ github.sha }}",
+            "retention-days: 7",
+        ):
+            self.assertIn(required, candidate)
+        self.assertNotIn("contents: write", candidate)
+        self.assertNotIn("session", candidate.lower())
 
     def test_windows_installer_is_powershell_51_safe_and_relocatable(self) -> None:
         self.assertEqual(self.powershell_installer.count("-UseBasicParsing"), 3)

@@ -4,10 +4,18 @@ use super::*;
 
 impl ChatWidget {
     pub(crate) fn bottom_pane_renderable(&self) -> RenderableItem<'_> {
+        self.bottom_pane_renderable_with_newer_hint(/*show_newer_hint*/ false)
+    }
+
+    pub(crate) fn bottom_pane_renderable_with_newer_hint(
+        &self,
+        show_newer_hint: bool,
+    ) -> RenderableItem<'_> {
         RenderableItem::Owned(Box::new(BottomPaneSeparatorRenderable {
-            child: self
-                .bottom_pane
-                .as_renderable_with_composer_right_reserve(self.ambient_pet_wrap_reserved_cols()),
+            child: self.bottom_pane.as_renderable_with_composer_options(
+                self.ambient_pet_wrap_reserved_cols(),
+                show_newer_hint,
+            ),
         }))
     }
 

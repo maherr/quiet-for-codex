@@ -206,6 +206,52 @@ async fn restored_conversation_ultra_remains_selected_after_switching_to_plan() 
 }
 
 #[tokio::test]
+async fn explicit_resumed_effort_replaces_wrapper_default_in_working_row() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Ultra));
+
+    chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-5.4".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: Some(ReasoningEffortConfig::Max),
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    });
+    chat.on_task_started();
+
+    assert_eq!(
+        chat.effective_reasoning_effort(),
+        Some(ReasoningEffortConfig::Max)
+    );
+    let width = 100;
+    let area = ratatui::layout::Rect::new(0, 0, width, chat.bottom_pane.desired_height(width));
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    chat.bottom_pane.render(area, &mut buffer);
+    let rendered = buffer
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert!(rendered.contains("gpt-5.4 · max"), "{rendered:?}");
+    assert!(!rendered.contains("gpt-5.4 · ultra"), "{rendered:?}");
+}
+
+#[tokio::test]
 async fn replayed_user_messages_seed_composer_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_history_metadata(

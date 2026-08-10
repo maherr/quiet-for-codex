@@ -10,8 +10,8 @@
 //! This module does not implement an Emacs-style multi-entry kill ring. It keeps only the most
 //! recent killed span.
 //!
-//! Wrapping also reserves a visible insertion point: full logical lines get continuation rows,
-//! and overflowing spaces wrap instead of moving the cursor outside the textarea.
+//! Wrapping also reserves a visible insertion point when the caret is exactly at a full logical
+//! line boundary. Overflowing spaces wrap instead of moving the cursor outside the textarea.
 
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_altgr;
@@ -135,6 +135,7 @@ pub(crate) struct TextArea {
 #[derive(Debug, Clone)]
 struct WrapCache {
     width: u16,
+    cursor_pos: usize,
     lines: Vec<Range<usize>>,
 }
 
@@ -406,13 +407,13 @@ impl TextArea {
 
         // Update the cursor position to account for the edit.
         self.cursor_pos = if self.cursor_pos < start {
-            // Cursor was before the edited range – no shift.
+            // Cursor was before the edited range, so no shift.
             self.cursor_pos
         } else if self.cursor_pos <= end {
-            // Cursor was inside the replaced range – move to end of the new text.
+            // Cursor was inside the replaced range, so move to the end of the new text.
             start + inserted_len
         } else {
-            // Cursor was after the replaced range – shift by the length diff.
+            // Cursor was after the replaced range, so shift by the length diff.
             ((self.cursor_pos as isize) + diff) as usize
         }
         .min(self.text.len());
@@ -1881,15 +1882,16 @@ impl TextArea {
 
     /// Returns cached grapheme-safe visual ranges, including cursor-position sentinel bytes.
     ///
-    /// Overflowing spaces get their own rows, and full logical lines receive a continuation row
-    /// so their insertion point stays visible.
+    /// Overflowing spaces get their own rows. A full logical line receives a continuation row
+    /// only while the caret is exactly at that boundary, keeping its insertion point visible
+    /// without leaving a phantom blank row after the caret moves elsewhere.
     #[expect(clippy::unwrap_used)]
     fn wrapped_lines(&self, width: u16) -> Ref<'_, Vec<Range<usize>>> {
         // Ensure cache is ready (potentially mutably borrow, then drop)
         {
             let mut cache = self.wrap_cache.borrow_mut();
             let needs_recalc = match cache.as_ref() {
-                Some(c) => c.width != width,
+                Some(c) => c.width != width || c.cursor_pos != self.cursor_pos,
                 None => true,
             };
             if needs_recalc {
@@ -1920,14 +1922,19 @@ impl TextArea {
                         }
 
                         lines.push(line_start..line_end + 1);
-                        if line_width >= usize::from(width)
+                        if self.cursor_pos == line_end
+                            && line_width >= usize::from(width)
                             && matches!(display_text.as_bytes().get(line_end), None | Some(b'\n'))
                         {
                             lines.push(line_end..line_end + 1);
                         }
                     }
                 }
-                *cache = Some(WrapCache { width, lines });
+                *cache = Some(WrapCache {
+                    width,
+                    cursor_pos: self.cursor_pos,
+                    lines,
+                });
             }
         }
 
@@ -3547,20 +3554,42 @@ mod tests {
     }
 
     #[test]
-    fn full_non_final_lines_reserve_visible_cursor_rows() {
+    fn full_non_final_lines_reserve_cursor_row_only_at_the_boundary() {
         for text in ["abad\nef", "界界\nef", "abｶﾞ\nef"] {
             let mut t = ta_with(text);
             let area = Rect::new(0, 0, /*width*/ 4, /*height*/ 3);
             let newline = text.find('\n').unwrap();
 
-            assert_eq!(t.desired_height(area.width), 3);
+            assert_eq!(t.desired_height(area.width), 2);
 
             t.set_cursor(newline);
+            assert_eq!(t.desired_height(area.width), 3);
             assert_eq!(t.cursor_pos(area), Some((0, 1)));
 
             t.set_cursor(newline + 1);
-            assert_eq!(t.cursor_pos(area), Some((0, 2)));
+            assert_eq!(t.desired_height(area.width), 2);
+            assert_eq!(t.cursor_pos(area), Some((0, 1)));
         }
+    }
+
+    #[test]
+    fn explicit_newline_does_not_create_a_phantom_row_after_caret_moves_on() {
+        let mut t = ta_with("abad\nend");
+        let area = Rect::new(0, 0, /*width*/ 4, /*height*/ 4);
+
+        t.set_cursor(/*newline*/ 4);
+        assert_eq!(t.desired_height(area.width), 3);
+
+        t.set_cursor(t.text().len());
+        assert_eq!(t.desired_height(area.width), 2);
+    }
+
+    #[test]
+    fn intentional_blank_logical_line_is_preserved() {
+        let mut t = ta_with("abad\n\nend");
+        t.set_cursor(t.text().len());
+
+        assert_eq!(t.desired_height(/*width*/ 4), 3);
     }
 
     #[test]
@@ -3885,7 +3914,7 @@ mod tests {
 
     #[test]
     fn cursor_pos_with_state_basic_and_scroll_behaviors() {
-        // Case 1: No wrapping needed, height fits — scroll ignored, y maps directly.
+        // Case 1: No wrapping needed and height fits, so scroll is ignored and y maps directly.
         let mut t = ta_with("hello world");
         t.set_cursor(/*pos*/ 3);
         let area = Rect::new(2, 5, 20, 3);
@@ -3896,7 +3925,7 @@ mod tests {
         let (x2, y2) = t.cursor_pos_with_state(area, bad_state).unwrap();
         assert_eq!((x2, y2), (x1, y1));
 
-        // Case 2: Cursor below the current window — y should be clamped to the
+        // Case 2: Cursor below the current window, so y should be clamped to the
         // bottom row (area.height - 1) after adjusting effective scroll.
         let mut t = ta_with("one two three four five six");
         // Force wrapping to many visual lines.
@@ -3909,7 +3938,7 @@ mod tests {
         let (_x, y) = t.cursor_pos_with_state(small_area, state).unwrap();
         assert_eq!(y, small_area.y + small_area.height - 1);
 
-        // Case 3: Cursor above the current window — y should be top row (0)
+        // Case 3: Cursor above the current window, so y should be top row (0)
         // when the provided scroll is too large.
         let mut t = ta_with("alpha beta gamma delta epsilon zeta");
         let wrap_width = 5;

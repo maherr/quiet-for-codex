@@ -417,7 +417,11 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
             .filter_map(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
             .map(|user| user.message.as_str())
             .collect::<Vec<_>>(),
-        vec!["hidden cross-page review prompt", "newer visible prompt"]
+        vec![
+            "older visible prompt",
+            "hidden cross-page review prompt",
+            "newer visible prompt",
+        ]
     );
     app.backtrack.overlay_preview_active = true;
     app.backtrack.nth_user_message = 1;
@@ -934,7 +938,7 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
                 .join("\n")
         };
         let partial = render_overlay(overlay);
-        assert!(partial.contains("Earlier messages are available — scroll up to load them"));
+        assert!(partial.contains("Earlier messages are available \u{2014} scroll up to load them"));
         assert!(!partial.contains("OpenAI Codex"));
         assert!(!partial.contains("This is a test announcement"));
         assert!(!partial.contains('%'));

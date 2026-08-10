@@ -1,6 +1,7 @@
 ---
 source: tui/src/status_indicator_widget.rs
+assertion_line: 419
 expression: terminal.backend()
 ---
-"esc interrupt · Wor…"
+"⠋ esc interrupt · W…"
 "                    "

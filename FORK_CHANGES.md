@@ -28,7 +28,9 @@ The TUI can own an alternate screen with a pinned composer and retained,
 scrollable conversation history. It maps rendered cells back to source text so
 mouse selection and copying remain useful after wrapping and resize. Ordinary
 idle, running, and hook-progress transitions reuse the composer's footer and do
-not change the bottom pane's height.
+not change the bottom pane's height. A footer cue marks newer content while the
+viewport is away from the live tail, and paginated resume keeps the first user
+message and final assistant reply as durable turn anchors while details load.
 
 ### Compact activity presentation
 
@@ -39,7 +41,9 @@ Failures, user-shell commands, approvals, warnings, action-required output,
 visible reasoning, and unfinished patches remain expanded. Routine hook
 progress uses the fixed footer, while non-routine hook results remain durable.
 Background terminals and collaborator activity use compact lifecycle
-presentation.
+presentation. Main assistant replies use a large blue marker. The main working
+row uses a one-cell spinner, one stable phrase per user turn, and the effective
+model plus effort; these remain distinct from compact tool indicators.
 
 ### Conversation panes and inspection
 

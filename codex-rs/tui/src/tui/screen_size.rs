@@ -18,6 +18,10 @@ pub(super) struct ScreenSizePolicy {
 }
 
 impl Tui {
+    pub(crate) fn activity_partial_draw_allowed(&self) -> bool {
+        self.screen_size.pending_recheck_at.is_none()
+    }
+
     /// Resolve event geometry while avoiding backend queries on ordinary repaint frames.
     pub(crate) fn screen_size_for_event(&mut self, event: &TuiEvent) -> io::Result<Size> {
         if matches!(event, TuiEvent::Resize(_)) {

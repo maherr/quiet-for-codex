@@ -177,7 +177,9 @@ use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -738,6 +740,19 @@ fn active_turn_interrupt_race(error: &TypedRequestError) -> Option<String> {
     )
 }
 
+fn draw_restoring_history_status(tui: &mut tui::Tui) -> Result<()> {
+    let status = Line::from(vec![
+        "● ".fg(crate::style::quiet_blue_color()).bold(),
+        "Restoring history…".bold(),
+    ]);
+    tui.draw(/*height*/ 1, |frame| {
+        let area = frame.area();
+        Clear.render(area, frame.buffer);
+        Paragraph::new(status).render(area, frame.buffer);
+    })?;
+    Ok(())
+}
+
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
@@ -947,6 +962,7 @@ impl App {
                     &config,
                     &harness_overrides,
                 );
+                draw_restoring_history_status(tui)?;
                 let resumed = app_server
                     .resume_thread(config.clone(), target_session.thread_id, model_settings)
                     .await
@@ -1298,7 +1314,23 @@ See the Codex keymap documentation for supported actions and examples."
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        let frame_scope = if matches!(&event, TuiEvent::Draw) {
+            tui.take_frame_scope()
+        } else {
+            tui::FrameScope::Full
+        };
+        let activity_partial_draw_allowed = tui.activity_partial_draw_allowed();
         let screen_size = tui.screen_size_for_event(&event)?;
+        if matches!(&event, TuiEvent::Draw)
+            && frame_scope == tui::FrameScope::Activity
+            && activity_partial_draw_allowed
+            && self.overlay.is_none()
+            && self.chat_widget.no_modal_or_popup_active()
+            && self.owned_activity_animation_active()
+            && self.render_owned_activity_frame(tui)?
+        {
+            return Ok(AppRunControl::Continue);
+        }
         match &event {
             TuiEvent::Resize(_) => {
                 self.chat_widget.cancel_owned_screen_split_drag();

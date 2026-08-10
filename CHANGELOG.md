@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.2.0 - 2026-08-10
+
+### Added
+
+- Added a persistent `#2F68C2` blue marker for assistant replies, with the
+  existing large dot and indentation retained as non-color cues. Truecolor
+  terminals receive the exact color and limited-color terminals use a bright
+  blue fallback.
+- Added a bright one-cell Braille spinner for the main working row. Its phrase
+  is selected once per user turn, and the effective model plus reasoning effort
+  remain visible throughout the turn. Reduced-motion mode uses a static dot.
+- Added a `↓ newer` footer cue while retained history is scrolled away from the
+  live tail. An empty composer also shows the truthful `End` shortcut.
+- Added per-platform debug-symbol archives keyed to the main executable and
+  code-mode host platform identity, checksums, and source revision.
+
+### Changed
+
+- Capped the main activity animation at eight frames per second and limited
+  per-frame motion to the spinner cell. Compact tool indicators keep their
+  existing treatment.
+- Release monitoring now binds the run to the expected source SHA and tag, then
+  polls the GitHub API until the workflow and its dynamically discovered matrix
+  jobs finish successfully. Unknown skipped jobs fail the gate instead of
+  counting as a pass.
+- Finalized package smoke tests now resume a real persisted paginated transcript
+  through the packaged app-server and, on POSIX targets, the packaged TUI.
+- Feature-branch CI now builds a source-SHA-bound x86_64 Linux candidate package
+  for private real-session and terminal verification before a release tag is
+  created. The ephemeral artifact includes its checksum and expires after seven
+  days.
+
+### Fixed
+
+- Preserved completed assistant replies when a dense newer turn exhausts the
+  initial paginated-history budget. Summary anchors and detail pages merge by
+  item ID in transcript order without duplicating the final reply.
+- Added an immediate `Restoring history…` startup frame and kept live events
+  buffered until initial replay is projected, so resume does not flash a partial
+  or reordered transcript.
+- Kept the effective post-resume model and reasoning override in the active
+  working row instead of reverting visually to an earlier wrapper default.
+- Removed the composer phantom blank row after the caret leaves an exactly full
+  logical-line boundary, while preserving the boundary insertion point and
+  intentional blank lines.
+
 ## 1.1.0 - 2026-08-10
 
 ### Added

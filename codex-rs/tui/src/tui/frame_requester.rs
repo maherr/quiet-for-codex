@@ -12,6 +12,9 @@
 //! [“Actors with Tokio”](https://ryhl.io/blog/actors-with-tokio/), with a
 //! dedicated scheduler task and lightweight request handles.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -29,7 +32,20 @@ use super::frame_rate_limiter::FrameRateLimiter;
 /// from anywhere in the TUI code.
 #[derive(Clone, Debug)]
 pub struct FrameRequester {
-    frame_schedule_tx: mpsc::UnboundedSender<Instant>,
+    frame_schedule_tx: mpsc::UnboundedSender<FrameSchedule>,
+    emitted_scope: Arc<AtomicU8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum FrameScope {
+    Activity = 1,
+    Full = 2,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FrameSchedule {
+    pub(crate) at: Instant,
+    pub(crate) scope: FrameScope,
 }
 
 impl FrameRequester {
@@ -38,23 +54,48 @@ impl FrameRequester {
     /// The provided `draw_tx` is used to notify the TUI event loop of scheduled draws.
     pub fn new(draw_tx: broadcast::Sender<()>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let scheduler = FrameScheduler::new(rx, draw_tx);
+        let emitted_scope = Arc::new(AtomicU8::new(0));
+        let scheduler = FrameScheduler::new(rx, draw_tx, Arc::clone(&emitted_scope));
         tokio::spawn(scheduler.run());
         Self {
             frame_schedule_tx: tx,
+            emitted_scope,
         }
     }
 
     /// Schedule a frame draw as soon as possible.
     pub fn schedule_frame(&self) {
         crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::FrameRequestImmediate);
-        let _ = self.frame_schedule_tx.send(Instant::now());
+        let _ = self.frame_schedule_tx.send(FrameSchedule {
+            at: Instant::now(),
+            scope: FrameScope::Full,
+        });
     }
 
     /// Schedule a frame draw to occur after the specified duration.
     pub fn schedule_frame_in(&self, dur: Duration) {
         crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::FrameRequestDelayed);
-        let _ = self.frame_schedule_tx.send(Instant::now() + dur);
+        let _ = self.frame_schedule_tx.send(FrameSchedule {
+            at: Instant::now() + dur,
+            scope: FrameScope::Full,
+        });
+    }
+
+    /// Schedule a frame whose only time-varying content is the main activity row.
+    pub(crate) fn schedule_activity_frame_in(&self, dur: Duration) {
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::FrameRequestDelayed);
+        let _ = self.frame_schedule_tx.send(FrameSchedule {
+            at: Instant::now() + dur,
+            scope: FrameScope::Activity,
+        });
+    }
+
+    /// Return the strongest scope coalesced into the next delivered draw.
+    pub(crate) fn take_emitted_scope(&self) -> FrameScope {
+        match self.emitted_scope.swap(0, Ordering::AcqRel) {
+            1 => FrameScope::Activity,
+            _ => FrameScope::Full,
+        }
     }
 }
 
@@ -65,6 +106,7 @@ impl FrameRequester {
         let (tx, _rx) = mpsc::unbounded_channel();
         FrameRequester {
             frame_schedule_tx: tx,
+            emitted_scope: Arc::new(AtomicU8::new(0)),
         }
     }
 }
@@ -76,17 +118,23 @@ impl FrameRequester {
 /// To avoid wasted redraw work, draw notifications are clamped to a maximum of 120 FPS (see
 /// [`FrameRateLimiter`]).
 struct FrameScheduler {
-    receiver: mpsc::UnboundedReceiver<Instant>,
+    receiver: mpsc::UnboundedReceiver<FrameSchedule>,
     draw_tx: broadcast::Sender<()>,
+    emitted_scope: Arc<AtomicU8>,
     rate_limiter: FrameRateLimiter,
 }
 
 impl FrameScheduler {
     /// Create a new FrameScheduler with the provided receiver and draw notification sender.
-    fn new(receiver: mpsc::UnboundedReceiver<Instant>, draw_tx: broadcast::Sender<()>) -> Self {
+    fn new(
+        receiver: mpsc::UnboundedReceiver<FrameSchedule>,
+        draw_tx: broadcast::Sender<()>,
+        emitted_scope: Arc<AtomicU8>,
+    ) -> Self {
         Self {
             receiver,
             draw_tx,
+            emitted_scope,
             rate_limiter: FrameRateLimiter::default(),
         }
     }
@@ -97,20 +145,28 @@ impl FrameScheduler {
     /// is sent for multiple requests scheduled before the next draw deadline.
     async fn run(mut self) {
         const ONE_YEAR: Duration = Duration::from_secs(60 * 60 * 24 * 365);
-        let mut next_deadline: Option<Instant> = None;
+        let mut next_schedule: Option<FrameSchedule> = None;
         loop {
-            let target = next_deadline.unwrap_or_else(|| Instant::now() + ONE_YEAR);
+            let target = next_schedule
+                .map(|schedule| schedule.at)
+                .unwrap_or_else(|| Instant::now() + ONE_YEAR);
             let deadline = tokio::time::sleep_until(target.into());
             tokio::pin!(deadline);
 
             tokio::select! {
-                draw_at = self.receiver.recv() => {
-                    let Some(draw_at) = draw_at else {
+                schedule = self.receiver.recv() => {
+                    let Some(mut schedule) = schedule else {
                         // All senders dropped; exit the scheduler.
                         break
                     };
-                    let draw_at = self.rate_limiter.clamp_deadline(draw_at);
-                    next_deadline = Some(next_deadline.map_or(draw_at, |cur| cur.min(draw_at)));
+                    schedule.at = self.rate_limiter.clamp_deadline(schedule.at);
+                    next_schedule = Some(match next_schedule {
+                        Some(current) => FrameSchedule {
+                            at: current.at.min(schedule.at),
+                            scope: current.scope.max(schedule.scope),
+                        },
+                        None => schedule,
+                    });
 
                     // Do not send a draw immediately here. By continuing the loop,
                     // we recompute the sleep target so the draw fires once via the
@@ -118,9 +174,10 @@ impl FrameScheduler {
                     continue;
                 }
                 _ = &mut deadline => {
-                    if next_deadline.is_some() {
-                        next_deadline = None;
+                    if let Some(schedule) = next_schedule.take() {
                         self.rate_limiter.mark_emitted(target);
+                        self.emitted_scope
+                            .fetch_max(schedule.scope as u8, Ordering::Release);
                         if self.draw_tx.send(()).is_ok() {
                             crate::quiet_metrics::bump(
                                 crate::quiet_metrics::QuietMetric::FrameEmitted,
@@ -141,11 +198,12 @@ mod tests {
 
     impl FrameRequester {
         /// Create a frame requester and expose its request channel for deterministic tests.
-        pub(crate) fn test_channel() -> (Self, mpsc::UnboundedReceiver<Instant>) {
+        pub(crate) fn test_channel() -> (Self, mpsc::UnboundedReceiver<FrameSchedule>) {
             let (tx, rx) = mpsc::unbounded_channel();
             (
                 FrameRequester {
                     frame_schedule_tx: tx,
+                    emitted_scope: Arc::new(AtomicU8::new(0)),
                 },
                 rx,
             )
@@ -221,6 +279,23 @@ mod tests {
             crate::quiet_metrics::get_for_test(crate::quiet_metrics::QuietMetric::FrameEmitted,),
             1
         );
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn activity_scope_survives_scheduling_and_full_scope_wins_coalescing() {
+        let (draw_tx, mut draw_rx) = broadcast::channel(16);
+        let requester = FrameRequester::new(draw_tx);
+
+        requester.schedule_activity_frame_in(Duration::from_millis(20));
+        time::advance(Duration::from_millis(20)).await;
+        draw_rx.recv().await.expect("activity draw");
+        assert_eq!(requester.take_emitted_scope(), FrameScope::Activity);
+
+        requester.schedule_activity_frame_in(Duration::from_millis(20));
+        requester.schedule_frame_in(Duration::from_millis(30));
+        time::advance(Duration::from_millis(20)).await;
+        draw_rx.recv().await.expect("coalesced draw");
+        assert_eq!(requester.take_emitted_scope(), FrameScope::Full);
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
