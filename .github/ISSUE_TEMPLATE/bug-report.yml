@@ -25,7 +25,7 @@ body:
     attributes:
       label: Quiet for Codex version
       description: Paste the output of `codex-quiet --version`.
-      placeholder: codex-quiet 1.2.0
+      placeholder: codex-quiet 1.2.1
     validations:
       required: true
 

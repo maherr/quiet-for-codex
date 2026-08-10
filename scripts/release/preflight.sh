@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the release workflow's gates locally, before tagging.
+# Run the release workflow's source-only gates locally, before hosted CI.
 #
 # A tag is immutable and a failed release burns it, so the expensive failure is
 # not a slow pipeline, it is discovering a broken gate after the tag exists.
@@ -7,6 +7,9 @@
 # most is the identity test in the RELEASE environment: the release injects
 # CODEX_QUIET_DISPLAY_VERSION, so a test that passes in a plain source build can
 # still fail the release, which is exactly how a stable tag was burned once.
+#
+# Rust compilation remains GitHub-hosted by default. Set the same explicit
+# emergency override used by the updater to add the local Rust gates.
 #
 # Usage: scripts/release/preflight.sh [version]
 #   version defaults to the contents of QUIET_VERSION.
@@ -81,6 +84,18 @@ run "install.sh syntax" sh -n scripts/release/install.sh
 run "release workflow parses" python3 -c "import yaml; yaml.safe_load(open('.github/workflows/quiet-release.yml'))"
 run "ci workflow parses" python3 -c "import yaml; yaml.safe_load(open('.github/workflows/quiet-ci.yml'))"
 
+if [[ "${CODEX_QUIET_ALLOW_LOCAL_BUILD:-0}" != "1" ]]; then
+  echo
+  if [[ "${#FAILED[@]}" -gt 0 ]]; then
+    echo "SOURCE PREFLIGHT FAILED: ${#FAILED[@]} of $((PASSED + ${#FAILED[@]})) gates"
+    printf '  - %s\n' "${FAILED[@]}"
+    exit 1
+  fi
+  echo "SOURCE PREFLIGHT PASSED: $PASSED gates."
+  echo "Full Rust gates must pass in GitHub-hosted exact-SHA CI before tagging."
+  exit 0
+fi
+
 # --- Rust gates ---
 cd "$REPO_ROOT/codex-rs"
 run "full TUI library suite" cargo test --locked -p codex-tui --lib -- --test-threads=1
@@ -110,4 +125,5 @@ if [[ "${#FAILED[@]}" -gt 0 ]]; then
   echo "Do NOT tag. A failed release burns the tag."
   exit 1
 fi
-echo "PREFLIGHT PASSED: $PASSED gates. Safe to tag quiet-v$VERSION."
+echo "LOCAL PREFLIGHT PASSED: $PASSED gates."
+echo "GitHub-hosted exact-SHA CI is still required before tagging quiet-v$VERSION."

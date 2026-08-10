@@ -114,16 +114,30 @@ case "$target" in
         exit 1
       fi
 
-      "$objcopy_bin" --only-keep-debug "$binary_path" "$debug_path"
       binary_build_id="$(readelf -n "$binary_path" | awk '/Build ID:/ {print $3; exit}')"
+      if [[ -z "$binary_build_id" ]]; then
+        echo "Release binary has no GNU build ID: $binary_path" >&2
+        exit 1
+      fi
+
+      "$objcopy_bin" --only-keep-debug "$binary_path" "$debug_path"
       debug_build_id="$(readelf -n "$debug_path" | awk '/Build ID:/ {print $3; exit}')"
-      if [[ -z "$binary_build_id" || "$binary_build_id" != "$debug_build_id" ]]; then
-        echo "Debug sidecar build ID does not match $binary_path" >&2
+      if [[ -z "$debug_build_id" ]]; then
+        echo "Debug sidecar has no GNU build ID for $binary_path" >&2
+        exit 1
+      fi
+      if [[ "$binary_build_id" != "$debug_build_id" ]]; then
+        echo "Debug sidecar GNU build ID does not match $binary_path" >&2
         exit 1
       fi
       debug_sha256="$(file_sha256 "$debug_path")"
       "$strip_bin" --strip-debug --strip-unneeded "$binary_path"
       "$objcopy_bin" --add-gnu-debuglink="$debug_path" "$binary_path"
+      shipped_build_id="$(readelf -n "$binary_path" | awk '/Build ID:/ {print $3; exit}')"
+      if [[ "$shipped_build_id" != "$binary_build_id" ]]; then
+        echo "Stripping changed the GNU build ID for $binary_path" >&2
+        exit 1
+      fi
       printf '%s build_id=%s shipped_binary_sha256=%s debug_sha256=%s\n' \
         "$binary" "$binary_build_id" "$(file_sha256 "$binary_path")" \
         "$debug_sha256" >> "$manifest_path"

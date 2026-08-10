@@ -383,6 +383,18 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  linux-symbols-arm64:
+    name: Check aarch64 Linux symbol sidecars
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.refresh_snapshots }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Exercise the Linux symbol archiver on arm64
+        run: python3 scripts/release/test_archive_release_symbols.py
+
   platform-check:
     name: Check ${{ matrix.target }}
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.refresh_snapshots }}

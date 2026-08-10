@@ -27,11 +27,13 @@ SETUP_V8_ACTION_PATH = (
 SYMBOL_ARCHIVER_PATH = (
     REPO_ROOT / ".github" / "scripts" / "archive-release-symbols-and-strip-binaries.sh"
 )
+PREFLIGHT_PATH = REPO_ROOT / "scripts" / "release" / "preflight.sh"
 V8_MANIFEST_PATH = REPO_ROOT / "scripts" / "release" / "v8-notices-manifest.json"
 TUI_UPDATE_ACTION_PATH = REPO_ROOT / "codex-rs" / "tui" / "src" / "update_action.rs"
 TUI_UPDATES_PATH = REPO_ROOT / "codex-rs" / "tui" / "src" / "updates.rs"
 TUI_UPDATE_PROMPT_PATH = REPO_ROOT / "codex-rs" / "tui" / "src" / "update_prompt.rs"
 TUI_TOOLTIPS_PATH = REPO_ROOT / "codex-rs" / "tui" / "src" / "tooltips.rs"
+CARGO_CONFIG_PATH = REPO_ROOT / "codex-rs" / ".cargo" / "config.toml"
 README_PATH = REPO_ROOT / "README.md"
 INSTALL_DOC_PATH = REPO_ROOT / "docs" / "install.md"
 SUPPORT_PATH = REPO_ROOT / "SUPPORT.md"
@@ -69,11 +71,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         cls.workflow_watcher = WORKFLOW_WATCHER_PATH.read_text(encoding="utf-8")
         cls.setup_v8_action = SETUP_V8_ACTION_PATH.read_text(encoding="utf-8")
         cls.symbol_archiver = SYMBOL_ARCHIVER_PATH.read_text(encoding="utf-8")
+        cls.preflight = PREFLIGHT_PATH.read_text(encoding="utf-8")
         cls.v8_manifest = json.loads(V8_MANIFEST_PATH.read_text(encoding="utf-8"))
         cls.tui_update_action = TUI_UPDATE_ACTION_PATH.read_text(encoding="utf-8")
         cls.tui_updates = TUI_UPDATES_PATH.read_text(encoding="utf-8")
         cls.tui_update_prompt = TUI_UPDATE_PROMPT_PATH.read_text(encoding="utf-8")
         cls.tui_tooltips = TUI_TOOLTIPS_PATH.read_text(encoding="utf-8")
+        cls.cargo_config = tomllib.loads(CARGO_CONFIG_PATH.read_text(encoding="utf-8"))
         cls.readme = README_PATH.read_text(encoding="utf-8")
         cls.install_doc = INSTALL_DOC_PATH.read_text(encoding="utf-8")
         cls.support = SUPPORT_PATH.read_text(encoding="utf-8")
@@ -339,6 +343,29 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("dsymutil", self.symbol_archiver)
         self.assertIn(".pdb", self.symbol_archiver)
         self.assertIn("shipped_binary_sha256", self.symbol_archiver)
+        self.assertIn("Stripping changed the GNU build ID", self.symbol_archiver)
+        for target in (
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-musl",
+        ):
+            rustflags = self.cargo_config["target"][target]["rustflags"]
+            self.assertIn("link-arg=-Wl,--build-id=sha1", rustflags)
+        self.assertIn("linux-symbols-arm64:", self.quiet_ci)
+        self.assertIn("runs-on: ubuntu-24.04-arm", self.quiet_ci)
+        self.assertIn(
+            "python3 scripts/release/test_archive_release_symbols.py",
+            self.quiet_ci,
+        )
+
+    def test_local_preflight_requires_the_emergency_override_before_cargo(self) -> None:
+        guard = '[[ "${CODEX_QUIET_ALLOW_LOCAL_BUILD:-0}" != "1" ]]'
+        self.assertIn(guard, self.preflight)
+        self.assertLess(self.preflight.index(guard), self.preflight.index("# --- Rust gates ---"))
+        self.assertIn(
+            "Full Rust gates must pass in GitHub-hosted exact-SHA CI before tagging.",
+            self.preflight,
+        )
+        self.assertNotIn("Safe to tag", self.preflight)
 
     def test_packaged_smoke_replays_real_paginated_history(self) -> None:
         for required in (
@@ -581,16 +608,22 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "&& 'snapshot-refresh' || 'checks'",
             self.quiet_ci,
         )
-        self.assertEqual(
-            self.quiet_ci.count(
-                "github.event_name != 'workflow_dispatch' || !inputs.refresh_snapshots"
-            ),
-            2,
+        non_refresh_condition = (
+            "github.event_name != 'workflow_dispatch' || !inputs.refresh_snapshots"
         )
+        quality = self.quiet_ci.split("  quality:\n", 1)[1].split(
+            "  linux-candidate:\n", 1
+        )[0]
+        linux_symbols_arm64 = self.quiet_ci.split(
+            "  linux-symbols-arm64:\n", 1
+        )[1].split("  platform-check:\n", 1)[0]
+        platform_check = self.quiet_ci.split("  platform-check:\n", 1)[1]
+        for job in (quality, linux_symbols_arm64, platform_check):
+            self.assertIn(non_refresh_condition, job)
 
     def test_quiet_ci_builds_source_bound_hosted_linux_candidate(self) -> None:
         candidate = self.quiet_ci.split("  linux-candidate:\n", 1)[1].split(
-            "  platform-check:\n", 1
+            "  linux-symbols-arm64:\n", 1
         )[0]
         for required in (
             "github.event_name == 'push'",

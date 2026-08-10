@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.1 - 2026-08-10
+
+### Added
+
+- Publishes the 1.2 interaction cohort: the `#2F68C2` assistant marker,
+  fixed-phrase working row with model and effort, `↓ newer` navigation cue,
+  exact-width composer repair, complete resumed history, and hosted-only build
+  flow described in 1.2.0 below.
+
+### Fixed
+
+- Made both Linux musl release targets emit SHA-1 GNU build IDs so each
+  stripped executable remains verifiably paired with its debug sidecar.
+- Added an arm64 hosted pre-tag symbol-archiver gate and distinct diagnostics
+  for missing, mismatched, or strip-mutated build IDs. `quiet-v1.2.0` was not
+  published after this gate rejected its Linux arm64 package; its immutable tag
+  remains the failed source record.
+
 ## 1.2.0 - 2026-08-10
 
 ### Added
