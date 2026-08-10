@@ -654,9 +654,8 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         }
 
         let clear_start = last_nonblank_column + 1;
-        if clear_start < row.len()
-            && row[clear_start..] != a.content[row_start + clear_start..row_end]
-        {
+        let row_changed = row != &a.content[row_start..row_end];
+        if clear_start < row.len() && row_changed {
             let (x, y) = a.pos_of(row_start + clear_start);
             updates.push(DrawCommand::ClearToEnd { x, y, bg });
         }
