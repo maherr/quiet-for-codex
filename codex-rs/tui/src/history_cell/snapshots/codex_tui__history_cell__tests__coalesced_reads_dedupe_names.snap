@@ -1,7 +1,0 @@
----
-source: tui/src/history_cell.rs
-assertion_line: 5166
-expression: rendered
----
-• Explored
-  └ Read file auth.rs, shimmer.rs

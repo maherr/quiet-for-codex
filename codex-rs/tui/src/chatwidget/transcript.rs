@@ -1,12 +1,26 @@
 //! Transcript and active-cell bookkeeping for `ChatWidget`.
 
 use super::HistoryCell;
+use std::sync::Arc;
 
 #[derive(Default)]
 pub(super) struct TranscriptState {
     pub(super) active_cell: Option<Box<dyn HistoryCell>>,
+    /// Finalized cells waiting for the app layer to commit them into retained history.
+    ///
+    /// They remain part of the live surface until the matching commit event is applied, closing
+    /// the otherwise observable frame where a cell has left `active_cell` but is not yet history.
+    pub(super) pending_history_commits: Vec<Arc<dyn HistoryCell>>,
+    /// Independent handoff count used to arm the live-tail gap detector.
+    ///
+    /// Keeping this separate from `pending_history_commits` means a future regression that drops
+    /// the renderable before its commit acknowledgement produces an observable mismatch instead
+    /// of the same confident zero as a healthy handoff.
+    pub(super) pending_history_handoffs: usize,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     pub(super) active_cell_revision: u64,
+    pub(super) token_activity_revision: u64,
+    pub(super) rate_limit_revision: u64,
     /// Source revision represented by the current retained streaming cell.
     pub(super) retained_stream_source_revision: Option<u64>,
     /// Raw markdown of the most recently completed agent response that
@@ -46,6 +60,14 @@ impl TranscriptState {
         // Wrapping avoids overflow; wraparound would require 2^64 bumps and at
         // worst causes a one-time cache-key collision.
         self.active_cell_revision = self.active_cell_revision.wrapping_add(1);
+    }
+
+    pub(super) fn bump_token_activity_revision(&mut self) {
+        self.token_activity_revision = self.token_activity_revision.wrapping_add(1);
+    }
+
+    pub(super) fn bump_rate_limit_revision(&mut self) {
+        self.rate_limit_revision = self.rate_limit_revision.wrapping_add(1);
     }
 
     pub(super) fn record_agent_markdown(&mut self, markdown: String) {

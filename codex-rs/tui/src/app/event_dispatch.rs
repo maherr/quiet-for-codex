@@ -425,8 +425,19 @@ impl App {
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
             }
+            AppEvent::CommitPendingHistoryCell(cell) => {
+                self.insert_history_cell_arc(tui, Arc::clone(&cell));
+                self.chat_widget.note_history_commit_completed(&cell);
+            }
+            AppEvent::BeginToolRunTurn { turn_id } => {
+                self.begin_tool_run_turn(tui, turn_id);
+            }
+            AppEvent::SealToolRun { turn_id, reason } => {
+                self.seal_tool_run(tui, &turn_id, reason);
+            }
             AppEvent::CommitRetainedStreamCell(cell) => {
-                self.insert_history_cell(tui, cell);
+                self.insert_history_cell_arc(tui, Arc::clone(&cell));
+                self.chat_widget.note_history_commit_completed(&cell);
                 self.chat_widget.note_stream_commit_completed();
                 self.insert_pending_usage_output_after_stream_shutdown(tui);
             }

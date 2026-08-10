@@ -7,13 +7,85 @@ use super::*;
 
 impl App {
     pub(super) fn insert_history_cell(&mut self, tui: &mut tui::Tui, cell: Box<dyn HistoryCell>) {
-        let cell: Arc<dyn HistoryCell> = cell.into();
+        self.insert_history_cell_arc(tui, cell.into());
+    }
+
+    pub(super) fn insert_history_cell_arc(
+        &mut self,
+        tui: &mut tui::Tui,
+        cell: Arc<dyn HistoryCell>,
+    ) {
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::SourceAppend);
+        let seal = self
+            .chat_widget
+            .tool_run_lifecycle
+            .before_source_append(cell.as_ref());
+        if self.chat_widget.tool_run_lifecycle.is_active() {
+            crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::SourceAppendOpen);
+        }
+        if let Some(seal) = seal {
+            self.commit_history_cell(
+                tui,
+                Arc::new(seal),
+                Some(crate::quiet_metrics::ToolRunSealReason::Barrier),
+            );
+        }
+        self.commit_history_cell(tui, cell, /*seal_reason*/ None);
+    }
+
+    pub(super) fn begin_tool_run_turn(&mut self, tui: &mut tui::Tui, turn_id: String) {
+        let Some(seal) = self.chat_widget.tool_run_lifecycle.begin_turn(turn_id) else {
+            return;
+        };
+        self.commit_history_cell(
+            tui,
+            Arc::new(seal),
+            Some(crate::quiet_metrics::ToolRunSealReason::TurnBoundary),
+        );
+    }
+
+    pub(super) fn seal_tool_run(
+        &mut self,
+        tui: &mut tui::Tui,
+        turn_id: &str,
+        reason: crate::quiet_metrics::ToolRunSealReason,
+    ) {
+        let Some(seal) = self.chat_widget.tool_run_lifecycle.seal_turn(turn_id) else {
+            return;
+        };
+        self.commit_history_cell(tui, Arc::new(seal), Some(reason));
+    }
+
+    pub(super) fn seal_trailing_tool_run(&mut self, tui: &mut tui::Tui) {
+        let Some(seal) = self.chat_widget.tool_run_lifecycle.seal_open_run() else {
+            return;
+        };
+        self.commit_history_cell(
+            tui,
+            Arc::new(seal),
+            Some(crate::quiet_metrics::ToolRunSealReason::ReplayEnd),
+        );
+    }
+
+    fn commit_history_cell(
+        &mut self,
+        tui: &mut tui::Tui,
+        cell: Arc<dyn HistoryCell>,
+        seal_reason: Option<crate::quiet_metrics::ToolRunSealReason>,
+    ) {
+        if let Some(reason) = seal_reason {
+            crate::quiet_metrics::bump_seal(reason);
+        }
+        let is_tool_run_seal = seal_reason.is_some();
         if let Some(Overlay::Transcript(t)) = &mut self.overlay {
             t.insert_cell(cell.clone());
             tui.frame_requester().schedule_frame();
         }
         self.chat_widget.transcript_cells.push(cell.clone());
         self.owned_screen_push_cell(cell.clone());
+        if is_tool_run_seal {
+            self.sync_active_agent_label();
+        }
         if self.has_owned_screen() {
             self.chat_widget.request_pending_usage_output_insertion();
             if !self.owned_screen_replay_in_progress() {
@@ -24,8 +96,12 @@ impl App {
         let width = self
             .chat_widget
             .history_wrap_width(tui.terminal.last_known_screen_size.width);
-        let appended_cell_touches_compact_group =
-            self.appended_cell_touches_compact_tool_group(width);
+        let sealed_compact_group = is_tool_run_seal
+            && self.compact_tool_groups_enabled()
+            && compact_tool_groups::seal_completes_compact_tool_group(
+                &self.chat_widget.transcript_cells,
+                self.chat_widget.transcript_cells.len().saturating_sub(1),
+            );
         if self
             .chat_widget
             .initial_history_replay_buffer
@@ -33,12 +109,16 @@ impl App {
             .is_some()
         {
             self.insert_history_cell_lines_with_initial_replay_buffer(tui, cell.as_ref(), width);
-        } else if appended_cell_touches_compact_group && self.overlay.is_none() {
+        } else if sealed_compact_group && self.overlay.is_none() {
             let terminal_width = tui.terminal.last_known_screen_size.into();
-            if let Err(err) = self.reflow_transcript_now(tui, terminal_width) {
+            if let Err(err) = self.reflow_transcript_now(
+                tui,
+                terminal_width,
+                super::resize_reflow::InlineReflowReason::Seal,
+            ) {
                 tracing::warn!(
                     error = %err,
-                    "failed to reflow transcript after compact tool group append"
+                    "failed to reflow transcript after compact tool run seal"
                 );
             }
         } else {
@@ -46,7 +126,9 @@ impl App {
         }
         // A committed cell can unblock a settled /usage card that was waiting
         // behind a transient active cell or a provisional stream tail.
-        self.chat_widget.request_pending_usage_output_insertion();
+        if !is_tool_run_seal {
+            self.chat_widget.request_pending_usage_output_insertion();
+        }
     }
 
     pub(super) fn promote_background_terminal_lifecycle(
@@ -56,17 +138,26 @@ impl App {
         cell: Box<dyn HistoryCell>,
     ) -> Result<()> {
         let cell: Arc<dyn HistoryCell> = cell.into();
-        promote_background_terminal_cell(&mut self.chat_widget.transcript_cells, call_id, cell);
+        let replaced_source = promote_background_terminal_cell(
+            &mut self.chat_widget.transcript_cells,
+            call_id,
+            Arc::clone(&cell),
+        );
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.replace_cells(self.chat_widget.transcript_cells.clone());
         }
-        if self.has_owned_screen() {
+        if self.has_owned_screen()
+            && !replaced_source.is_some_and(|source_index| {
+                self.replace_owned_screen_source_cell(source_index, Arc::clone(&cell))
+            })
+        {
             self.sync_owned_screen_cells();
         }
         self.refresh_lifecycle_history(tui)
     }
 
     pub(super) fn refresh_lifecycle_history(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.sync_active_agent_label();
         if self.has_owned_screen() {
             tui.frame_requester().schedule_frame();
             return Ok(());
@@ -79,7 +170,11 @@ impl App {
             return Ok(());
         }
         let terminal_width = tui.terminal.last_known_screen_size.into();
-        self.reflow_transcript_now(tui, terminal_width)?;
+        self.reflow_transcript_now(
+            tui,
+            terminal_width,
+            super::resize_reflow::InlineReflowReason::Structural,
+        )?;
         tui.frame_requester().schedule_frame();
         Ok(())
     }
@@ -220,7 +315,11 @@ impl App {
     pub(super) fn reset_transcript_state_after_clear(&mut self) {
         self.overlay = None;
         self.chat_widget.transcript_cells.clear();
-        self.sync_owned_screen_cells();
+        self.chat_widget.clear_pending_history_commits();
+        self.chat_widget.tool_run_lifecycle.reset_open_run();
+        self.sync_owned_screen_cells_with_reason(
+            crate::quiet_metrics::QuietMetric::FullProjectionReset,
+        );
         self.finish_owned_screen_replay();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
@@ -232,6 +331,7 @@ impl App {
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
         self.skill_load_warnings.clear();
+        self.sync_active_agent_label();
     }
 }
 
@@ -239,7 +339,7 @@ fn promote_background_terminal_cell(
     transcript_cells: &mut Vec<Arc<dyn HistoryCell>>,
     call_id: &str,
     cell: Arc<dyn HistoryCell>,
-) {
+) -> Option<usize> {
     if let Some(index) = transcript_cells.iter().position(|candidate| {
         candidate
             .as_any()
@@ -247,8 +347,10 @@ fn promote_background_terminal_cell(
             .is_some_and(|exec| exec.is_single_call(call_id))
     }) {
         transcript_cells[index] = cell;
+        Some(index)
     } else {
         transcript_cells.push(cell);
+        None
     }
 }
 

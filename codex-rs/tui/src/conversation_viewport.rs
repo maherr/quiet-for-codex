@@ -6,6 +6,7 @@
 //! representation remains owned by `pager_overlay`.
 
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -21,6 +22,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::chatwidget::ActiveCellDisplaySnapshot;
+use crate::chatwidget::ActiveCellLane;
 use crate::chatwidget::ActiveCellRenderKey;
 use crate::conversation_selection::CellSelectionProjection;
 use crate::conversation_selection::ConversationSelection;
@@ -48,7 +50,10 @@ pub(crate) struct ConversationViewport {
     cells: Vec<Arc<dyn HistoryCell>>,
     render_mode: HistoryRenderMode,
     live_tail_key: Option<LiveTailKey>,
-    live_cells: Vec<ActiveCellDisplaySnapshot>,
+    live_primary_cells: Vec<Arc<ActiveCellDisplaySnapshot>>,
+    live_token_cells: Vec<Arc<ActiveCellDisplaySnapshot>>,
+    live_rate_limit_cells: Vec<Arc<ActiveCellDisplaySnapshot>>,
+    live_cells: Vec<Arc<ActiveCellDisplaySnapshot>>,
     deferred_cells: Option<Vec<Arc<dyn HistoryCell>>>,
     deferred_render_mode: Option<HistoryRenderMode>,
     selection: ConversationSelection,
@@ -77,8 +82,10 @@ struct SelectionProjectionCache {
 struct LiveTailKey {
     width: u16,
     revision: u64,
+    primary_present: bool,
     is_stream_continuation: bool,
-    animation_tick: Option<u64>,
+    token_activity_revision: Option<u64>,
+    rate_limit_revision: Option<u64>,
 }
 
 impl ConversationViewport {
@@ -93,6 +100,9 @@ impl ConversationViewport {
             cells,
             render_mode,
             live_tail_key: None,
+            live_primary_cells: Vec::new(),
+            live_token_cells: Vec::new(),
+            live_rate_limit_cells: Vec::new(),
             live_cells: Vec::new(),
             deferred_cells: None,
             deferred_render_mode: None,
@@ -321,42 +331,65 @@ impl ConversationViewport {
         }
     }
 
-    /// Replaces only the committed tail while preserving the retained prefix and scroll state.
-    ///
-    /// Compact tool summaries use this when one newly committed tool extends the trailing group.
-    /// Rebuilding the entire conversation for every tool completion would make long sessions pay
-    /// an avoidable O(history) cost even though only the final presentation cell changed.
-    pub(crate) fn replace_tail(
+    /// Replaces one committed source range without rebuilding the retained prefix or suffix.
+    pub(crate) fn replace_range(
         &mut self,
+        width: u16,
+        start: usize,
         remove_count: usize,
         replacement: Vec<Arc<dyn HistoryCell>>,
     ) {
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::RangeReplacement);
+        let start = start.min(self.cells.len());
+        let end = start.saturating_add(remove_count).min(self.cells.len());
         if self.selection.is_active() {
             let cells = self
                 .deferred_cells
                 .get_or_insert_with(|| self.cells.clone());
-            cells.truncate(cells.len().saturating_sub(remove_count));
-            cells.extend(replacement);
+            cells.splice(start..end, replacement);
             return;
         }
 
         self.invalidate_selection_projections();
         let follow_bottom = self.should_follow_bottom();
         self.take_live_tail_renderables();
-        for _ in 0..remove_count.min(self.cells.len()) {
-            self.cells.pop();
-            self.content.pop();
+        let scroll_offset = self.content.scroll_offset();
+        let replacement_len = replacement.len();
+        let (old_top, old_bottom) =
+            self.content
+                .renderable_range_rows(width, start, end.saturating_sub(start));
+        let mut next_renderables = Vec::with_capacity(replacement.len());
+        for (offset, cell) in replacement.iter().enumerate() {
+            next_renderables.push(Self::cell_renderable(
+                cell.clone(),
+                self.render_mode,
+                start.saturating_add(offset) > 0,
+            ));
         }
-        for cell in replacement {
-            let has_prior_cells = !self.cells.is_empty();
-            let renderable = Self::cell_renderable(cell.clone(), self.render_mode, has_prior_cells);
-            self.cells.push(cell);
-            self.content.push(renderable);
-        }
+        self.cells.splice(start..end, replacement);
+        self.content
+            .replace_range(start, end.saturating_sub(start), next_renderables);
+
+        let (new_top, new_bottom) =
+            self.content
+                .renderable_range_rows(width, start, replacement_len);
         self.push_live_tail_renderables();
         if follow_bottom {
             self.content.scroll_to_bottom();
+        } else if old_bottom <= scroll_offset {
+            let old_height = old_bottom.saturating_sub(old_top);
+            let new_height = new_bottom.saturating_sub(new_top);
+            let adjusted = if new_height >= old_height {
+                scroll_offset.saturating_add(new_height - old_height)
+            } else {
+                scroll_offset.saturating_sub(old_height - new_height)
+            };
+            self.content.set_scroll_offset(adjusted);
         }
+    }
+
+    pub(crate) fn committed_cell_position(&self, target: &Arc<dyn HistoryCell>) -> Option<usize> {
+        self.cells.iter().position(|cell| Arc::ptr_eq(cell, target))
     }
 
     pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
@@ -368,6 +401,9 @@ impl ConversationViewport {
         let follow_bottom = self.should_follow_bottom();
         self.take_live_tail_renderables();
         self.live_tail_key = None;
+        self.live_primary_cells.clear();
+        self.live_token_cells.clear();
+        self.live_rate_limit_cells.clear();
         self.live_cells.clear();
         let retained_prefix = self
             .cells
@@ -403,6 +439,9 @@ impl ConversationViewport {
         let follow_bottom = self.should_follow_bottom();
         self.take_live_tail_renderables();
         self.live_tail_key = None;
+        self.live_primary_cells.clear();
+        self.live_token_cells.clear();
+        self.live_rate_limit_cells.clear();
         self.live_cells.clear();
         self.render_mode = render_mode;
         self.content
@@ -416,7 +455,7 @@ impl ConversationViewport {
         &mut self,
         width: u16,
         active_key: Option<ActiveCellRenderKey>,
-        compute_cells: impl FnOnce(u16) -> Option<Vec<ActiveCellDisplaySnapshot>>,
+        mut compute_cells: impl FnMut(u16, ActiveCellLane) -> Option<Vec<ActiveCellDisplaySnapshot>>,
     ) {
         // A drag's screen coordinates and source projections must describe the same immutable
         // content. Active cells can mutate on every output delta or animation tick, so defer all
@@ -433,7 +472,10 @@ impl ConversationViewport {
                 (None, _) => return,
                 (Some(current), Some(next))
                     if current.revision == next.revision
-                        && current.is_stream_continuation == next.is_stream_continuation =>
+                        && current.primary_present == next.primary_present
+                        && current.is_stream_continuation == next.is_stream_continuation
+                        && current.token_activity_revision == next.token_activity_revision
+                        && current.rate_limit_revision == next.rate_limit_revision =>
                 {
                     // The semantic live tail is unchanged, so it is safe to re-render it at the
                     // new width before remapping the selection's source-backed endpoints.
@@ -444,22 +486,103 @@ impl ConversationViewport {
         let next_key = active_key.map(|key| LiveTailKey {
             width,
             revision: key.revision,
+            primary_present: key.primary_present,
             is_stream_continuation: key.is_stream_continuation,
-            animation_tick: key.animation_tick,
+            token_activity_revision: key.token_activity_revision,
+            rate_limit_revision: key.rate_limit_revision,
         });
         if self.live_tail_key == next_key {
             return;
         }
 
+        let previous_key = self.live_tail_key;
+        let width_changed = previous_key.map(|key| key.width) != next_key.map(|key| key.width);
+        let primary_changed = width_changed
+            || previous_key.map(|key| {
+                (
+                    key.revision,
+                    key.primary_present,
+                    key.is_stream_continuation,
+                )
+            }) != next_key.map(|key| {
+                (
+                    key.revision,
+                    key.primary_present,
+                    key.is_stream_continuation,
+                )
+            });
+        let token_changed = width_changed
+            || previous_key.map(|key| key.token_activity_revision)
+                != next_key.map(|key| key.token_activity_revision);
+        let rate_limit_changed = width_changed
+            || previous_key.map(|key| key.rate_limit_revision)
+                != next_key.map(|key| key.rate_limit_revision);
         let follow_bottom = !self.selection.is_active() && self.should_follow_bottom();
         self.take_live_tail_renderables();
         if !self.selection.is_active() {
             self.selection_projection_cache = None;
         }
         self.live_tail_key = next_key;
+        if primary_changed {
+            self.live_primary_cells.clear();
+            if next_key.is_some_and(|key| key.primary_present) {
+                crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::LivePrimaryRebuild);
+                self.live_primary_cells = compute_cells(width, ActiveCellLane::Primary)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(Arc::new)
+                    .collect();
+            }
+        }
+        if token_changed {
+            self.live_token_cells.clear();
+            if next_key.is_some_and(|key| key.token_activity_revision.is_some()) {
+                crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::LiveTokenRebuild);
+                self.live_token_cells = compute_cells(width, ActiveCellLane::TokenActivity)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(Arc::new)
+                    .collect();
+            }
+        }
+        if rate_limit_changed {
+            self.live_rate_limit_cells.clear();
+            if next_key.is_some_and(|key| key.rate_limit_revision.is_some()) {
+                crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::LiveRateLimitRebuild);
+                self.live_rate_limit_cells = compute_cells(width, ActiveCellLane::RateLimit)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(Arc::new)
+                    .collect();
+            }
+        }
         self.live_cells.clear();
+        self.live_cells
+            .extend(self.live_primary_cells.iter().cloned());
+        self.live_cells
+            .extend(self.live_token_cells.iter().cloned());
+        self.live_cells
+            .extend(self.live_rate_limit_cells.iter().cloned());
+        #[cfg(any(debug_assertions, test, feature = "quiet-bench"))]
+        {
+            let live_rows = self
+                .live_cells
+                .iter()
+                .map(|cell| {
+                    u64::try_from(
+                        Paragraph::new(Text::from(visible_lines_ref(&cell.lines)))
+                            .wrap(Wrap { trim: false })
+                            .line_count(width),
+                    )
+                    .unwrap_or(u64::MAX)
+                })
+                .sum();
+            crate::quiet_metrics::record_max(
+                crate::quiet_metrics::QuietMetric::LiveTailMaxRows,
+                live_rows,
+            );
+        }
         if next_key.is_some() {
-            self.live_cells = compute_cells(width).unwrap_or_default();
             self.push_live_tail_renderables();
         }
         if follow_bottom {
@@ -467,14 +590,40 @@ impl ConversationViewport {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn is_following_bottom(&self) -> bool {
         self.content.is_following_bottom()
     }
 
-    #[cfg(test)]
     pub(crate) fn committed_cell_count(&self) -> usize {
         self.cells.len()
+    }
+
+    pub(crate) fn committed_range_intersects_viewport(
+        &mut self,
+        width: u16,
+        start: usize,
+        count: usize,
+        area: Rect,
+    ) -> bool {
+        if area.is_empty() || count == 0 {
+            return false;
+        }
+        let (top, bottom) = self.content.renderable_range_rows(width, start, count);
+        let viewport_top = self.content.scroll_offset();
+        let viewport_bottom = viewport_top.saturating_add(usize::from(area.height));
+        top < viewport_bottom && bottom > viewport_top
+    }
+
+    pub(crate) fn visible_committed_cell_range(&mut self, area: Rect) -> Option<(usize, usize)> {
+        if area.is_empty() || self.cells.is_empty() {
+            return None;
+        }
+        let top = self.content.scroll_offset();
+        let bottom = top.saturating_add(usize::from(area.height.saturating_sub(1)));
+        let first = self.content.renderable_hit(area.width, top)?.0;
+        let last = self.content.renderable_hit(area.width, bottom)?.0;
+        let max = self.cells.len().saturating_sub(1);
+        Some((first.min(max), last.min(max)))
     }
 
     fn render_cells(
@@ -503,7 +652,7 @@ impl ConversationViewport {
         let renderable: Box<dyn Renderable> = Box::new(ConversationCellRenderable {
             cell,
             render_mode,
-            cached_height: Cell::new(None),
+            prepared: RefCell::new(None),
         });
         if has_prior_cells && !is_stream_continuation {
             Self::with_leading_spacing(renderable)
@@ -513,11 +662,14 @@ impl ConversationViewport {
     }
 
     fn live_tail_renderable(
-        lines: Vec<HyperlinkLine>,
+        lines: Arc<[HyperlinkLine]>,
         has_prior_cells: bool,
         is_stream_continuation: bool,
     ) -> Box<dyn Renderable> {
-        let renderable: Box<dyn Renderable> = Box::new(HyperlinkLinesRenderable { lines });
+        let renderable: Box<dyn Renderable> = Box::new(HyperlinkLinesRenderable {
+            lines,
+            cached_height: Cell::new(None),
+        });
         if has_prior_cells && !is_stream_continuation {
             Self::with_leading_spacing(renderable)
         } else {
@@ -529,7 +681,7 @@ impl ConversationViewport {
         let mut has_prior_cells = !self.cells.is_empty();
         for cell in &self.live_cells {
             self.content.push(Self::live_tail_renderable(
-                cell.lines.clone(),
+                Arc::clone(&cell.lines),
                 has_prior_cells,
                 cell.is_stream_continuation,
             ));
@@ -567,6 +719,9 @@ impl ConversationViewport {
         let follow_bottom = self.should_follow_bottom();
         self.take_live_tail_renderables();
         self.live_tail_key = None;
+        self.live_primary_cells.clear();
+        self.live_token_cells.clear();
+        self.live_rate_limit_cells.clear();
         self.live_cells.clear();
         if let Some(cells) = deferred_cells {
             self.cells = cells;
@@ -664,7 +819,8 @@ impl ConversationViewport {
                     return;
                 };
                 HyperlinkLinesRenderable {
-                    lines: cell.lines.clone(),
+                    lines: Arc::clone(&cell.lines),
+                    cached_height: Cell::new(None),
                 }
                 .desired_height(width)
             };
@@ -832,14 +988,51 @@ impl ConversationViewport {
 struct ConversationCellRenderable {
     cell: Arc<dyn HistoryCell>,
     render_mode: HistoryRenderMode,
-    cached_height: Cell<Option<(u16, u16)>>,
+    prepared: RefCell<Option<PreparedConversationCell>>,
+}
+
+struct PreparedConversationCell {
+    width: u16,
+    hyperlink_lines: Arc<[HyperlinkLine]>,
+    height: u16,
+}
+
+impl ConversationCellRenderable {
+    fn prepare(&self, width: u16) -> (Arc<[HyperlinkLine]>, u16) {
+        if let Some(prepared) = self.prepared.borrow().as_ref()
+            && prepared.width == width
+        {
+            crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::PreparedCellCacheHit);
+            return (Arc::clone(&prepared.hyperlink_lines), prepared.height);
+        }
+        if self.prepared.borrow().is_some() {
+            crate::quiet_metrics::bump(
+                crate::quiet_metrics::QuietMetric::PreparedCellCacheInvalidation,
+            );
+        }
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::PreparedCellCacheMiss);
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::LayoutStableCellMeasurement);
+        let hyperlink_lines = self
+            .cell
+            .display_hyperlink_lines_shared_for_mode(width, self.render_mode);
+        let height = Paragraph::new(Text::from(visible_lines_ref(&hyperlink_lines)))
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+            .try_into()
+            .unwrap_or(/*default*/ 0);
+        *self.prepared.borrow_mut() = Some(PreparedConversationCell {
+            width,
+            hyperlink_lines: Arc::clone(&hyperlink_lines),
+            height,
+        });
+        (hyperlink_lines, height)
+    }
 }
 
 impl Renderable for ConversationCellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let hyperlink_lines = self
-            .cell
-            .display_hyperlink_lines_shared_for_mode(area.width, self.render_mode);
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::LayoutVisibleCellDraw);
+        let (hyperlink_lines, _) = self.prepare(area.width);
         let block_style = match self.render_mode {
             HistoryRenderMode::Rich => self.cell.rich_block_style().unwrap_or_default(),
             HistoryRenderMode::Raw => Default::default(),
@@ -854,14 +1047,7 @@ impl Renderable for ConversationCellRenderable {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        if let Some((cached_width, height)) = self.cached_height.get()
-            && cached_width == width
-        {
-            return height;
-        }
-        let height = self.cell.desired_height_for_mode(width, self.render_mode);
-        self.cached_height.set(Some((width, height)));
-        height
+        self.prepare(width).1
     }
 
     fn has_stable_height(&self) -> bool {
@@ -870,7 +1056,8 @@ impl Renderable for ConversationCellRenderable {
 }
 
 struct HyperlinkLinesRenderable {
-    lines: Vec<HyperlinkLine>,
+    lines: Arc<[HyperlinkLine]>,
+    cached_height: Cell<Option<(u16, u16)>>,
 }
 
 impl Renderable for HyperlinkLinesRenderable {
@@ -884,11 +1071,18 @@ impl Renderable for HyperlinkLinesRenderable {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        Paragraph::new(Text::from(visible_lines_ref(&self.lines)))
+        if let Some((cached_width, height)) = self.cached_height.get()
+            && cached_width == width
+        {
+            return height;
+        }
+        let height = Paragraph::new(Text::from(visible_lines_ref(&self.lines)))
             .wrap(Wrap { trim: false })
             .line_count(width)
             .try_into()
-            .unwrap_or(/*default*/ 0)
+            .unwrap_or(/*default*/ 0);
+        self.cached_height.set(Some((width, height)));
+        height
     }
 
     fn has_stable_height(&self) -> bool {

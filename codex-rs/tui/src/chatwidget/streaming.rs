@@ -177,6 +177,11 @@ impl ChatWidget {
             // Before starting a plan stream, flush any active exec cell group.
             self.flush_unified_exec_wait_streak();
             self.flush_active_cell();
+            if !delta.is_empty() {
+                self.seal_tool_run_before_visible_stream(
+                    crate::quiet_metrics::ToolRunSealReason::PlanStream,
+                );
+            }
             self.plan_stream_controller = Some(PlanStreamController::new(
                 self.current_stream_width(/*reserved_cols*/ 4),
                 &self.config.cwd,
@@ -299,6 +304,11 @@ impl ChatWidget {
 
         // Update the shimmer header to the extracted reasoning chunk header.
         let header = header.to_string();
+        self.flush_unified_exec_wait_streak();
+        self.flush_active_cell();
+        self.seal_tool_run_before_visible_stream(
+            crate::quiet_metrics::ToolRunSealReason::ReasoningStream,
+        );
         self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
         if !self.set_status_header(header) {
             self.request_redraw();
@@ -482,6 +492,11 @@ impl ChatWidget {
             // Before starting an agent stream, flush any active exec cell group.
             self.flush_unified_exec_wait_streak();
             self.flush_active_cell();
+            if !delta.is_empty() {
+                self.seal_tool_run_before_visible_stream(
+                    crate::quiet_metrics::ToolRunSealReason::AssistantStream,
+                );
+            }
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
             // calls), render a separator before starting the next streamed assistant message.
             if self.transcript.needs_final_message_separator && self.transcript.had_work_activity {
@@ -517,6 +532,18 @@ impl ChatWidget {
         if delta.contains('\n') && self.sync_active_stream_tail() {
             self.request_redraw();
         }
+    }
+
+    /// Queue the presentation boundary after any pending tool commit and before the first
+    /// visible non-tool stream row. The scoped sender preserves pane generation and FIFO order.
+    fn seal_tool_run_before_visible_stream(&self, reason: crate::quiet_metrics::ToolRunSealReason) {
+        let Some(turn_id) = self.turn_lifecycle.last_turn_id.as_ref() else {
+            return;
+        };
+        self.app_event_tx.send(AppEvent::SealToolRun {
+            turn_id: turn_id.clone(),
+            reason,
+        });
     }
 
     pub(super) fn active_cell_is_stream_tail(&self) -> bool {
@@ -678,7 +705,6 @@ impl ChatWidget {
     pub(super) fn queue_retained_stream_cell(&mut self, cell: impl HistoryCell + 'static) {
         self.transcript.needs_final_message_separator = true;
         self.note_stream_commit_queued();
-        self.app_event_tx
-            .send(AppEvent::CommitRetainedStreamCell(Box::new(cell)));
+        self.queue_pending_history_commit(Box::new(cell), /*retained_stream*/ true);
     }
 }

@@ -145,7 +145,7 @@ impl BackgroundTerminalLifecycleCell {
         let state = self
             .state
             .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         f(&state)
     }
 
@@ -153,7 +153,7 @@ impl BackgroundTerminalLifecycleCell {
         let mut state = self
             .state
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         f(&mut state)
     }
 }
@@ -485,7 +485,7 @@ impl AgentFleetLifecycleCell {
         let state = self
             .state
             .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         f(&state)
     }
 
@@ -493,7 +493,7 @@ impl AgentFleetLifecycleCell {
         let mut state = self
             .state
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         f(&mut state)
     }
 }

@@ -2,5 +2,4 @@
 source: tui/src/app/compact_tool_groups.rs
 expression: rendered
 ---
-▸ Work: read 2 files · 2 files edited · tests passed · build passed · check passed · called gmail.read_thread · Alt+I
-  inspect · Alt+O all
+▸ Work: read 2 files · 2 files edited · tests passed · build passed · check passed · called gmail.read_thread

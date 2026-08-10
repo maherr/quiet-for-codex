@@ -984,6 +984,48 @@ impl ChatComposer {
         [composer_rect, remote_images_rect, textarea_rect, popup_rect]
     }
 
+    pub(crate) fn runtime_footer_area(
+        &self,
+        area: Rect,
+        textarea_right_reserve: u16,
+    ) -> Option<Rect> {
+        if !self.runtime_footer_lane_available() {
+            return None;
+        }
+        let [_, _, _, footer_area] =
+            self.layout_areas_with_textarea_right_reserve(area, textarea_right_reserve);
+        (footer_area.height > 0).then_some(Rect::new(
+            footer_area.x,
+            footer_area.bottom().saturating_sub(1),
+            footer_area.width,
+            1,
+        ))
+    }
+
+    pub(crate) fn runtime_footer_lane_available(&self) -> bool {
+        matches!(self.popups.active, ActivePopup::None)
+            && self.custom_footer_height().is_none()
+            && !self.footer.plan_mode_nudge_visible
+            && matches!(
+                self.footer_mode(),
+                FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+            )
+    }
+
+    pub(crate) fn runtime_footer_right_line(&self) -> Option<Line<'static>> {
+        if let Some(label) = self.footer.side_conversation_context_label.as_ref() {
+            return Some(side_conversation_context_line(label));
+        }
+        if let Some(line) = self.shell_mode_footer_line() {
+            return Some(line);
+        }
+        if let Some(line) = self.mode_indicator_line(/*show_cycle_hint*/ false) {
+            return Some(line);
+        }
+        let line = self.right_footer_line_with_context();
+        (!line.spans.is_empty()).then_some(line)
+    }
+
     fn footer_spacing(footer_hint_height: u16) -> u16 {
         if footer_hint_height == 0 {
             0

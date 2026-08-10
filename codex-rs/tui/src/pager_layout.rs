@@ -27,6 +27,12 @@ impl PagerLayoutCache {
         self.unstable_indices.retain(|index| *index < len);
     }
 
+    pub(crate) fn invalidate_from(&mut self, index: usize) {
+        if self.width.is_some() {
+            self.truncate(index);
+        }
+    }
+
     pub(crate) fn ensure(&mut self, renderables: &[Box<dyn Renderable>], width: u16) {
         if self.width != Some(width) {
             self.rebuild(renderables, width);

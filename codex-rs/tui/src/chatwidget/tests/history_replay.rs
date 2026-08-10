@@ -1144,12 +1144,14 @@ async fn replayed_reasoning_item_preserves_summary_parts_and_hides_raw_reasoning
         ReplayKind::ThreadSnapshot,
     );
 
-    let rendered = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => {
-            lines_to_single_string(&cell.transcript_lines(/*width*/ 80))
-        }
-        other => panic!("expected InsertHistoryCell, got {other:?}"),
-    };
+    let rendered = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                Some(lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            }
+            _ => None,
+        })
+        .expect("expected completed reasoning history cell");
     assert_eq!(rendered, "• done\n");
     assert!(!rendered.contains("Raw reasoning"));
 }
@@ -1416,12 +1418,14 @@ async fn live_reasoning_summary_drops_empty_parts_without_losing_content() {
         /*replay_kind*/ None,
     );
 
-    let rendered = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => {
-            lines_to_single_string(&cell.transcript_lines(/*width*/ 80))
-        }
-        other => panic!("expected InsertHistoryCell, got {other:?}"),
-    };
+    let rendered = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                Some(lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            }
+            _ => None,
+        })
+        .expect("expected completed reasoning history cell");
     assert_eq!(rendered, "• done\n");
 }
 

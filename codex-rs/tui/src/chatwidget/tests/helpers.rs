@@ -331,9 +331,12 @@ pub(super) fn drain_insert_history(
 ) -> Vec<Vec<ratatui::text::Line<'static>>> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        let cell = match ev {
+        let cell: Arc<dyn HistoryCell> = match ev {
             AppEvent::InsertHistoryCell(cell)
-            | AppEvent::PromoteBackgroundTerminalLifecycle { cell, .. } => cell,
+            | AppEvent::PromoteBackgroundTerminalLifecycle { cell, .. } => cell.into(),
+            AppEvent::CommitPendingHistoryCell(cell) | AppEvent::CommitRetainedStreamCell(cell) => {
+                cell
+            }
             _ => continue,
         };
         let mut lines = cell.display_lines(/*width*/ 80);
@@ -1136,13 +1139,6 @@ pub(super) fn active_hook_blob(chat: &ChatWidget) -> String {
     };
     let lines = cell.display_lines(/*width*/ 80);
     lines_to_single_string(&lines)
-}
-
-pub(super) fn expire_quiet_hook_linger(chat: &mut ChatWidget) {
-    if let Some(cell) = chat.active_hook_cell.as_mut() {
-        cell.expire_quiet_runs_now_for_test();
-    }
-    chat.pre_draw_tick();
 }
 
 pub(super) fn reveal_running_hooks(chat: &mut ChatWidget) {

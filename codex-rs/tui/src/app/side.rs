@@ -213,7 +213,7 @@ impl App {
                 crate::keymap::KeymapContext::Global,
                 "toggle_side_conversation",
             )
-            .map(|binding| binding.display_label().to_string());
+            .map(super::super::key_hint::ShortcutHint::display_label);
 
         if let Some(parent) = self.chat_widget.by_slot_mut(PaneSlot::Parent) {
             clear_side_thread_ui(&mut parent.chat_widget);

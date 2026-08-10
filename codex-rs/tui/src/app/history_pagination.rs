@@ -114,6 +114,7 @@ impl App {
             RawReasoningVisibility::Hidden
         };
         let width = tui.terminal.last_known_screen_size.width;
+        let mut owned_projection_needs_sync = false;
         if !hidden_item_ids.is_empty() {
             let user_items = turns
                 .iter()
@@ -176,6 +177,16 @@ impl App {
                         .saturating_sub(removed_visible_users);
                 }
                 for index in hidden_transcript_indices {
+                    if self.has_owned_screen()
+                        && !owned_projection_needs_sync
+                        && !self.splice_owned_screen_source_cells(
+                            index,
+                            /*remove_count*/ 1,
+                            Vec::new(),
+                        )
+                    {
+                        owned_projection_needs_sync = true;
+                    }
                     self.chat_widget.transcript_cells.remove(index);
                 }
                 if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
@@ -223,7 +234,7 @@ impl App {
             let index = overlay.prepend(cells.clone(), width);
             self.chat_widget
                 .transcript_cells
-                .splice(index..index, cells);
+                .splice(index..index, cells.clone());
             let previous_state = overlay.set_history_state(if self.scrollback_has_older_history {
                 TranscriptHistoryState::Partial
             } else {
@@ -231,6 +242,12 @@ impl App {
             });
             continue_to_start = previous_state == TranscriptHistoryState::LoadingBeginning
                 && self.scrollback_has_older_history;
+            if self.has_owned_screen()
+                && !owned_projection_needs_sync
+                && !self.splice_owned_screen_source_cells(index, /*remove_count*/ 0, cells)
+            {
+                owned_projection_needs_sync = true;
+            }
         } else {
             let index = self
                 .chat_widget
@@ -240,18 +257,29 @@ impl App {
                 .map_or(/*default*/ 0, |index| index.saturating_add(/*rhs*/ 1));
             self.chat_widget
                 .transcript_cells
-                .splice(index..index, cells);
-            let wrap_width = self.chat_widget.history_wrap_width(width);
-            let rendered_rows = self
-                .render_transcript_lines_for_reflow(wrap_width)
-                .lines
-                .len();
-            self.schedule_immediate_resize_reflow(tui);
-            if self.scrollback_history_needs_top_up(rendered_rows)
-                && self.request_older_history_page(app_server, thread_id)
-            {
-                return Ok(());
+                .splice(index..index, cells.clone());
+            if self.has_owned_screen() {
+                if !owned_projection_needs_sync
+                    && !self.splice_owned_screen_source_cells(index, /*remove_count*/ 0, cells)
+                {
+                    owned_projection_needs_sync = true;
+                }
+            } else {
+                let wrap_width = self.chat_widget.history_wrap_width(width);
+                let rendered_rows = self
+                    .render_transcript_lines_for_reflow(wrap_width)
+                    .lines
+                    .len();
+                self.schedule_immediate_resize_reflow(tui);
+                if self.scrollback_history_needs_top_up(rendered_rows)
+                    && self.request_older_history_page(app_server, thread_id)
+                {
+                    return Ok(());
+                }
             }
+        }
+        if owned_projection_needs_sync {
+            self.sync_owned_screen_cells();
         }
         if continue_to_start
             && self.request_older_history_page(app_server, thread_id)

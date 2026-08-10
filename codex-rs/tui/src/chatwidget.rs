@@ -796,15 +796,15 @@ pub(crate) struct ActiveCellRenderKey {
     /// revision gives a cheap way to say "same active cell, but its transcript output is different
     /// now". Callers bump it on any mutation that can affect `HistoryCell::transcript_lines`.
     pub(crate) revision: u64,
+    /// Whether the primary lane contains an active or commit-pending history cell.
+    pub(crate) primary_present: bool,
     /// Whether the active cell continues the prior stream, which affects
     /// spacing between transcript blocks.
     pub(crate) is_stream_continuation: bool,
-    /// Optional animation tick for time-dependent transcript output.
-    ///
-    /// When this changes, the overlay recomputes the cached tail even if the revision and width
-    /// are unchanged, which is how shimmer/spinner visuals can animate in the overlay without any
-    /// underlying data change.
-    pub(crate) animation_tick: Option<u64>,
+    /// Cache-busting revision for the transient token-activity card, when present.
+    pub(crate) token_activity_revision: Option<u64>,
+    /// Cache-busting revision for the transient rate-limit hint, when present.
+    pub(crate) rate_limit_revision: Option<u64>,
 }
 
 /// One width-specific active history cell prepared for the application-owned viewport.
@@ -812,9 +812,16 @@ pub(crate) struct ActiveCellRenderKey {
 /// Keeping active cells separate lets the viewport preserve history-cell spacing and selection
 /// mappings instead of flattening all in-flight output into presentation-only terminal lines.
 pub(crate) struct ActiveCellDisplaySnapshot {
-    pub(crate) lines: Vec<HyperlinkLine>,
+    pub(crate) lines: Arc<[HyperlinkLine]>,
     pub(crate) selection_projection: crate::active_cell_selection::ActiveCellSelectionHandle,
     pub(crate) is_stream_continuation: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ActiveCellLane {
+    Primary,
+    TokenActivity,
+    RateLimit,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1244,9 +1251,79 @@ impl ChatWidget {
                 return;
             }
             self.transcript.needs_final_message_separator = true;
-            self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
+            self.queue_pending_history_commit(active, /*retained_stream*/ false);
             self.request_pending_usage_output_insertion();
         }
+    }
+
+    fn queue_pending_history_commit(&mut self, cell: Box<dyn HistoryCell>, retained_stream: bool) {
+        let cell: Arc<dyn HistoryCell> = cell.into();
+        self.transcript.pending_history_handoffs =
+            self.transcript.pending_history_handoffs.saturating_add(1);
+        self.transcript
+            .pending_history_commits
+            .push(Arc::clone(&cell));
+        self.bump_active_cell_revision();
+        if retained_stream {
+            self.app_event_tx
+                .send(AppEvent::CommitRetainedStreamCell(cell));
+        } else {
+            self.app_event_tx
+                .send(AppEvent::CommitPendingHistoryCell(cell));
+        }
+    }
+
+    pub(crate) fn note_history_commit_completed(&mut self, committed: &Arc<dyn HistoryCell>) {
+        if let Some(index) = self
+            .transcript
+            .pending_history_commits
+            .iter()
+            .position(|pending| Arc::ptr_eq(pending, committed))
+        {
+            self.transcript.pending_history_commits.remove(index);
+            self.transcript.pending_history_handoffs =
+                self.transcript.pending_history_handoffs.saturating_sub(1);
+            self.bump_active_cell_revision();
+        }
+    }
+
+    pub(crate) fn clear_pending_history_commits(&mut self) {
+        if !self.transcript.pending_history_commits.is_empty()
+            || self.transcript.pending_history_handoffs != 0
+        {
+            self.transcript.pending_history_commits.clear();
+            self.transcript.pending_history_handoffs = 0;
+            self.bump_active_cell_revision();
+        }
+    }
+
+    /// Observe an actual draw for a finalized-cell handoff that has lost its live representation.
+    pub(crate) fn observe_live_tail_frame(&self, width: u16) {
+        #[cfg(any(debug_assertions, test, feature = "quiet-bench"))]
+        {
+            let expected = self.transcript.pending_history_handoffs;
+            if expected == 0 {
+                return;
+            }
+            let mode = self.history_render_mode();
+            let visible = self
+                .transcript
+                .pending_history_commits
+                .iter()
+                .filter(|cell| {
+                    !cell
+                        .display_hyperlink_lines_for_mode(width.max(1), mode)
+                        .is_empty()
+                })
+                .count();
+            if visible < expected {
+                crate::quiet_metrics::bump(
+                    crate::quiet_metrics::QuietMetric::LiveTailHoleObservation,
+                );
+            }
+        }
+        #[cfg(not(any(debug_assertions, test, feature = "quiet-bench")))]
+        let _ = width;
     }
 
     pub(crate) fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
@@ -1390,6 +1467,14 @@ impl ChatWidget {
         self.transcript.bump_active_cell_revision();
     }
 
+    fn bump_token_activity_revision(&mut self) {
+        self.transcript.bump_token_activity_revision();
+    }
+
+    fn bump_rate_limit_revision(&mut self) {
+        self.transcript.bump_rate_limit_revision();
+    }
+
     /// Mark the active cell as failed (✗) and flush it into history.
     fn finalize_active_cell_as_failed(&mut self) {
         if let Some(mut cell) = self.transcript.active_cell.take() {
@@ -1399,7 +1484,8 @@ impl ChatWidget {
             } else if let Some(tool) = cell.as_any_mut().downcast_mut::<McpToolCallCell>() {
                 tool.mark_failed();
             }
-            self.add_boxed_history(cell);
+            self.transcript.needs_final_message_separator = true;
+            self.queue_pending_history_commit(cell, /*retained_stream*/ false);
             self.request_pending_usage_output_insertion();
         }
     }
@@ -1943,31 +2029,34 @@ impl ChatWidget {
     /// key is what it uses to decide whether it must recompute. When there are no live cells, this
     /// returns `None` so the overlay can drop the tail entirely.
     ///
-    /// If callers mutate the active cell's transcript output without bumping the revision (or
-    /// providing an appropriate animation tick), the overlay will keep showing a stale tail while
-    /// the main viewport updates.
+    /// If callers mutate the active cell's transcript output without bumping the revision, the
+    /// overlay will keep showing a stale tail while the main viewport updates.
     pub(crate) fn active_cell_render_key(&self) -> Option<ActiveCellRenderKey> {
         let cell = self.transcript.active_cell.as_ref();
-        let hook_cell = self.active_hook_cell.as_ref();
+        let first_primary = self
+            .transcript
+            .pending_history_commits
+            .first()
+            .map(Arc::as_ref)
+            .or_else(|| cell.map(Box::as_ref));
+        let primary_present = first_primary.is_some();
         let token_activity_cell = self.pending_token_activity_output();
         let rate_limit_reset_hint = self.pending_rate_limit_reset_hint();
-        if cell.is_none()
-            && hook_cell.is_none()
-            && token_activity_cell.is_none()
-            && rate_limit_reset_hint.is_none()
-        {
+        if !primary_present && token_activity_cell.is_none() && rate_limit_reset_hint.is_none() {
             return None;
         }
         Some(ActiveCellRenderKey {
             revision: self.transcript.active_cell_revision,
-            is_stream_continuation: cell
-                .map(|cell| cell.is_stream_continuation())
+            primary_present,
+            is_stream_continuation: first_primary
+                .map(HistoryCell::is_stream_continuation)
                 .unwrap_or(false),
-            animation_tick: cell
-                .and_then(|cell| cell.transcript_animation_tick())
-                .or_else(|| {
-                    hook_cell.and_then(super::history_cell::HistoryCell::transcript_animation_tick)
-                }),
+            token_activity_revision: token_activity_cell
+                .is_some()
+                .then_some(self.transcript.token_activity_revision),
+            rate_limit_revision: rate_limit_reset_hint
+                .is_some()
+                .then_some(self.transcript.rate_limit_revision),
         })
     }
 
@@ -1979,51 +2068,98 @@ impl ChatWidget {
     /// exec cell does not briefly expose raw `$ command` output before it is committed. Callers
     /// should pass the same width the overlay uses; using a different width will cause wrapping
     /// mismatches between the live tail and committed cells.
+    #[cfg(test)]
     pub(crate) fn active_cell_transcript_hyperlink_lines(
         &self,
         width: u16,
     ) -> Option<Vec<HyperlinkLine>> {
-        let render_mode = self.history_render_mode();
         let mut lines = Vec::new();
-        if let Some(cell) = self.transcript.active_cell.as_ref() {
-            lines.extend(cell.display_hyperlink_lines_for_mode(width, render_mode));
-        }
-        if let Some(hook_cell) = self.active_hook_cell.as_ref() {
-            // Compute hook lines first so hidden hooks do not add a separator.
-            let hook_lines = hook_cell.display_hyperlink_lines_for_mode(width, render_mode);
-            if !hook_lines.is_empty() && !lines.is_empty() {
+        for lane in [
+            ActiveCellLane::Primary,
+            ActiveCellLane::TokenActivity,
+            ActiveCellLane::RateLimit,
+        ] {
+            let Some(lane_lines) =
+                self.active_cell_transcript_hyperlink_lines_for_lane(width, lane)
+            else {
+                continue;
+            };
+            if !lines.is_empty() {
                 lines.push(HyperlinkLine::from(""));
             }
-            lines.extend(hook_lines);
-        }
-        if let Some(token_activity_cell) = self.pending_token_activity_output() {
-            let token_activity_lines = token_activity_cell.transcript_hyperlink_lines(width);
-            if !token_activity_lines.is_empty() && !lines.is_empty() {
-                lines.push(HyperlinkLine::from(""));
-            }
-            lines.extend(token_activity_lines);
-        }
-        if let Some(rate_limit_reset_hint) = self.pending_rate_limit_reset_hint() {
-            let hint_lines = rate_limit_reset_hint.transcript_hyperlink_lines(width);
-            if !hint_lines.is_empty() && !lines.is_empty() {
-                lines.push(HyperlinkLine::from(""));
-            }
-            lines.extend(hint_lines);
+            lines.extend(lane_lines);
         }
         (!lines.is_empty()).then_some(lines)
     }
 
-    pub(crate) fn primary_active_cell(&self) -> Option<&dyn HistoryCell> {
-        self.transcript.active_cell.as_deref()
+    pub(crate) fn active_cell_transcript_hyperlink_lines_for_lane(
+        &self,
+        width: u16,
+        lane: ActiveCellLane,
+    ) -> Option<Vec<HyperlinkLine>> {
+        let render_mode = self.history_render_mode();
+        let mut lines = Vec::new();
+        let mut append = |cell: &dyn HistoryCell| {
+            let next = cell.display_hyperlink_lines_for_mode(width, render_mode);
+            if next.is_empty() {
+                return;
+            }
+            if !lines.is_empty() && !cell.is_stream_continuation() {
+                lines.push(HyperlinkLine::from(""));
+            }
+            lines.extend(next);
+        };
+        match lane {
+            ActiveCellLane::Primary => {
+                for cell in &self.transcript.pending_history_commits {
+                    append(cell.as_ref());
+                }
+                if let Some(cell) = self.transcript.active_cell.as_deref() {
+                    append(cell);
+                }
+            }
+            ActiveCellLane::TokenActivity => {
+                if let Some(cell) = self.pending_token_activity_output() {
+                    append(cell);
+                }
+            }
+            ActiveCellLane::RateLimit => {
+                if let Some(cell) = self.pending_rate_limit_reset_hint() {
+                    append(cell);
+                }
+            }
+        }
+        (!lines.is_empty()).then_some(lines)
     }
 
     /// Returns the active history cells prepared for the application-owned viewport.
     ///
     /// Each item retains its own selection projection and stream-continuation state so the
     /// retained viewport can treat live output exactly like committed history cells.
+    #[cfg(test)]
     pub(crate) fn active_cell_display_snapshots(
         &self,
         width: u16,
+    ) -> Option<Vec<ActiveCellDisplaySnapshot>> {
+        let mut snapshots = Vec::new();
+        for lane in [
+            ActiveCellLane::Primary,
+            ActiveCellLane::TokenActivity,
+            ActiveCellLane::RateLimit,
+        ] {
+            if let Some(mut lane_snapshots) =
+                self.active_cell_display_snapshots_for_lane(width, lane)
+            {
+                snapshots.append(&mut lane_snapshots);
+            }
+        }
+        (!snapshots.is_empty()).then_some(snapshots)
+    }
+
+    pub(crate) fn active_cell_display_snapshots_for_lane(
+        &self,
+        width: u16,
+        lane: ActiveCellLane,
     ) -> Option<Vec<ActiveCellDisplaySnapshot>> {
         let mode = self.history_render_mode();
         let mut snapshots = Vec::new();
@@ -2033,26 +2169,30 @@ impl ChatWidget {
                 return;
             }
             snapshots.push(ActiveCellDisplaySnapshot {
-                lines,
+                lines: Arc::from(lines),
                 selection_projection: cell.active_cell_selection_handle(width, mode),
                 is_stream_continuation: cell.is_stream_continuation(),
             });
         };
-        if let Some(cell) = self.transcript.active_cell.as_deref() {
-            append(cell);
-        }
-        if let Some(cell) = self
-            .active_hook_cell
-            .as_ref()
-            .filter(|cell| cell.should_render())
-        {
-            append(cell);
-        }
-        if let Some(cell) = self.pending_token_activity_output() {
-            append(cell);
-        }
-        if let Some(cell) = self.pending_rate_limit_reset_hint() {
-            append(cell);
+        match lane {
+            ActiveCellLane::Primary => {
+                for cell in &self.transcript.pending_history_commits {
+                    append(cell.as_ref());
+                }
+                if let Some(cell) = self.transcript.active_cell.as_deref() {
+                    append(cell);
+                }
+            }
+            ActiveCellLane::TokenActivity => {
+                if let Some(cell) = self.pending_token_activity_output() {
+                    append(cell);
+                }
+            }
+            ActiveCellLane::RateLimit => {
+                if let Some(cell) = self.pending_rate_limit_reset_hint() {
+                    append(cell);
+                }
+            }
         }
         (!snapshots.is_empty()).then_some(snapshots)
     }
@@ -2072,7 +2212,7 @@ impl ChatWidget {
             if !lines.is_empty() {
                 lines.push(HyperlinkLine::from(""));
             }
-            lines.extend(snapshot.lines);
+            lines.extend(snapshot.lines.iter().cloned());
         }
         (!lines.is_empty()).then_some(lines)
     }

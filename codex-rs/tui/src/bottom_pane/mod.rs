@@ -13,6 +13,8 @@
 //!
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
+#[cfg(any(debug_assertions, test, feature = "quiet-bench"))]
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
@@ -50,7 +52,11 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -190,6 +196,14 @@ pub(crate) enum CancellationEvent {
     NotHandled,
 }
 
+#[cfg(any(debug_assertions, test, feature = "quiet-bench"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BottomPaneHeightMode {
+    Ordinary,
+    Detailed,
+    Modal,
+}
+
 use crate::bottom_pane::prompt_args::parse_slash_name;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
@@ -244,6 +258,8 @@ pub(crate) struct BottomPane {
     /// When a status row exists, this summary is mirrored inline in that row;
     /// when no status row exists, it renders as its own footer row.
     unified_exec_footer: UnifiedExecFooter,
+    /// Routine hook status shares the composer's existing footer row after its reveal delay.
+    hook_status: Option<String>,
     /// Preview of pending steers and queued drafts shown above the composer.
     pending_input_preview: PendingInputPreview,
     /// Inactive threads with pending approval requests.
@@ -251,6 +267,8 @@ pub(crate) struct BottomPane {
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
     keymap: RuntimeKeymap,
+    #[cfg(any(debug_assertions, test, feature = "quiet-bench"))]
+    last_height_observation: Cell<Option<(u16, u16, BottomPaneHeightMode)>>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -301,6 +319,7 @@ impl BottomPane {
             is_task_running: false,
             status: None,
             unified_exec_footer: UnifiedExecFooter::new(),
+            hook_status: None,
             pending_input_preview: PendingInputPreview::new(),
             pending_thread_approvals: PendingThreadApprovals::new(),
             esc_backtrack_hint: false,
@@ -308,6 +327,8 @@ impl BottomPane {
             context_window_percent: None,
             context_window_used_tokens: None,
             keymap,
+            #[cfg(any(debug_assertions, test, feature = "quiet-bench"))]
+            last_height_observation: Cell::new(None),
         }
     }
 
@@ -1354,8 +1375,24 @@ impl BottomPane {
     /// standalone unified-exec footer row to be visible.
     fn sync_status_inline_message(&mut self) {
         if let Some(status) = self.status.as_mut() {
-            status.update_inline_message(self.unified_exec_footer.summary_text());
+            let message = self
+                .hook_status
+                .iter()
+                .cloned()
+                .chain(self.unified_exec_footer.summary_text())
+                .collect::<Vec<_>>()
+                .join(" · ");
+            status.update_inline_message((!message.is_empty()).then_some(message));
         }
+    }
+
+    pub(crate) fn set_hook_status(&mut self, status: Option<String>) {
+        if self.hook_status == status {
+            return;
+        }
+        self.hook_status = status;
+        self.sync_status_inline_message();
+        self.request_redraw();
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -1765,23 +1802,34 @@ impl BottomPane {
             RenderableItem::Borrowed(view)
         } else {
             let mut flex = FlexRenderable::new();
-            if let Some(status) = &self.status {
+            let detailed_status = self.status.as_ref().filter(|status| status.has_details());
+            let ordinary_status = self.status.as_ref().filter(|status| !status.has_details());
+            let fallback = if self.status.is_none() {
+                self.hook_status
+                    .clone()
+                    .or_else(|| self.unified_exec_footer.summary_text())
+                    .map(|text| Line::from(text).dim())
+            } else {
+                None
+            };
+            let footer_lane_available = self.composer.runtime_footer_lane_available();
+            let mut has_status_or_footer = false;
+            if let Some(status) = detailed_status {
                 flex.push(/*flex*/ 0, RenderableItem::Borrowed(status));
-            }
-            // Avoid double-surfacing the same summary and avoid adding an extra
-            // row while the status line is already visible.
-            if self.status.is_none() && !self.unified_exec_footer.is_empty() {
-                flex.push(
-                    /*flex*/ 0,
-                    RenderableItem::Borrowed(&self.unified_exec_footer),
-                );
+                has_status_or_footer = true;
+            } else if !footer_lane_available {
+                if let Some(status) = ordinary_status {
+                    flex.push(/*flex*/ 0, RenderableItem::Borrowed(status));
+                    has_status_or_footer = true;
+                } else if let Some(line) = fallback.as_ref() {
+                    flex.push(/*flex*/ 0, RenderableItem::Owned(line.clone().into()));
+                    has_status_or_footer = true;
+                }
             }
             let has_pending_thread_approvals = !self.pending_thread_approvals.is_empty();
             let has_pending_input = !self.pending_input_preview.queued_messages.is_empty()
                 || !self.pending_input_preview.pending_steers.is_empty()
                 || !self.pending_input_preview.rejected_steers.is_empty();
-            let has_status_or_footer =
-                self.status.is_some() || !self.unified_exec_footer.is_empty();
             let has_inline_previews = has_pending_thread_approvals || has_pending_input;
             if has_inline_previews && has_status_or_footer {
                 flex.push(/*flex*/ 0, RenderableItem::Owned("".into()));
@@ -1802,14 +1850,13 @@ impl BottomPane {
             }
             let mut flex2 = FlexRenderable::new();
             flex2.push(/*flex*/ 1, RenderableItem::Owned(flex.into()));
-            let composer: RenderableItem<'_> = if composer_right_reserve == 0 {
-                RenderableItem::Borrowed(&self.composer)
-            } else {
+            let composer: RenderableItem<'_> =
                 RenderableItem::Owned(Box::new(ChatComposerRightReserveRenderable {
                     composer: &self.composer,
                     right_reserve: composer_right_reserve,
-                }))
-            };
+                    ordinary_status: ordinary_status.filter(|_| footer_lane_available),
+                    fallback: footer_lane_available.then_some(fallback).flatten(),
+                }));
             flex2.push(/*flex*/ 0, composer);
             RenderableItem::Owned(Box::new(flex2))
         }
@@ -1853,6 +1900,8 @@ impl BottomPane {
 struct ChatComposerRightReserveRenderable<'a> {
     composer: &'a chat_composer::ChatComposer,
     right_reserve: u16,
+    ordinary_status: Option<&'a StatusIndicatorWidget>,
+    fallback: Option<Line<'static>>,
 }
 
 impl Renderable for ChatComposerRightReserveRenderable<'_> {
@@ -1863,6 +1912,32 @@ impl Renderable for ChatComposerRightReserveRenderable<'_> {
             /*mask_char*/ None,
             self.right_reserve,
         );
+        if self.ordinary_status.is_none() && self.fallback.is_none() {
+            return;
+        }
+        let Some(footer_area) = self.composer.runtime_footer_area(area, self.right_reserve) else {
+            return;
+        };
+        Clear.render(footer_area, buf);
+        let right_line = self.composer.runtime_footer_right_line();
+        let left_width = right_line
+            .as_ref()
+            .and_then(|line| footer::max_left_width_for_right(footer_area, line.width() as u16))
+            .unwrap_or_else(|| footer_area.width.saturating_sub(2));
+        let content_area = Rect::new(
+            footer_area.x.saturating_add(2),
+            footer_area.y,
+            left_width,
+            footer_area.height,
+        );
+        if let Some(status) = self.ordinary_status {
+            status.render(content_area, buf);
+        } else if let Some(line) = self.fallback.as_ref() {
+            Paragraph::new(line.clone()).render(content_area, buf);
+        }
+        if let Some(line) = right_line.as_ref() {
+            footer::render_context_right(footer_area, buf, line);
+        }
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -1885,7 +1960,39 @@ impl Renderable for BottomPane {
         self.as_renderable().render(area, buf);
     }
     fn desired_height(&self, width: u16) -> u16 {
-        self.as_renderable().desired_height(width)
+        let height = self.as_renderable().desired_height(width);
+        #[cfg(any(debug_assertions, test, feature = "quiet-bench"))]
+        {
+            let mode = if !self.view_stack.is_empty() {
+                BottomPaneHeightMode::Modal
+            } else if self
+                .status
+                .as_ref()
+                .is_some_and(StatusIndicatorWidget::has_details)
+            {
+                BottomPaneHeightMode::Detailed
+            } else {
+                BottomPaneHeightMode::Ordinary
+            };
+            if let Some((previous_width, previous_height, previous_mode)) =
+                self.last_height_observation.get()
+                && previous_width == width
+                && previous_height != height
+            {
+                crate::quiet_metrics::bump(match (previous_mode, mode) {
+                    (BottomPaneHeightMode::Ordinary, BottomPaneHeightMode::Ordinary) => {
+                        crate::quiet_metrics::QuietMetric::BottomHeightOrdinaryChange
+                    }
+                    (BottomPaneHeightMode::Modal, _) | (_, BottomPaneHeightMode::Modal) => {
+                        crate::quiet_metrics::QuietMetric::BottomHeightModalChange
+                    }
+                    _ => crate::quiet_metrics::QuietMetric::BottomHeightDetailedChange,
+                });
+            }
+            self.last_height_observation
+                .set(Some((width, height, mode)));
+        }
+        height
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_renderable().cursor_pos(area)
@@ -2368,43 +2475,34 @@ mod tests {
         use crossterm::event::KeyModifiers;
         pane.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
 
-        // After denial, since the task is still running, the status indicator should be
-        // visible above the composer. The modal should be gone.
+        // After denial, since the task is still running, the status indicator should share the
+        // composer's footer row. The modal should be gone.
         assert!(
             pane.view_stack.is_empty(),
             "no active modal view after denial"
         );
 
-        // Render and ensure the top row includes the Working header and a composer line below.
+        // Render and ensure both the Working status and composer are visible.
         // Give the animation thread a moment to tick.
         std::thread::sleep(Duration::from_millis(120));
-        let area = Rect::new(0, 0, 40, 6);
+        let area = Rect::new(0, 0, 80, 6);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
-        let mut row0 = String::new();
-        for x in 0..area.width {
-            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
-        }
+        let rendered = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            row0.contains("Working"),
-            "expected Working header after denial on row 0: {row0:?}"
+            rendered.contains("Working"),
+            "expected Working status after denial: {rendered:?}"
         );
-
-        // Composer placeholder should be visible somewhere below.
-        let mut found_composer = false;
-        for y in 1..area.height {
-            let mut row = String::new();
-            for x in 0..area.width {
-                row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
-            }
-            if row.contains("Ask Codex") {
-                found_composer = true;
-                break;
-            }
-        }
         assert!(
-            found_composer,
-            "expected composer visible under status line"
+            rendered.contains("Ask Codex"),
+            "expected composer visible with status: {rendered:?}"
         );
     }
 
@@ -2426,13 +2524,173 @@ mod tests {
         // Begin a task: show initial status.
         pane.set_task_running(/*running*/ true);
 
-        // Use a height that allows the status line to be visible above the composer.
-        let area = Rect::new(0, 0, 40, 6);
+        // Use enough width to verify the footer status text without narrow-layout truncation.
+        let area = Rect::new(0, 0, 80, 6);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
 
         let bufs = snapshot_buffer(&buf);
-        assert!(bufs.contains("• Working"), "expected Working header");
+        assert!(bufs.contains("Working"), "expected Working footer status");
+    }
+
+    #[test]
+    fn running_status_and_interrupt_hint_remain_visible_with_command_popup() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: false,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(/*running*/ true);
+        pane.insert_str("/rev");
+        assert!(pane.composer.popup_active());
+        assert!(!pane.composer.runtime_footer_lane_available());
+
+        let width = 80;
+        let area = Rect::new(0, 0, width, pane.desired_height(width));
+        let rendered = render_snapshot(&pane, area);
+        assert!(rendered.contains("Working"), "missing status: {rendered}");
+        assert!(
+            rendered.contains("interrupt"),
+            "missing interrupt affordance: {rendered}"
+        );
+        assert!(rendered.contains("/rev"), "missing popup query: {rendered}");
+    }
+
+    #[test]
+    fn routine_hook_status_remains_visible_when_footer_lane_is_unavailable() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: false,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_hook_status(Some("Hook: checking policy".to_string()));
+        pane.insert_str("/rev");
+        assert!(!pane.composer.runtime_footer_lane_available());
+
+        let width = 80;
+        let area = Rect::new(0, 0, width, pane.desired_height(width));
+        let rendered = render_snapshot(&pane, area);
+        assert!(
+            rendered.contains("Hook: checking policy"),
+            "missing hook status: {rendered}"
+        );
+    }
+
+    #[test]
+    fn ordinary_running_and_hook_status_keep_the_idle_composer_height() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: false,
+            skills: Some(Vec::new()),
+        });
+        let width = 80;
+        let idle_height = pane.desired_height(width);
+        crate::quiet_metrics::reset_for_test();
+
+        pane.set_task_running(/*running*/ true);
+        assert!(
+            pane.status
+                .as_ref()
+                .is_some_and(|status| !status.has_details())
+        );
+        assert_eq!(pane.desired_height(width), idle_height);
+
+        pane.set_hook_status(Some("Running PreToolUse hook: checking policy".to_string()));
+        assert_eq!(pane.desired_height(width), idle_height);
+
+        pane.set_task_running(/*running*/ false);
+        assert_eq!(pane.desired_height(width), idle_height);
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::BottomHeightOrdinaryChange,
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn detailed_and_modal_height_transitions_use_their_own_metric_dimensions() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: false,
+            skills: Some(Vec::new()),
+        });
+        let width = 80;
+        let _ = pane.desired_height(width);
+        crate::quiet_metrics::reset_for_test();
+
+        pane.set_task_running(/*running*/ true);
+        let _ = pane.desired_height(width);
+        pane.update_status(
+            "Working".to_string(),
+            Some("Detailed action required".to_string()),
+            StatusDetailsCapitalization::Preserve,
+            STATUS_DETAILS_DEFAULT_MAX_LINES,
+        );
+        let _ = pane.desired_height(width);
+        pane.update_status(
+            "Working".to_string(),
+            None,
+            StatusDetailsCapitalization::Preserve,
+            STATUS_DETAILS_DEFAULT_MAX_LINES,
+        );
+        let _ = pane.desired_height(width);
+
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::BottomHeightDetailedChange,
+            ),
+            2,
+            "opening and closing detailed status must both stay out of the ordinary budget"
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::BottomHeightOrdinaryChange,
+            ),
+            0
+        );
+
+        pane.push_view(Box::new(CompletingView::default()));
+        let _ = pane.desired_height(width);
+        pane.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let _ = pane.desired_height(width);
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::BottomHeightModalChange,
+            ),
+            2,
+            "opening and closing a modal must both use the modal dimension"
+        );
     }
 
     #[test]

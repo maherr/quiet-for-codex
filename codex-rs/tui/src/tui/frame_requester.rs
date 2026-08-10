@@ -47,11 +47,13 @@ impl FrameRequester {
 
     /// Schedule a frame draw as soon as possible.
     pub fn schedule_frame(&self) {
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::FrameRequestImmediate);
         let _ = self.frame_schedule_tx.send(Instant::now());
     }
 
     /// Schedule a frame draw to occur after the specified duration.
     pub fn schedule_frame_in(&self, dur: Duration) {
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::FrameRequestDelayed);
         let _ = self.frame_schedule_tx.send(Instant::now() + dur);
     }
 }
@@ -119,7 +121,11 @@ impl FrameScheduler {
                     if next_deadline.is_some() {
                         next_deadline = None;
                         self.rate_limiter.mark_emitted(target);
-                        let _ = self.draw_tx.send(());
+                        if self.draw_tx.send(()).is_ok() {
+                            crate::quiet_metrics::bump(
+                                crate::quiet_metrics::QuietMetric::FrameEmitted,
+                            );
+                        }
                     }
                 }
             }
@@ -148,6 +154,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_schedule_frame_immediate_triggers_once() {
+        crate::quiet_metrics::reset_for_test();
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
         let requester = FrameRequester::new(draw_tx);
 
@@ -167,10 +174,21 @@ mod tests {
         // No second draw should arrive.
         let second = draw_rx.recv().timeout(Duration::from_millis(20)).await;
         assert!(second.is_err(), "unexpected extra draw received");
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::FrameRequestImmediate,
+            ),
+            1
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(crate::quiet_metrics::QuietMetric::FrameEmitted,),
+            1
+        );
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_schedule_frame_in_triggers_at_delay() {
+        crate::quiet_metrics::reset_for_test();
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
         let requester = FrameRequester::new(draw_tx);
 
@@ -193,10 +211,21 @@ mod tests {
         // No second draw should arrive.
         let second = draw_rx.recv().timeout(Duration::from_millis(20)).await;
         assert!(second.is_err(), "unexpected extra draw received");
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::FrameRequestDelayed,
+            ),
+            1
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(crate::quiet_metrics::QuietMetric::FrameEmitted,),
+            1
+        );
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_coalesces_multiple_requests_into_single_draw() {
+        crate::quiet_metrics::reset_for_test();
         let (draw_tx, mut draw_rx) = broadcast::channel(16);
         let requester = FrameRequester::new(draw_tx);
 
@@ -219,6 +248,17 @@ mod tests {
         // No additional draw should be sent for the same coalesced batch.
         let second = draw_rx.recv().timeout(Duration::from_millis(20)).await;
         assert!(second.is_err(), "unexpected extra draw received");
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::FrameRequestImmediate,
+            ),
+            3
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(crate::quiet_metrics::QuietMetric::FrameEmitted,),
+            1,
+            "three same-tick requests must still emit one frame"
+        );
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]

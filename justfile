@@ -105,11 +105,21 @@ test-github-scripts:
 
 # Run explicit workspace benchmark targets.
 bench *args:
-    cargo bench --workspace --bench '*' {args}
+    cargo bench --workspace --bench '*' {{ args }}
+    just quiet-bench {{ args }}
+
+# Run the retained-render benchmark as a dedicated release binary so Cargo does not compile the
+# TUI package's integration-test dependencies or unrelated binaries.
+quiet-bench *args:
+    cargo run --release --jobs 1 -p codex-tui --bin quiet-render-bench --features quiet-bench {{ args }}
 
 # Run benchmark targets once to ensure they start successfully.
 bench-smoke:
     just bench -- --test
+
+# Smoke only the retained-render benchmark.
+quiet-bench-smoke:
+    just quiet-bench -- --test
 
 # Run Bazel-backed end-to-end macrobenchmarks with optimized binaries.
 bench-e2e:

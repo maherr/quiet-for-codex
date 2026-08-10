@@ -38,8 +38,9 @@ pub(super) struct OwnedScreen {
     compact_tool_groups: bool,
     expanded_tool_groups: HashSet<compact_tool_groups::CompactToolGroupId>,
     tool_group_hover: Arc<compact_tool_groups::CompactToolGroupHover>,
-    trailing_tool_run: Option<compact_tool_groups::TrailingCompactToolRun>,
     pending_tool_group_click: Option<compact_tool_groups::CompactToolGroupId>,
+    pending_tool_group_seals: HashSet<compact_tool_groups::CompactToolGroupId>,
+    last_clicked_tool_group: Option<compact_tool_groups::CompactToolGroupId>,
     replay_in_progress: bool,
     last_pane_area: Rect,
     last_conversation_area: Rect,
@@ -66,8 +67,9 @@ impl OwnedScreen {
             compact_tool_groups: chat_widget.history_render_mode() == HistoryRenderMode::Rich,
             expanded_tool_groups: HashSet::new(),
             tool_group_hover: Arc::new(compact_tool_groups::CompactToolGroupHover::default()),
-            trailing_tool_run: None,
             pending_tool_group_click: None,
+            pending_tool_group_seals: HashSet::new(),
+            last_clicked_tool_group: None,
             replay_in_progress: false,
             last_pane_area: Rect::default(),
             last_conversation_area: Rect::default(),
@@ -81,13 +83,24 @@ impl OwnedScreen {
         &mut self,
         cells: Vec<Arc<dyn HistoryCell>>,
         compact_tool_groups: bool,
+        reason: crate::quiet_metrics::QuietMetric,
     ) -> HashSet<compact_tool_groups::CompactToolGroupId> {
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::FullProjection);
+        crate::quiet_metrics::bump(reason);
         // Reprojection can move a retained header while the pointer remains stationary. Clear the
         // cue until the terminal reports another coordinate instead of highlighting stale geometry.
         self.clear_tool_group_hover();
         let valid_groups = compact_tool_groups::compact_tool_group_ids(&cells);
         self.expanded_tool_groups
             .retain(|group| valid_groups.contains(group));
+        self.pending_tool_group_seals
+            .retain(|group| valid_groups.contains(group));
+        if self
+            .last_clicked_tool_group
+            .is_some_and(|group| !valid_groups.contains(&group))
+        {
+            self.last_clicked_tool_group = None;
+        }
         if !compact_tool_groups {
             self.pending_tool_group_click = None;
         }
@@ -97,48 +110,390 @@ impl OwnedScreen {
             &self.expanded_tool_groups,
             &self.tool_group_hover,
         );
-        self.trailing_tool_run = compact_tool_groups
-            .then(|| compact_tool_groups::trailing_compact_tool_run(&cells, &projected))
-            .flatten();
         self.source_cells = cells;
         self.compact_tool_groups = compact_tool_groups;
         self.viewport.replace_cells(projected);
+        self.pending_tool_group_seals.clear();
         valid_groups
+    }
+
+    fn source_cells_match(&self, cells: &[Arc<dyn HistoryCell>]) -> bool {
+        self.source_cells.len() == cells.len()
+            && self
+                .source_cells
+                .iter()
+                .zip(cells)
+                .all(|(left, right)| Arc::ptr_eq(left, right))
+    }
+
+    fn projected_group_position(
+        &self,
+        group: compact_tool_groups::CompactToolGroupId,
+    ) -> Option<usize> {
+        (0..self.viewport.committed_cell_count()).find(|&index| {
+            self.viewport.committed_cell(index).is_some_and(|cell| {
+                compact_tool_groups::compact_tool_group_header_id(
+                    cell.as_ref(),
+                    self.last_conversation_area.width.max(1),
+                    /*row_within_cell*/ 0,
+                ) == Some(group)
+            })
+        })
+    }
+
+    fn apply_tool_group_projection(
+        &mut self,
+        group: compact_tool_groups::CompactToolGroupId,
+        expanded: bool,
+        respect_anchor_guard: bool,
+        reason: crate::quiet_metrics::RangeReplacementReason,
+    ) -> bool {
+        let Some(projection) = compact_tool_groups::compact_tool_group_projection_by_id(
+            &self.source_cells,
+            group,
+            expanded,
+            &self.tool_group_hover,
+        ) else {
+            self.pending_tool_group_seals.remove(&group);
+            return false;
+        };
+        let width = self.last_conversation_area.width.max(1);
+        let projected_position = self.projected_group_position(group);
+        let source_position = self
+            .source_cells
+            .get(projection.source_start)
+            .and_then(|first_source| self.viewport.committed_cell_position(first_source));
+        let (projected_start, remove_count) = if let Some(projected_start) = projected_position {
+            let currently_expanded = self.expanded_tool_groups.contains(&group);
+            (
+                projected_start,
+                1usize.saturating_add(if currently_expanded {
+                    projection.source_cells
+                } else {
+                    0
+                }),
+            )
+        } else if let Some(source_position) = source_position {
+            if respect_anchor_guard
+                && (self.viewport.selection_is_active()
+                    || !self.viewport.is_following_bottom()
+                        && self.viewport.committed_range_intersects_viewport(
+                            width,
+                            source_position,
+                            projection.source_cells,
+                            self.last_conversation_area,
+                        ))
+            {
+                self.pending_tool_group_seals.insert(group);
+                return false;
+            }
+            (source_position, projection.source_cells)
+        } else {
+            if respect_anchor_guard && self.viewport.selection_is_active() {
+                self.pending_tool_group_seals.insert(group);
+            }
+            return false;
+        };
+        crate::quiet_metrics::bump_range_replacement(reason);
+        self.viewport
+            .replace_range(width, projected_start, remove_count, projection.cells);
+        self.pending_tool_group_seals.remove(&group);
+        true
+    }
+
+    fn resolve_pending_tool_group_seals(&mut self) {
+        let pending = self
+            .pending_tool_group_seals
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        for group in pending {
+            self.apply_tool_group_projection(
+                group,
+                /*expanded*/ false,
+                /*respect_anchor_guard*/ true,
+                crate::quiet_metrics::RangeReplacementReason::Seal,
+            );
+        }
+    }
+
+    fn set_compact_tool_groups(&mut self, compact_tool_groups: bool) {
+        if self.compact_tool_groups == compact_tool_groups {
+            return;
+        }
+        let width = self.last_conversation_area.width.max(1);
+        let ids = compact_tool_groups::compact_tool_group_ids_in_order(&self.source_cells);
+        if compact_tool_groups {
+            self.compact_tool_groups = true;
+            for group in ids {
+                let expanded = self.expanded_tool_groups.contains(&group);
+                self.apply_tool_group_projection(
+                    group,
+                    expanded,
+                    /*respect_anchor_guard*/ false,
+                    crate::quiet_metrics::RangeReplacementReason::UserToggle,
+                );
+            }
+        } else {
+            for group in ids.into_iter().rev() {
+                let Some(projected_start) = self.projected_group_position(group) else {
+                    continue;
+                };
+                let Some(source_cells) =
+                    compact_tool_groups::compact_tool_group_cells_by_id(&self.source_cells, group)
+                else {
+                    continue;
+                };
+                let remove_count =
+                    1usize.saturating_add(if self.expanded_tool_groups.contains(&group) {
+                        source_cells.len()
+                    } else {
+                        0
+                    });
+                crate::quiet_metrics::bump_range_replacement(
+                    crate::quiet_metrics::RangeReplacementReason::UserToggle,
+                );
+                self.viewport
+                    .replace_range(width, projected_start, remove_count, source_cells);
+            }
+            self.compact_tool_groups = false;
+            self.pending_tool_group_seals.clear();
+            self.pending_tool_group_click = None;
+            self.clear_tool_group_hover();
+        }
     }
 
     fn push_source_cell(&mut self, cell: Arc<dyn HistoryCell>, compact_tool_groups: bool) {
         self.clear_tool_group_hover();
         if self.compact_tool_groups != compact_tool_groups {
-            self.source_cells.push(cell);
-            let cells = self.source_cells.clone();
-            let _valid_groups = self.replace_source_cells(cells, compact_tool_groups);
-            return;
+            self.set_compact_tool_groups(compact_tool_groups);
         }
 
         if !compact_tool_groups {
-            self.trailing_tool_run = None;
             self.source_cells.push(cell.clone());
+            if tool_run_projection::seal_cell(cell.as_ref()).is_none() {
+                self.viewport.push_cell(cell);
+            }
+            return;
+        }
+
+        self.source_cells.push(Arc::clone(&cell));
+        if tool_run_projection::seal_cell(cell.as_ref()).is_none() {
             self.viewport.push_cell(cell);
             return;
         }
 
-        let reuse_projected_group = !self.viewport.selection_is_active();
-        self.source_cells.push(Arc::clone(&cell));
-        match compact_tool_groups::append_to_trailing_compact_tool_run(
-            &mut self.trailing_tool_run,
-            cell,
+        let seal_index = self.source_cells.len().saturating_sub(1);
+        let Some(group) = compact_tool_groups::compact_tool_group_before_seal(
+            &self.source_cells,
+            seal_index,
+            /*expanded*/ false,
+            &self.tool_group_hover,
+        ) else {
+            return;
+        };
+        self.apply_tool_group_projection(
+            group.id,
+            /*expanded*/ false,
+            /*respect_anchor_guard*/ true,
+            crate::quiet_metrics::RangeReplacementReason::Seal,
+        );
+        self.expanded_tool_groups.remove(&group.id);
+    }
+
+    fn replace_source_cell(
+        &mut self,
+        source_index: usize,
+        replacement: Arc<dyn HistoryCell>,
+        compact_tool_groups: bool,
+    ) -> bool {
+        if self.compact_tool_groups != compact_tool_groups {
+            return false;
+        }
+        let Some(old_source) = self.source_cells.get(source_index).cloned() else {
+            return false;
+        };
+        let old_group = compact_tool_groups::compact_tool_group_containing_source_index(
+            &self.source_cells,
+            source_index,
+        );
+        let width = self.last_conversation_area.width.max(1);
+        let (projected_start, remove_count) = if let Some(group) = old_group {
+            if let Some(projected_start) = self.projected_group_position(group.id) {
+                (
+                    projected_start,
+                    1usize.saturating_add(if self.expanded_tool_groups.contains(&group.id) {
+                        group.source_cells
+                    } else {
+                        0
+                    }),
+                )
+            } else {
+                let Some(source_start) = self
+                    .source_cells
+                    .get(group.source_start)
+                    .and_then(|cell| self.viewport.committed_cell_position(cell))
+                else {
+                    return false;
+                };
+                (source_start, group.source_cells)
+            }
+        } else {
+            let Some(projected_start) = self.viewport.committed_cell_position(&old_source) else {
+                return false;
+            };
+            (projected_start, 1)
+        };
+
+        self.source_cells[source_index] = replacement.clone();
+        let projected = if let Some(group) = old_group {
+            let source_end = group
+                .source_start
+                .saturating_add(group.consumed_cells)
+                .min(self.source_cells.len());
+            let affected = &self.source_cells[group.source_start..source_end];
+            let valid_groups = compact_tool_groups::compact_tool_group_ids(affected);
+            let group_survives = valid_groups.contains(&group.id);
+            if !group_survives {
+                self.expanded_tool_groups.remove(&group.id);
+                self.pending_tool_group_seals.remove(&group.id);
+                if self.pending_tool_group_click == Some(group.id) {
+                    self.pending_tool_group_click = None;
+                }
+                if self.last_clicked_tool_group == Some(group.id) {
+                    self.last_clicked_tool_group = None;
+                }
+                if self.tool_group_hover.hovered() == Some(group.id) {
+                    self.last_hover_position = None;
+                    self.tool_group_hover.update(None);
+                }
+            }
+            let visually_guarded = group_survives
+                && self.pending_tool_group_seals.contains(&group.id)
+                && self.projected_group_position(group.id).is_none();
+            compact_tool_groups::project_owned_cells_with_expanded(
+                affected,
+                compact_tool_groups && !visually_guarded,
+                &self.expanded_tool_groups,
+                &self.tool_group_hover,
+            )
+        } else if tool_run_projection::seal_cell(replacement.as_ref()).is_some() {
+            Vec::new()
+        } else {
+            vec![replacement]
+        };
+        crate::quiet_metrics::bump_range_replacement(
+            crate::quiet_metrics::RangeReplacementReason::Lifecycle,
+        );
+        self.viewport
+            .replace_range(width, projected_start, remove_count, projected);
+        true
+    }
+
+    /// Apply a structural source splice without rebuilding unrelated projection wrappers.
+    ///
+    /// Boundaries must fall between projected cells or complete Work segments. A splice that
+    /// would cut through a sealed segment fails closed so the caller can use the conservative
+    /// source-backed reconciliation path instead.
+    fn splice_source_cells(
+        &mut self,
+        source_index: usize,
+        remove_count: usize,
+        replacements: Vec<Arc<dyn HistoryCell>>,
+        compact_tool_groups: bool,
+    ) -> bool {
+        if self.compact_tool_groups != compact_tool_groups {
+            return false;
+        }
+        let Some(source_end) = source_index.checked_add(remove_count) else {
+            return false;
+        };
+        if source_end > self.source_cells.len() {
+            return false;
+        }
+        let Some(projected_start) = self.projected_source_boundary(source_index) else {
+            return false;
+        };
+        let Some(projected_end) = self.projected_source_boundary(source_end) else {
+            return false;
+        };
+        if projected_end < projected_start {
+            return false;
+        }
+
+        let projected = compact_tool_groups::project_owned_cells_with_expanded(
+            &replacements,
+            compact_tool_groups,
             &self.expanded_tool_groups,
             &self.tool_group_hover,
-            reuse_projected_group,
-        ) {
-            compact_tool_groups::TrailingCompactToolRunUpdate::Push(cell) => {
-                self.viewport.push_cell(cell);
-            }
-            compact_tool_groups::TrailingCompactToolRunUpdate::Replace {
-                remove_count,
-                replacement,
-            } => self.viewport.replace_tail(remove_count, replacement),
+        );
+        self.source_cells
+            .splice(source_index..source_end, replacements);
+
+        let valid_groups = compact_tool_groups::compact_tool_group_ids(&self.source_cells);
+        self.expanded_tool_groups
+            .retain(|group| valid_groups.contains(group));
+        self.pending_tool_group_seals
+            .retain(|group| valid_groups.contains(group));
+        if self
+            .pending_tool_group_click
+            .is_some_and(|group| !valid_groups.contains(&group))
+        {
+            self.pending_tool_group_click = None;
         }
+        if self
+            .last_clicked_tool_group
+            .is_some_and(|group| !valid_groups.contains(&group))
+        {
+            self.last_clicked_tool_group = None;
+        }
+        if self
+            .tool_group_hover
+            .hovered()
+            .is_some_and(|group| !valid_groups.contains(&group))
+        {
+            self.last_hover_position = None;
+            self.tool_group_hover.update(None);
+        }
+
+        let width = self.last_conversation_area.width.max(1);
+        crate::quiet_metrics::bump_range_replacement(
+            crate::quiet_metrics::RangeReplacementReason::Structural,
+        );
+        self.viewport.replace_range(
+            width,
+            projected_start,
+            projected_end.saturating_sub(projected_start),
+            projected,
+        );
+        true
+    }
+
+    fn projected_source_boundary(&self, source_index: usize) -> Option<usize> {
+        if source_index > self.source_cells.len() {
+            return None;
+        }
+        if source_index == self.source_cells.len() {
+            return Some(self.viewport.committed_cell_count());
+        }
+        let source = self.source_cells.get(source_index)?;
+        if tool_run_projection::seal_cell(source.as_ref()).is_some() {
+            return None;
+        }
+        if let Some(group) = compact_tool_groups::compact_tool_group_containing_source_index(
+            &self.source_cells,
+            source_index,
+        ) {
+            if group.source_start != source_index {
+                return None;
+            }
+            return self.projected_group_position(group.id).or_else(|| {
+                self.source_cells
+                    .get(group.source_start)
+                    .and_then(|cell| self.viewport.committed_cell_position(cell))
+            });
+        }
+        self.viewport.committed_cell_position(source)
     }
 
     fn render(
@@ -172,24 +527,16 @@ impl OwnedScreen {
         }
         self.last_rendered_conversation_area = conversation_area;
         self.last_conversation_area = conversation_area;
+        self.resolve_pending_tool_group_seals();
 
         self.viewport
             .set_render_mode(chat_widget.history_render_mode());
+        chat_widget.observe_live_tail_frame(conversation_area.width);
         let active_key = chat_widget.active_cell_render_key();
         let scroll_offset_before_live_tail = self.viewport.scroll_offset();
-        let compact_live_tail = self.compact_tool_groups;
         self.viewport
-            .sync_live_tail(conversation_area.width, active_key, |width| {
-                let mut snapshots = chat_widget.active_cell_display_snapshots(width)?;
-                if compact_live_tail
-                    && let Some(cell) = chat_widget.primary_active_cell()
-                    && let Some(compact) =
-                        compact_tool_groups::compact_active_exec_snapshot(cell, width)
-                    && let Some(primary) = snapshots.first_mut()
-                {
-                    *primary = compact;
-                }
-                Some(snapshots)
+            .sync_live_tail(conversation_area.width, active_key, |width, lane| {
+                chat_widget.active_cell_display_snapshots_for_lane(width, lane)
             });
         if self.viewport.scroll_offset() != scroll_offset_before_live_tail {
             self.clear_tool_group_hover();
@@ -371,17 +718,62 @@ impl OwnedScreen {
         if !self.compact_tool_groups {
             return false;
         }
-        if !self.expanded_tool_groups.insert(group) {
-            self.expanded_tool_groups.remove(&group);
-        }
-        let cells = self.source_cells.clone();
-        let valid_groups = self.replace_source_cells(cells, /*compact_tool_groups*/ true);
-        if !valid_groups.contains(&group) {
+        let expanding = !self.expanded_tool_groups.contains(&group);
+        if !self.apply_tool_group_projection(
+            group,
+            expanding,
+            /*respect_anchor_guard*/ false,
+            crate::quiet_metrics::RangeReplacementReason::UserToggle,
+        ) {
             return false;
         }
+        if expanding {
+            self.expanded_tool_groups.insert(group);
+        } else {
+            self.expanded_tool_groups.remove(&group);
+        }
+        self.last_clicked_tool_group = Some(group);
         self.viewport
             .preserve_scroll_offset_through_next_render(scroll_offset);
         true
+    }
+
+    fn inspection_cells(&mut self) -> Option<Vec<Arc<dyn HistoryCell>>> {
+        let clicked = self.last_clicked_tool_group.filter(|group| {
+            compact_tool_groups::compact_tool_group_cells_by_id(&self.source_cells, *group)
+                .is_some()
+        });
+        let hovered = self.tool_group_hover.hovered().filter(|group| {
+            compact_tool_groups::compact_tool_group_cells_by_id(&self.source_cells, *group)
+                .is_some()
+        });
+        let visible = self
+            .viewport
+            .visible_committed_cell_range(self.last_conversation_area)
+            .and_then(|(first, last)| {
+                (first..=last).rev().find_map(|index| {
+                    let cell = self.viewport.committed_cell(index)?;
+                    compact_tool_groups::compact_tool_group_header_id(
+                        cell.as_ref(),
+                        self.last_conversation_area.width.max(1),
+                        /*row_within_cell*/ 0,
+                    )
+                    .or_else(|| {
+                        compact_tool_groups::compact_tool_group_id_containing_cell(
+                            &self.source_cells,
+                            cell,
+                        )
+                    })
+                })
+            });
+        let latest = compact_tool_groups::latest_compact_tool_group_id(&self.source_cells);
+        [clicked, hovered, visible, latest]
+            .into_iter()
+            .flatten()
+            .next()
+            .and_then(|group| {
+                compact_tool_groups::compact_tool_group_cells_by_id(&self.source_cells, group)
+            })
     }
 }
 
@@ -781,7 +1173,7 @@ impl App {
                     .chat_widget
                     .by_slot_mut(slot)
                     .and_then(|pane| pane.owned_screen.as_mut())
-                    .is_some_and(|screen| screen.clear_tool_group_hover());
+                    .is_some_and(OwnedScreen::clear_tool_group_hover);
             }
         }
         let selection_started = self.chat_widget.by_slot_mut(target).is_some_and(|pane| {
@@ -833,17 +1225,64 @@ impl App {
                 .chat_widget
                 .by_slot_mut(slot)
                 .and_then(|pane| pane.owned_screen.as_mut())
-                .is_some_and(|screen| screen.clear_tool_group_hover());
+                .is_some_and(OwnedScreen::clear_tool_group_hover);
         }
         changed
     }
 
     pub(crate) fn sync_owned_screen_cells(&mut self) {
+        self.sync_owned_screen_cells_with_reason(
+            crate::quiet_metrics::QuietMetric::FullProjectionUnexpected,
+        );
+    }
+
+    pub(super) fn sync_owned_screen_cells_with_reason(
+        &mut self,
+        reason: crate::quiet_metrics::QuietMetric,
+    ) {
         let cells = self.chat_widget.transcript_cells.clone();
         let compact_tool_groups = self.compact_tool_groups_enabled();
         if let Some(screen) = &mut self.chat_widget.owned_screen {
-            let _valid_groups = screen.replace_source_cells(cells, compact_tool_groups);
+            if screen.source_cells_match(&cells) {
+                screen.set_compact_tool_groups(compact_tool_groups);
+            } else {
+                let _valid_groups = screen.replace_source_cells(cells, compact_tool_groups, reason);
+            }
         }
+    }
+
+    pub(super) fn replace_owned_screen_source_cell(
+        &mut self,
+        source_index: usize,
+        replacement: Arc<dyn HistoryCell>,
+    ) -> bool {
+        let compact_tool_groups = self.compact_tool_groups_enabled();
+        self.chat_widget
+            .owned_screen
+            .as_mut()
+            .is_some_and(|screen| {
+                screen.replace_source_cell(source_index, replacement, compact_tool_groups)
+            })
+    }
+
+    pub(super) fn splice_owned_screen_source_cells(
+        &mut self,
+        source_index: usize,
+        remove_count: usize,
+        replacements: Vec<Arc<dyn HistoryCell>>,
+    ) -> bool {
+        let compact_tool_groups = self.compact_tool_groups_enabled();
+        self.chat_widget
+            .owned_screen
+            .as_mut()
+            .is_some_and(|screen| {
+                screen.splice_source_cells(
+                    source_index,
+                    remove_count,
+                    replacements,
+                    compact_tool_groups,
+                )
+            })
     }
 
     pub(super) fn sync_all_owned_screen_cells(&mut self) {
@@ -853,9 +1292,26 @@ impl App {
                 == HistoryRenderMode::Rich
                 && !pane.compact_tool_groups_expanded;
             if let Some(screen) = &mut pane.owned_screen {
-                let _valid_groups = screen.replace_source_cells(cells, compact_tool_groups);
+                if screen.source_cells_match(&cells) {
+                    screen.set_compact_tool_groups(compact_tool_groups);
+                } else {
+                    let _valid_groups = screen.replace_source_cells(
+                        cells,
+                        compact_tool_groups,
+                        crate::quiet_metrics::QuietMetric::FullProjectionGlobalMode,
+                    );
+                }
             }
         });
+    }
+
+    pub(super) fn owned_screen_tool_group_inspection_cells(
+        &mut self,
+    ) -> Option<Vec<Arc<dyn HistoryCell>>> {
+        self.chat_widget
+            .owned_screen
+            .as_mut()
+            .and_then(OwnedScreen::inspection_cells)
     }
 
     pub(super) fn sync_owned_screen_render_mode(&mut self) {

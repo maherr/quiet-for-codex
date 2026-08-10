@@ -184,7 +184,7 @@ impl ChatWidget {
             cell,
             handle,
         });
-        self.bump_active_cell_revision();
+        self.bump_token_activity_revision();
         self.request_redraw();
         self.app_event_tx
             .send(AppEvent::RefreshTokenActivity { request_id });
@@ -225,7 +225,7 @@ impl ChatWidget {
         }
         output.handle.finish(result);
         self.completed_token_activity_output = Some(output.cell);
-        self.bump_active_cell_revision();
+        self.bump_token_activity_revision();
         self.request_redraw();
         true
     }
@@ -240,6 +240,7 @@ impl ChatWidget {
             || self.plan_stream_controller.is_some()
             || self.pending_stream_commits > 0
             || self.transcript.active_cell.is_some()
+            || !self.transcript.pending_history_commits.is_empty()
             || self.active_hook_cell.is_some()
     }
 
@@ -266,7 +267,7 @@ impl ChatWidget {
     /// taking the card removes it from the transient render area.
     pub(crate) fn take_completed_token_activity_output(&mut self) -> Option<CompositeHistoryCell> {
         let output = self.completed_token_activity_output.take()?;
-        self.bump_active_cell_revision();
+        self.bump_token_activity_revision();
         Some(output)
     }
 
@@ -299,7 +300,7 @@ impl ChatWidget {
         let cleared_refresh = self.refreshing_token_activity_output.take().is_some();
         let cleared_completed = self.completed_token_activity_output.take().is_some();
         if cleared_refresh || cleared_completed {
-            self.bump_active_cell_revision();
+            self.bump_token_activity_revision();
             self.request_redraw();
         }
     }

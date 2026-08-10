@@ -19,7 +19,7 @@ fn conversation_sender_captures_bound_thread_for_codex_ops() {
     };
     assert_eq!(target.pane, PaneSlot::Parent);
     assert_eq!(target.thread_id, thread_id);
-    assert!(matches!(op, AppCommand::Compact { .. }));
+    assert!(matches!(op, AppCommand::Compact));
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn global_sender_preserves_active_thread_codex_ops() {
 
     assert!(matches!(
         rx.try_recv(),
-        Ok(AppEvent::CodexOp(AppCommand::Compact { .. }))
+        Ok(AppEvent::CodexOp(AppCommand::Compact))
     ));
 }
 
@@ -122,7 +122,7 @@ fn explicit_thread_operation_is_not_enveloped() {
         rx.try_recv(),
         Ok(AppEvent::SubmitThreadOp {
             thread_id: event_thread_id,
-            op: AppCommand::Compact { .. },
+            op: AppCommand::Compact,
         }) if event_thread_id == thread_id
     ));
 }

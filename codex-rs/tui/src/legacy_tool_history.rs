@@ -817,7 +817,7 @@ fn merge_authoritative_turn_state(rebuilt: &mut [Turn], authoritative: &[Turn]) 
         else {
             continue;
         };
-        rebuilt_turn.items_view = authoritative_turn.items_view.clone();
+        rebuilt_turn.items_view = authoritative_turn.items_view;
         rebuilt_turn.error = authoritative_turn.error.clone();
         rebuilt_turn.status = authoritative_turn.status.clone();
         rebuilt_turn.started_at = authoritative_turn.started_at;

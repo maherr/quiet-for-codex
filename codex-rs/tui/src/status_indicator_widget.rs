@@ -145,6 +145,10 @@ impl StatusIndicatorWidget {
         &self.header
     }
 
+    pub(crate) fn has_details(&self) -> bool {
+        self.details.is_some()
+    }
+
     #[cfg(test)]
     pub(crate) fn details(&self) -> Option<&str> {
         self.details.as_deref()
@@ -245,7 +249,7 @@ impl Renderable for StatusIndicatorWidget {
         if self.animations_enabled {
             // Schedule next animation frame.
             self.frame_requester
-                .schedule_frame_in(Duration::from_millis(32));
+                .schedule_frame_in(Duration::from_millis(100));
         }
         let now = Instant::now();
         let elapsed_duration = self.elapsed_duration_at(now);
@@ -288,9 +292,36 @@ impl Renderable for StatusIndicatorWidget {
             spans.push(message.clone().dim());
         }
 
+        let full_line = Line::from(spans);
+        let status_line = if full_line.width() <= usize::from(area.width) {
+            full_line
+        } else {
+            // Narrow terminals use semantic priority rather than left-to-right clipping:
+            // interrupt first, then hook/background context, then routine Working/elapsed text.
+            let mut compact = Vec::new();
+            if self.show_interrupt_hint
+                && let Some(interrupt_binding) = self.interrupt_binding
+            {
+                compact.push(interrupt_binding.into());
+                compact.push(" interrupt".dim());
+            }
+            if let Some(message) = &self.inline_message {
+                if !compact.is_empty() {
+                    compact.push(" · ".dim());
+                }
+                compact.push(message.clone().dim());
+            }
+            if !compact.is_empty() {
+                compact.push(" · ".dim());
+            }
+            compact.extend(shimmer_text(header, motion_mode));
+            compact.push(format!(" {pretty_elapsed}").dim());
+            Line::from(compact)
+        };
+
         let mut lines = Vec::new();
         lines.push(truncate_line_with_ellipsis_if_overflow(
-            Line::from(spans),
+            status_line,
             usize::from(area.width),
         ));
         if area.height > 1 {
@@ -368,6 +399,40 @@ mod tests {
     }
 
     #[test]
+    fn narrow_status_keeps_interrupt_and_hook_ahead_of_routine_working_text() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        w.update_inline_message(Some("Running PreToolUse hook: checking policy".to_string()));
+        w.is_paused = true;
+        w.elapsed_running = Duration::ZERO;
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(/*width*/ 40, /*height*/ 1)).expect("terminal");
+        terminal
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        let rendered = terminal.backend().buffer().content()[..40]
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+
+        let interrupt = rendered.find("esc interrupt").expect("interrupt hint");
+        let hook = rendered.find("PreToolUse").expect("hook status");
+        assert!(interrupt < hook, "rendered: {rendered:?}");
+        assert!(
+            rendered
+                .find("Working")
+                .is_none_or(|working| hook < working),
+            "rendered: {rendered:?}"
+        );
+    }
+
+    #[test]
     fn renders_wrapped_details_panama_two_lines() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -418,6 +483,59 @@ mod tests {
             .collect::<String>();
 
         assert!(line.starts_with("Working (0s • esc to interrupt)"));
+    }
+
+    #[test]
+    fn animated_status_schedules_no_faster_than_ten_frames_per_second() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let (frame_requester, mut scheduled) = crate::tui::FrameRequester::test_channel();
+        let w = StatusIndicatorWidget::new(tx, frame_requester, /*animations_enabled*/ true);
+        crate::quiet_metrics::reset_for_test();
+        let before = Instant::now();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
+        terminal
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+
+        let deadline = scheduled.try_recv().expect("scheduled status frame");
+        assert!(
+            deadline >= before + Duration::from_millis(100),
+            "status requested a frame sooner than the 10 fps budget"
+        );
+        assert!(
+            deadline <= Instant::now() + Duration::from_millis(100),
+            "status deadline should be the next 100 ms motion key"
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::FrameRequestDelayed,
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn reduced_motion_status_render_is_event_driven() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let (frame_requester, mut scheduled) = crate::tui::FrameRequester::test_channel();
+        let w = StatusIndicatorWidget::new(tx, frame_requester, /*animations_enabled*/ false);
+        crate::quiet_metrics::reset_for_test();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
+        terminal
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+
+        assert!(scheduled.try_recv().is_err());
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::FrameRequestDelayed,
+            ),
+            0
+        );
     }
 
     #[test]

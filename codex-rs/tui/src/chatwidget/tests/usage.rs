@@ -1007,7 +1007,7 @@ async fn startup_reset_hint_waits_for_active_output_snapshot() {
 
     chat.flush_active_cell();
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::CommitPendingHistoryCell(_)));
     assert_matches!(rx.try_recv(), Ok(AppEvent::CommitPendingUsageOutput));
 }
 

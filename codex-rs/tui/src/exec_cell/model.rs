@@ -83,6 +83,13 @@ pub(crate) struct ExecCell {
 }
 
 impl ExecCell {
+    fn invalidate_compact_tool_group_item(&mut self) {
+        self.compact_tool_group_item.take();
+        crate::quiet_metrics::bump(
+            crate::quiet_metrics::QuietMetric::ClassificationCacheInvalidation,
+        );
+    }
+
     pub(crate) fn new(call: ExecCall, animations_enabled: bool) -> Self {
         Self {
             calls: vec![call],
@@ -110,7 +117,7 @@ impl ExecCell {
             interaction_input,
         };
         if self.is_exploring_cell() && Self::is_exploring_call(&call) {
-            self.compact_tool_group_item.take();
+            self.invalidate_compact_tool_group_item();
             self.calls.push(call);
             true
         } else {
@@ -129,9 +136,11 @@ impl ExecCell {
         output: CommandOutput,
         duration: Duration,
     ) -> bool {
-        let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) else {
+        let Some(index) = self.calls.iter().rposition(|call| call.call_id == call_id) else {
             return false;
         };
+        self.invalidate_compact_tool_group_item();
+        let call = &mut self.calls[index];
         call.output = Some(output);
         call.duration = Some(duration);
         call.start_time = None;
@@ -143,6 +152,7 @@ impl ExecCell {
     }
 
     pub(crate) fn mark_failed(&mut self) {
+        self.invalidate_compact_tool_group_item();
         for call in self.calls.iter_mut() {
             if call.duration.is_none() {
                 let elapsed = call
@@ -185,7 +195,23 @@ impl ExecCell {
         &self,
         init: impl FnOnce() -> Option<ToolGroupItem>,
     ) -> Option<ToolGroupItem> {
-        self.compact_tool_group_item.get_or_init(init).clone()
+        debug_assert!(
+            !self.is_active() || self.compact_tool_group_item.get().is_none(),
+            "in-flight exec classification cache must stay empty"
+        );
+        let cached = self.compact_tool_group_item.get().is_some();
+        crate::quiet_metrics::bump(if cached {
+            crate::quiet_metrics::QuietMetric::ClassificationCacheHit
+        } else {
+            crate::quiet_metrics::QuietMetric::ClassificationCacheMiss
+        });
+        let item = self.compact_tool_group_item.get_or_init(init).clone();
+        if !cached {
+            crate::quiet_metrics::bump(
+                crate::quiet_metrics::QuietMetric::ClassificationMemoPopulate,
+            );
+        }
+        item
     }
 
     pub(crate) fn contains_call_id(&self, call_id: &str) -> bool {
@@ -200,9 +226,11 @@ impl ExecCell {
         if chunk.is_empty() {
             return false;
         }
-        let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) else {
+        let Some(index) = self.calls.iter().rposition(|call| call.call_id == call_id) else {
             return false;
         };
+        self.invalidate_compact_tool_group_item();
+        let call = &mut self.calls[index];
         let output = call.output.get_or_insert_with(CommandOutput::default);
         output
             .live_output

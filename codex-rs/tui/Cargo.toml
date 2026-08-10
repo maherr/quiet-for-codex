@@ -4,14 +4,27 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 autobins = false
+autobenches = false
+
+[features]
+quiet-bench = ["dep:divan"]
 
 [[bin]]
 name = "codex-tui"
 path = "src/main.rs"
+bench = false
 
 [[bin]]
 name = "md-events"
 path = "src/bin/md-events.rs"
+bench = false
+
+[[bin]]
+name = "quiet-render-bench"
+path = "benches/quiet_render.rs"
+required-features = ["quiet-bench"]
+test = false
+bench = false
 
 [lib]
 name = "codex_tui"
@@ -72,6 +85,7 @@ crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 derive_more = { workspace = true, features = ["is_variant"] }
 diffy = { workspace = true }
 dirs = { workspace = true }
+divan = { workspace = true, optional = true }
 dunce = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
 itertools = { workspace = true }

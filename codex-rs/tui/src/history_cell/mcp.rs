@@ -96,6 +96,13 @@ pub(crate) struct McpInvocation {
 }
 
 impl McpToolCallCell {
+    fn invalidate_compact_tool_group_item(&mut self) {
+        self.compact_tool_group_item.take();
+        crate::quiet_metrics::bump(
+            crate::quiet_metrics::QuietMetric::ClassificationCacheInvalidation,
+        );
+    }
+
     pub(crate) fn new(
         call_id: String,
         invocation: McpInvocation,
@@ -123,6 +130,7 @@ impl McpToolCallCell {
     ) -> Option<Box<dyn HistoryCell>> {
         let image_cell = try_new_completed_mcp_tool_call_with_image_output(&result)
             .map(|cell| Box::new(cell) as Box<dyn HistoryCell>);
+        self.invalidate_compact_tool_group_item();
         self.duration = Some(duration);
         self.result = Some(result);
         image_cell
@@ -144,7 +152,23 @@ impl McpToolCallCell {
         &self,
         init: impl FnOnce() -> Option<ToolGroupItem>,
     ) -> Option<ToolGroupItem> {
-        self.compact_tool_group_item.get_or_init(init).clone()
+        debug_assert!(
+            self.duration.is_some() || self.compact_tool_group_item.get().is_none(),
+            "in-flight MCP classification cache must stay empty"
+        );
+        let cached = self.compact_tool_group_item.get().is_some();
+        crate::quiet_metrics::bump(if cached {
+            crate::quiet_metrics::QuietMetric::ClassificationCacheHit
+        } else {
+            crate::quiet_metrics::QuietMetric::ClassificationCacheMiss
+        });
+        let item = self.compact_tool_group_item.get_or_init(init).clone();
+        if !cached {
+            crate::quiet_metrics::bump(
+                crate::quiet_metrics::QuietMetric::ClassificationMemoPopulate,
+            );
+        }
+        item
     }
 
     /// Returns whether a completed MCP call can be represented by a compact work summary without
@@ -173,6 +197,7 @@ impl McpToolCallCell {
     }
 
     pub(crate) fn mark_failed(&mut self) {
+        self.invalidate_compact_tool_group_item();
         let elapsed = self.start_time.elapsed();
         self.duration = Some(elapsed);
         self.result = Some(Err("interrupted".to_string()));
@@ -468,13 +493,6 @@ impl HistoryCell for McpToolCallCell {
                 selection_contribution_from_display_lines(self.raw_lines(), width)
             }
         }
-    }
-
-    fn transcript_animation_tick(&self) -> Option<u64> {
-        if !self.animations_enabled || self.result.is_some() {
-            return None;
-        }
-        Some((self.start_time.elapsed().as_millis() / 50) as u64)
     }
 }
 
@@ -901,13 +919,6 @@ impl HistoryCell for McpInventoryLoadingCell {
                 selection_contribution_from_display_lines(self.raw_lines(), width)
             }
         }
-    }
-
-    fn transcript_animation_tick(&self) -> Option<u64> {
-        if !self.animations_enabled {
-            return None;
-        }
-        Some((self.start_time.elapsed().as_millis() / 50) as u64)
     }
 }
 

@@ -380,19 +380,12 @@ impl App {
             let chat_widget = &self.chat_widget;
             tui.draw(u16::MAX, |frame| {
                 let width = frame.area().width.max(1);
-                t.sync_live_tail(width, active_key, |w| {
-                    chat_widget.active_cell_transcript_hyperlink_lines(w)
+                t.sync_live_tail(width, active_key, |w, lane| {
+                    chat_widget.active_cell_transcript_hyperlink_lines_for_lane(w, lane)
                 });
                 t.render(frame.area(), frame.buffer);
             })?;
             let close_overlay = t.is_done();
-            if !close_overlay
-                && active_key.is_some_and(|key| key.animation_tick.is_some())
-                && t.is_scrolled_to_bottom()
-            {
-                tui.frame_requester()
-                    .schedule_frame_in(std::time::Duration::from_millis(50));
-            }
             if close_overlay {
                 self.close_transcript_overlay(tui);
                 tui.frame_requester().schedule_frame();

@@ -203,17 +203,23 @@ async fn live_web_search_notifications_replace_active_row_with_completed_row() {
         /*replay_kind*/ None,
     );
 
-    assert!(
-        chat.active_cell_transcript_lines(/*width*/ 80).is_none(),
-        "completed web search should no longer have an active transient row"
-    );
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<String>();
+    let pending = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("completed web search should bridge the history handoff");
+    let pending = lines_to_single_string(&pending);
+    assert!(pending.contains("Searched the web for Montreal free food"));
+    assert!(!pending.contains("Searching the web"));
+    let committed = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::CommitPendingHistoryCell(cell) => Some(cell),
+            _ => None,
+        })
+        .expect("completed web search history event");
+    let rendered = lines_to_single_string(&committed.display_lines(/*width*/ 80));
     assert!(rendered.contains("Searched the web for Montreal free food"));
     assert!(!rendered.contains("Searching the web"));
+    chat.note_history_commit_completed(&committed);
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
 }
 
 #[tokio::test]
@@ -251,6 +257,76 @@ async fn interleaved_output_does_not_commit_stale_web_search_start_row() {
         .collect::<String>();
     assert!(rendered.contains("Searched the web for Montreal free food"));
     assert!(!rendered.contains("Searching the web"));
+}
+
+#[tokio::test]
+async fn first_assistant_delta_queues_tool_commit_then_seal_before_stream_draw() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.turn_lifecycle.last_turn_id = Some("turn-stream-boundary".to_string());
+    chat.on_web_search_begin("search-boundary".to_string());
+    chat.on_web_search_end(
+        "search-boundary".to_string(),
+        "quiet projection".to_string(),
+        codex_app_server_protocol::WebSearchAction::Search {
+            query: Some("quiet projection".to_string()),
+            queries: None,
+        },
+    );
+
+    chat.handle_streaming_delta("The answer starts here.\n".to_string());
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    let commit_index = events
+        .iter()
+        .position(|event| matches!(event, AppEvent::CommitPendingHistoryCell(_)))
+        .expect("completed tool cell should be queued before the assistant stream");
+    let seal_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                AppEvent::SealToolRun { turn_id, .. } if turn_id == "turn-stream-boundary"
+            )
+        })
+        .expect("first assistant delta should queue the tool-run seal");
+    let stream_draw_index = events
+        .iter()
+        .position(|event| matches!(event, AppEvent::StartCommitAnimation))
+        .expect("newline assistant delta should schedule its stream draw");
+
+    assert!(commit_index < seal_index, "events: {events:?}");
+    assert!(seal_index < stream_draw_index, "events: {events:?}");
+}
+
+#[tokio::test]
+async fn first_plan_and_visible_reasoning_deltas_queue_semantic_seals() {
+    let (mut plan_chat, mut plan_rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    plan_chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(plan_chat.model_catalog.as_ref(), ModeKind::Plan)
+            .expect("plan collaboration mode");
+    plan_chat.set_collaboration_mask(plan_mask);
+    plan_chat.turn_lifecycle.last_turn_id = Some("turn-plan-boundary".to_string());
+    plan_chat.on_plan_delta("- Inspect the lifecycle\n".to_string());
+    let plan_events = std::iter::from_fn(|| plan_rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(plan_events.iter().any(|event| {
+        matches!(
+            event,
+            AppEvent::SealToolRun { turn_id, .. } if turn_id == "turn-plan-boundary"
+        )
+    }));
+
+    let (mut reasoning_chat, mut reasoning_rx, _ops) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    reasoning_chat.turn_lifecycle.last_turn_id = Some("turn-reasoning-boundary".to_string());
+    reasoning_chat.on_agent_reasoning_delta("**Inspecting lifecycle state**".to_string());
+    let reasoning_events = std::iter::from_fn(|| reasoning_rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(reasoning_events.iter().any(|event| {
+        matches!(
+            event,
+            AppEvent::SealToolRun { turn_id, .. } if turn_id == "turn-reasoning-boundary"
+        )
+    }));
 }
 
 #[tokio::test]
@@ -448,7 +524,7 @@ fn install_retained_plan_stream(chat: &mut ChatWidget, source: &str) {
 
 fn take_retained_commit(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-) -> Box<dyn HistoryCell> {
+) -> Arc<dyn HistoryCell> {
     std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|event| match event {
             AppEvent::CommitRetainedStreamCell(cell) => Some(cell),
@@ -4315,7 +4391,9 @@ async fn reasoning_delta_restores_recreated_status_indicator_header() {
         .expect("status indicator should remain visible");
     assert_eq!(status.header(), "Checking files");
 
-    let width: u16 = 80;
+    // Wide rendering proves the restored semantic header remains visible alongside the
+    // higher-priority background-process summary. Narrow rendering is covered separately.
+    let width: u16 = 120;
     let height = chat.desired_height(width);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
         .expect("create terminal");
@@ -4449,18 +4527,15 @@ async fn completed_hook_with_no_entries_stays_out_of_history() {
     );
 
     assert!(drain_insert_history(&mut rx).is_empty());
-    let completed_lingering_snapshot =
-        hook_live_and_history_snapshot(&chat, "completed lingering", "");
-    expire_quiet_hook_linger(&mut chat);
-    let completed_snapshot = hook_live_and_history_snapshot(&chat, "completed after linger", "");
+    let completed_snapshot = hook_live_and_history_snapshot(&chat, "completed", "");
     assert_chatwidget_snapshot!(
         "hook_live_running_then_quiet_completed_snapshot",
-        format!("{running_snapshot}\n\n{completed_lingering_snapshot}\n\n{completed_snapshot}")
+        format!("{running_snapshot}\n\n{completed_snapshot}")
     );
 }
 
 #[tokio::test]
-async fn quiet_hook_linger_starts_when_delayed_redraw_reveals_hook() {
+async fn quiet_hook_disappears_after_a_delayed_redraw_reveals_it() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     handle_hook_started(
@@ -4485,11 +4560,6 @@ async fn quiet_hook_linger_starts_when_delayed_redraw_reveals_hook() {
     );
 
     assert!(drain_insert_history(&mut rx).is_empty());
-    assert!(
-        active_hook_blob(&chat).contains("Running PostToolUse hook"),
-        "quiet hook should linger after the row becomes visible"
-    );
-    expire_quiet_hook_linger(&mut chat);
     assert_eq!(active_hook_blob(&chat), "<empty>\n");
 }
 
@@ -4542,6 +4612,7 @@ async fn blocked_and_failed_hooks_render_feedback_and_errors() {
 #[tokio::test]
 async fn completed_hook_with_output_flushes_immediately() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    crate::quiet_metrics::reset_for_test();
 
     handle_hook_started(
         &mut chat,
@@ -4571,6 +4642,14 @@ async fn completed_hook_with_output_flushes_immediately() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     let completed_snapshot = hook_live_and_history_snapshot(&chat, "completed", &history);
+
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(
+            crate::quiet_metrics::QuietMetric::LiveTailHoleObservation,
+        ),
+        0,
+        "persistent hook output must enter the pending live tail before its commit event",
+    );
 
     assert_chatwidget_snapshot!(
         "completed_hook_with_output_flushes_immediately_snapshot",
@@ -4751,11 +4830,7 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
         ),
     );
     assert_eq!(chat.status_state.current_status.header, "Thinking");
-    let older_completed_snapshot =
-        hook_live_and_history_snapshot(&chat, "pre completed lingering", "");
-    expire_quiet_hook_linger(&mut chat);
-    let older_completed_expired_snapshot =
-        hook_live_and_history_snapshot(&chat, "pre completed after linger", "");
+    let older_completed_snapshot = hook_live_and_history_snapshot(&chat, "pre completed", "");
 
     handle_hook_completed(
         &mut chat,
@@ -4769,14 +4844,11 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
     assert_eq!(chat.status_state.current_status.header, "Thinking");
     assert!(chat.bottom_pane.status_indicator_visible());
     assert!(drain_insert_history(&mut rx).is_empty());
-    let all_completed_lingering_snapshot =
-        hook_live_and_history_snapshot(&chat, "all completed lingering", "");
-    expire_quiet_hook_linger(&mut chat);
     let all_completed_snapshot = hook_live_and_history_snapshot(&chat, "all completed", "");
     assert_chatwidget_snapshot!(
         "overlapping_hook_live_cell_snapshot",
         format!(
-            "{first_running_snapshot}\n\n{second_running_snapshot}\n\n{older_completed_snapshot}\n\n{older_completed_expired_snapshot}\n\n{all_completed_lingering_snapshot}\n\n{all_completed_snapshot}"
+            "{first_running_snapshot}\n\n{second_running_snapshot}\n\n{older_completed_snapshot}\n\n{all_completed_snapshot}"
         )
     );
 }
@@ -4820,20 +4892,84 @@ async fn running_hook_does_not_displace_active_exec_cell() {
         ),
     );
     assert!(drain_insert_history(&mut rx).is_empty());
-    let quiet_hook_completed_lingering = active_hook_blob(&chat);
-    expire_quiet_hook_linger(&mut chat);
     let quiet_hook_completed = active_hook_blob(&chat);
 
     assert_chatwidget_snapshot!(
         "hook_runs_while_exec_active_snapshot",
         format!(
-            "exec running:\n{exec_running}\nexec and hook running:\n{exec_and_hook_running}\nhistory after exec:\n{history_after_exec}\nhook running after exec:\n{hook_running_after_exec}\nquiet hook completed lingering:\n{quiet_hook_completed_lingering}\nquiet hook completed:\n{quiet_hook_completed}"
+            "exec running:\n{exec_running}\nexec and hook running:\n{exec_and_hook_running}\nhistory after exec:\n{history_after_exec}\nhook running after exec:\n{hook_running_after_exec}\nquiet hook completed:\n{quiet_hook_completed}"
         )
     );
 }
 
 #[tokio::test]
-async fn hidden_active_hook_does_not_add_transcript_separator() {
+async fn finalized_exec_remains_in_the_live_tail_until_commit_acknowledgement() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let begin = begin_exec(&mut chat, "commit-handoff", "echo done");
+    end_exec(&mut chat, begin, "done", "", /*exit_code*/ 0);
+
+    assert!(chat.transcript.active_cell.is_none());
+    let pending_before_receive = chat
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("queued commit must remain renderable");
+    assert!(lines_to_single_string(&pending_before_receive).contains("echo done"));
+    let committed = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::CommitPendingHistoryCell(cell) => Some(cell),
+            _ => None,
+        })
+        .expect("pending history commit event");
+
+    assert_eq!(chat.transcript.pending_history_commits.len(), 1);
+    assert_eq!(chat.transcript.pending_history_handoffs, 1);
+    assert!(Arc::ptr_eq(
+        &chat.transcript.pending_history_commits[0],
+        &committed
+    ));
+    assert!(
+        chat.active_cell_render_key()
+            .is_some_and(|key| key.primary_present)
+    );
+
+    chat.note_history_commit_completed(&committed);
+
+    assert!(chat.transcript.pending_history_commits.is_empty());
+    assert_eq!(chat.transcript.pending_history_handoffs, 0);
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+    assert!(chat.active_cell_render_key().is_none());
+}
+
+#[tokio::test]
+async fn live_tail_hole_detector_positive_control_turns_red() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let begin = begin_exec(&mut chat, "missing-handoff", "echo missing");
+    end_exec(&mut chat, begin, "missing", "", /*exit_code*/ 0);
+    assert_eq!(chat.transcript.pending_history_handoffs, 1);
+    assert_eq!(chat.transcript.pending_history_commits.len(), 1);
+
+    // Positive control: simulate a regression that drops the finalized renderable while the
+    // independent handoff remains armed, then exercise the real render-time observer.
+    chat.transcript.pending_history_commits.clear();
+    crate::quiet_metrics::reset_for_test();
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("render missing handoff state");
+
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(
+            crate::quiet_metrics::QuietMetric::LiveTailHoleObservation,
+        ),
+        1
+    );
+}
+
+#[tokio::test]
+async fn running_hook_stays_in_the_footer_without_adding_transcript_rows() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     begin_exec(&mut chat, "call-1", "echo done");
@@ -4870,34 +5006,17 @@ async fn hidden_active_hook_does_not_add_transcript_separator() {
     );
 
     reveal_running_hooks(&mut chat);
-    let visible_hook_lines = chat
-        .active_hook_cell
-        .as_ref()
-        .expect("active hook cell")
-        .transcript_lines(/*width*/ 80);
     let visible_hook_transcript = chat
         .active_cell_transcript_lines(/*width*/ 80)
-        .expect("active exec and hook transcript lines");
-    assert_eq!(
-        visible_hook_transcript.len(),
-        exec_only_line_count + 1 + visible_hook_lines.len()
-    );
-    assert_eq!(
-        lines_to_single_string(
-            &visible_hook_transcript[exec_only_line_count..exec_only_line_count + 1],
-        ),
-        "\n"
-    );
+        .expect("active exec transcript lines");
+    assert_eq!(visible_hook_transcript.len(), exec_only_line_count);
     let visible_display_snapshots = chat
         .active_cell_display_snapshots(/*width*/ 80)
-        .expect("active exec and hook display snapshots");
-    assert_eq!(visible_display_snapshots.len(), 2);
-    assert_eq!(
-        visible_display_snapshots
-            .last()
-            .and_then(|snapshot| snapshot.selection_projection.resolve(&snapshot.lines))
-            .map(|projection| projection.text().to_string()),
-        Some("Running PostToolUse hook: checking output policy".to_string())
+        .expect("active exec display snapshot");
+    assert_eq!(visible_display_snapshots.len(), 1);
+    assert!(
+        active_hook_blob(&chat).contains("Running PostToolUse hook: checking output policy"),
+        "revealed hook should be available to the footer lane"
     );
 }
 
@@ -5129,9 +5248,19 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
     term.set_viewport_area(viewport);
 
-    for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines(&mut term, lines)
-            .expect("Failed to insert history lines in test");
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                crate::insert_history::insert_history_lines(&mut term, cell.display_lines(width))
+                    .expect("Failed to insert history lines in test");
+            }
+            AppEvent::CommitPendingHistoryCell(cell) => {
+                crate::insert_history::insert_history_lines(&mut term, cell.display_lines(width))
+                    .expect("Failed to insert history lines in test");
+                chat.note_history_commit_completed(&cell);
+            }
+            _ => {}
+        }
     }
 
     term.draw(|f| {

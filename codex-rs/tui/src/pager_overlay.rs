@@ -18,6 +18,8 @@
 use std::io::Result;
 use std::sync::Arc;
 
+use crate::app::tool_run_projection;
+use crate::chatwidget::ActiveCellLane;
 use crate::chatwidget::ActiveCellRenderKey;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::SessionInfoCell;
@@ -512,6 +514,20 @@ impl PagerView {
         self.layout.truncate(self.renderables.len());
         renderable
     }
+
+    fn replace_renderable_range(
+        &mut self,
+        start: usize,
+        remove_count: usize,
+        replacement: Vec<Box<dyn Renderable>>,
+    ) {
+        let start = start.min(self.renderables.len());
+        let end = start
+            .saturating_add(remove_count)
+            .min(self.renderables.len());
+        self.renderables.splice(start..end, replacement);
+        self.layout.invalidate_from(start);
+    }
 }
 
 /// Scrollable content state shared by full-frame views that provide their own chrome.
@@ -551,6 +567,28 @@ impl PagerContent {
 
     pub(crate) fn pop(&mut self) -> Option<Box<dyn Renderable>> {
         self.view.pop_renderable()
+    }
+
+    pub(crate) fn replace_range(
+        &mut self,
+        start: usize,
+        remove_count: usize,
+        replacement: Vec<Box<dyn Renderable>>,
+    ) {
+        self.view
+            .replace_renderable_range(start, remove_count, replacement);
+    }
+
+    pub(crate) fn renderable_range_rows(
+        &mut self,
+        width: u16,
+        start: usize,
+        count: usize,
+    ) -> (usize, usize) {
+        self.view.layout.ensure(&self.view.renderables, width);
+        let start = start.min(self.view.renderables.len());
+        let end = start.saturating_add(count).min(self.view.renderables.len());
+        (self.view.layout.start(start), self.view.layout.start(end))
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -782,6 +820,9 @@ pub(crate) struct TranscriptOverlay {
     highlight_cell: Option<usize>,
     /// Cache key for the render-only live tail appended after committed cells.
     live_tail_key: Option<LiveTailKey>,
+    live_primary_lines: Arc<[HyperlinkLine]>,
+    live_token_lines: Arc<[HyperlinkLine]>,
+    live_rate_limit_lines: Arc<[HyperlinkLine]>,
     history_state: TranscriptHistoryState,
     is_done: bool,
 }
@@ -795,10 +836,11 @@ struct LiveTailKey {
     width: u16,
     /// Revision that changes on in-place active cell transcript updates.
     revision: u64,
+    primary_present: bool,
     /// Whether the tail should be treated as a continuation for spacing.
     is_stream_continuation: bool,
-    /// Optional animation tick to refresh spinners/progress indicators.
-    animation_tick: Option<u64>,
+    token_activity_revision: Option<u64>,
+    rate_limit_revision: Option<u64>,
 }
 
 impl TranscriptOverlay {
@@ -829,6 +871,9 @@ impl TranscriptOverlay {
             cells: transcript_cells,
             highlight_cell: None,
             live_tail_key: None,
+            live_primary_lines: Arc::from([]),
+            live_token_lines: Arc::from([]),
+            live_rate_limit_lines: Arc::from([]),
             history_state: TranscriptHistoryState::Idle,
             is_done: false,
         }
@@ -892,7 +937,10 @@ impl TranscriptOverlay {
         } else {
             Box::new(cell_renderable)
         };
-        if !cell.is_stream_continuation() && index > 0 {
+        if !cell.is_stream_continuation()
+            && index > 0
+            && tool_run_projection::seal_cell(cell.as_ref()).is_none()
+        {
             cell_renderable = Box::new(InsetRenderable::new(
                 cell_renderable,
                 Insets::tlbr(
@@ -1083,25 +1131,87 @@ impl TranscriptOverlay {
         &mut self,
         width: u16,
         active_key: Option<ActiveCellRenderKey>,
-        compute_lines: impl FnOnce(u16) -> Option<Vec<HyperlinkLine>>,
+        mut compute_lines: impl FnMut(u16, ActiveCellLane) -> Option<Vec<HyperlinkLine>>,
     ) {
         let next_key = active_key.map(|key| LiveTailKey {
             width,
             revision: key.revision,
+            primary_present: key.primary_present,
             is_stream_continuation: key.is_stream_continuation,
-            animation_tick: key.animation_tick,
+            token_activity_revision: key.token_activity_revision,
+            rate_limit_revision: key.rate_limit_revision,
         });
 
         if self.live_tail_key == next_key {
             return;
         }
+        let previous_key = self.live_tail_key;
+        let width_changed = previous_key.map(|key| key.width) != next_key.map(|key| key.width);
+        let primary_changed = width_changed
+            || previous_key.map(|key| {
+                (
+                    key.revision,
+                    key.primary_present,
+                    key.is_stream_continuation,
+                )
+            }) != next_key.map(|key| {
+                (
+                    key.revision,
+                    key.primary_present,
+                    key.is_stream_continuation,
+                )
+            });
+        let token_changed = width_changed
+            || previous_key.map(|key| key.token_activity_revision)
+                != next_key.map(|key| key.token_activity_revision);
+        let rate_limit_changed = width_changed
+            || previous_key.map(|key| key.rate_limit_revision)
+                != next_key.map(|key| key.rate_limit_revision);
         let follow_bottom = self.view.is_scrolled_to_bottom();
 
         self.take_live_tail_renderable();
         self.live_tail_key = next_key;
 
+        if primary_changed {
+            self.live_primary_lines = Arc::from([]);
+            if next_key.is_some_and(|key| key.primary_present) {
+                crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::LivePrimaryRebuild);
+                self.live_primary_lines =
+                    Arc::from(compute_lines(width, ActiveCellLane::Primary).unwrap_or_default());
+            }
+        }
+        if token_changed {
+            self.live_token_lines = Arc::from([]);
+            if next_key.is_some_and(|key| key.token_activity_revision.is_some()) {
+                crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::LiveTokenRebuild);
+                self.live_token_lines = Arc::from(
+                    compute_lines(width, ActiveCellLane::TokenActivity).unwrap_or_default(),
+                );
+            }
+        }
+        if rate_limit_changed {
+            self.live_rate_limit_lines = Arc::from([]);
+            if next_key.is_some_and(|key| key.rate_limit_revision.is_some()) {
+                crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::LiveRateLimitRebuild);
+                self.live_rate_limit_lines =
+                    Arc::from(compute_lines(width, ActiveCellLane::RateLimit).unwrap_or_default());
+            }
+        }
         if let Some(key) = next_key {
-            let lines = compute_lines(width).unwrap_or_default();
+            let mut lines = Vec::new();
+            for lane in [
+                self.live_primary_lines.as_ref(),
+                self.live_token_lines.as_ref(),
+                self.live_rate_limit_lines.as_ref(),
+            ] {
+                if lane.is_empty() {
+                    continue;
+                }
+                if !lines.is_empty() {
+                    lines.push(HyperlinkLine::from(""));
+                }
+                lines.extend_from_slice(lane);
+            }
             if !lines.is_empty() {
                 self.view.push_renderable(Self::live_tail_renderable(
                     lines,
@@ -1127,10 +1237,6 @@ impl TranscriptOverlay {
     ///
     /// The `App` draw loop uses this to decide whether to schedule animation frames for the live
     /// tail; if the user has scrolled up, we avoid driving animation work that they cannot see.
-    pub(crate) fn is_scrolled_to_bottom(&self) -> bool {
-        self.view.is_scrolled_to_bottom()
-    }
-
     fn rebuild_renderables(&mut self) {
         let tail_renderable = self.take_live_tail_renderable();
         self.view.replace_renderables(Self::render_cells(
@@ -1675,10 +1781,12 @@ mod tests {
             /*width*/ 40,
             Some(ActiveCellRenderKey {
                 revision: 1,
+                primary_present: true,
                 is_stream_continuation: false,
-                animation_tick: None,
+                token_activity_revision: None,
+                rate_limit_revision: None,
             }),
-            |_| Some(vec![HyperlinkLine::from("tail")]),
+            |_, _| Some(vec![HyperlinkLine::from("tail")]),
         );
 
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
@@ -1696,10 +1804,12 @@ mod tests {
             /*width*/ 40,
             Some(ActiveCellRenderKey {
                 revision: 1,
+                primary_present: true,
                 is_stream_continuation: false,
-                animation_tick: None,
+                token_activity_revision: None,
+                rate_limit_revision: None,
             }),
-            |_| Some(vec![HyperlinkLine::from("live tail")]),
+            |_, _| Some(vec![HyperlinkLine::from("live tail")]),
         );
         overlay.prepend(
             vec![Arc::new(TestCell {
@@ -1736,10 +1846,12 @@ mod tests {
             area.width,
             Some(ActiveCellRenderKey {
                 revision: 1,
+                primary_present: true,
                 is_stream_continuation: false,
-                animation_tick: None,
+                token_activity_revision: None,
+                rate_limit_revision: None,
             }),
-            |width| Some(cell.transcript_hyperlink_lines(width)),
+            |width, _| Some(cell.transcript_hyperlink_lines(width)),
         );
         overlay.render(area, &mut buf);
 
@@ -1759,20 +1871,102 @@ mod tests {
         let calls = std::cell::Cell::new(0usize);
         let key = ActiveCellRenderKey {
             revision: 1,
+            primary_present: true,
             is_stream_continuation: false,
-            animation_tick: None,
+            token_activity_revision: None,
+            rate_limit_revision: None,
         };
 
-        overlay.sync_live_tail(/*width*/ 40, Some(key), |_| {
+        crate::quiet_metrics::reset_for_test();
+        overlay.sync_live_tail(/*width*/ 40, Some(key), |_, _| {
             calls.set(calls.get() + 1);
             Some(vec![HyperlinkLine::from("tail")])
         });
-        overlay.sync_live_tail(/*width*/ 40, Some(key), |_| {
+        overlay.sync_live_tail(/*width*/ 40, Some(key), |_, _| {
             calls.set(calls.get() + 1);
             Some(vec![HyperlinkLine::from("tail2")])
         });
 
         assert_eq!(calls.get(), 1);
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::LivePrimaryRebuild
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn transcript_overlay_rebuilds_only_the_changed_live_lane() {
+        let mut overlay = transcript_overlay(Vec::new());
+        let initial = ActiveCellRenderKey {
+            revision: 7,
+            primary_present: true,
+            is_stream_continuation: false,
+            token_activity_revision: Some(11),
+            rate_limit_revision: Some(13),
+        };
+        overlay.sync_live_tail(/*width*/ 40, Some(initial), |_, lane| {
+            Some(vec![HyperlinkLine::from(match lane {
+                ActiveCellLane::Primary => "primary",
+                ActiveCellLane::TokenActivity => "token 11",
+                ActiveCellLane::RateLimit => "rate 13",
+            })])
+        });
+
+        crate::quiet_metrics::reset_for_test();
+        let calls = std::cell::RefCell::new(Vec::new());
+        overlay.sync_live_tail(
+            /*width*/ 40,
+            Some(ActiveCellRenderKey {
+                rate_limit_revision: Some(14),
+                ..initial
+            }),
+            |_, lane| {
+                calls.borrow_mut().push(lane);
+                Some(vec![HyperlinkLine::from(match lane {
+                    ActiveCellLane::Primary => "unexpected primary",
+                    ActiveCellLane::TokenActivity => "unexpected token",
+                    ActiveCellLane::RateLimit => "rate 14",
+                })])
+            },
+        );
+
+        assert_eq!(&*calls.borrow(), &[ActiveCellLane::RateLimit]);
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::LivePrimaryRebuild
+            ),
+            0
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(crate::quiet_metrics::QuietMetric::LiveTokenRebuild),
+            0
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::LiveRateLimitRebuild
+            ),
+            1
+        );
+        assert_eq!(
+            [
+                overlay.live_primary_lines.as_ref(),
+                overlay.live_token_lines.as_ref(),
+                overlay.live_rate_limit_lines.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .map(|line| {
+                line.line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>(),
+            vec!["primary", "token 11", "rate 14"]
+        );
     }
 
     fn buffer_to_text(buf: &Buffer, area: Rect) -> String {
@@ -1881,6 +2075,31 @@ mod tests {
         }));
 
         assert_eq!(overlay.view.scroll_offset, usize::MAX);
+    }
+
+    #[test]
+    fn transcript_overlay_seal_after_content_adds_no_blank_row() {
+        let cells = vec![
+            Arc::new(TestCell {
+                lines: vec!["before".into()],
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(
+                crate::app::tool_run_projection::ToolRunSealCell::with_test_counts(
+                    /*run_id*/ 1, /*first_source_id*/ 0, /*last_source_id*/ 0,
+                    /*action_count*/ 1,
+                ),
+            ) as Arc<dyn HistoryCell>,
+            Arc::new(TestCell {
+                lines: vec!["after".into()],
+            }) as Arc<dyn HistoryCell>,
+        ];
+        let mut overlay = transcript_overlay(cells);
+
+        assert_eq!(
+            overlay.view.content_height(/*width*/ 40),
+            3,
+            "two one-line cells plus their single visible separator"
+        );
     }
 
     #[test]

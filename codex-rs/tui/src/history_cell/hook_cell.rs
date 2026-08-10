@@ -7,8 +7,7 @@
 //!
 //! 1. New runs begin hidden in `PendingReveal`.
 //! 2. Runs that outlive the reveal delay become visible and may be coalesced with adjacent runs.
-//! 3. Visible quiet successes linger briefly so they do not disappear in the same frame they were
-//!    first drawn.
+//! 3. Quiet successes disappear immediately on completion.
 //! 4. Completed runs only persist when they have output or a non-success status.
 use super::HistoryCell;
 use super::HistoryRenderMode;
@@ -35,7 +34,7 @@ use std::time::Instant;
 
 #[derive(Debug)]
 pub(crate) struct HookCell {
-    /// Hook runs that are active, lingering, or have persistent output to render.
+    /// Hook runs that are active or have persistent output to render.
     runs: Vec<HookRunCell>,
     /// Mirrors the global animation setting so transcript rendering and viewport rendering agree.
     animations_enabled: bool,
@@ -46,11 +45,6 @@ pub(crate) struct HookCell {
 /// Helps avoids a flash of text forwork that was effectively instant.
 const HOOK_RUN_REVEAL_DELAY: Duration = Duration::from_millis(300);
 
-/// Minimum time a quiet success remains on screen after becoming visible.
-///
-/// This pairs with `HOOK_RUN_REVEAL_DELAY`: once the user has seen a hook row, keep it stable long
-/// enough to read instead of removing it immediately when the success event arrives.
-const QUIET_HOOK_MIN_VISIBLE: Duration = Duration::from_millis(600);
 const HOOK_OUTPUT_DISPLAY_MAX_ENTRIES: usize = 2;
 const HOOK_OUTPUT_DISPLAY_MAX_CHARS: usize = 180;
 
@@ -93,15 +87,6 @@ enum HookRunState {
     VisibleRunning {
         /// The original start time, used to keep animation timing stable across transitions.
         start_time: Instant,
-        /// First instant the run was actually rendered, used by quiet-success linger.
-        visible_since: Instant,
-    },
-    /// A visible run that completed successfully without output but is still lingering briefly.
-    QuietLinger {
-        /// The original start time, retained so the spinner does not jump during the linger frame.
-        start_time: Instant,
-        /// Instant after which the quiet success can be removed entirely.
-        removal_deadline: Instant,
     },
     /// A completed run with output or a status worth preserving in history.
     Completed {
@@ -166,11 +151,6 @@ impl HookCell {
         !self.is_active() && !self.is_empty()
     }
 
-    /// Returns whether this cell has at least one line worth drawing right now.
-    pub(crate) fn should_render(&self) -> bool {
-        self.runs.iter().any(|run| run.state.should_render())
-    }
-
     /// Splits durable completed runs from ephemeral active-cell bookkeeping.
     ///
     /// Quiet successes are left behind so they can disappear from the active cell, while failures,
@@ -192,9 +172,28 @@ impl HookCell {
         })
     }
 
-    /// Used by callers that need to know whether the active cell currently occupies viewport space.
-    pub(crate) fn has_visible_running_run(&self) -> bool {
-        self.runs.iter().any(|run| run.state.is_running_visible())
+    pub(crate) fn visible_running_status(&self) -> Option<String> {
+        let visible = self
+            .runs
+            .iter()
+            .filter(|run| run.state.is_running_visible())
+            .collect::<Vec<_>>();
+        match visible.as_slice() {
+            [] => None,
+            [run] => {
+                let mut status = format!("Running {} hook", hook_event_label(run.event_name));
+                if let Some(message) = run
+                    .status_message
+                    .as_deref()
+                    .filter(|message| !message.is_empty())
+                {
+                    status.push_str(": ");
+                    status.push_str(message);
+                }
+                Some(status)
+            }
+            runs => Some(format!("Running {} hooks", runs.len())),
+        }
     }
 
     fn selection_text(&self) -> String {
@@ -265,13 +264,11 @@ impl HookCell {
 
     /// Advances reveal/removal timers and reports whether rendering should be refreshed.
     pub(crate) fn advance_time(&mut self, now: Instant) -> bool {
-        let old_len = self.runs.len();
         let mut changed = false;
         for run in &mut self.runs {
             changed |= run.state.reveal_if_due(now);
         }
-        self.runs.retain(|run| !run.state.quiet_linger_expired(now));
-        changed || self.runs.len() != old_len
+        changed
     }
 
     /// Inserts or refreshes a started hook run.
@@ -296,19 +293,13 @@ impl HookCell {
 
     /// Completes a run and returns whether the run was already present in this cell.
     ///
-    /// Quiet successes intentionally avoid persistent output. If they were never visible, they
-    /// disappear immediately; if they had already drawn, they move into `QuietLinger`.
+    /// Quiet successes intentionally avoid persistent output and disappear immediately.
     pub(crate) fn complete_run(&mut self, run: HookRunSummary) -> bool {
         let Some(index) = self.runs.iter().position(|existing| existing.id == run.id) else {
             return false;
         };
         if hook_run_is_quiet_success(&run) {
-            if !self.runs[index]
-                .state
-                .complete_quiet_success(Instant::now())
-            {
-                self.runs.remove(index);
-            }
+            self.runs.remove(index);
             return true;
         }
         let HookRunSummary {
@@ -356,13 +347,6 @@ impl HookCell {
     }
 
     #[cfg(test)]
-    pub(crate) fn expire_quiet_runs_now_for_test(&mut self) {
-        for run in &mut self.runs {
-            run.expire_quiet_linger_now_for_test();
-        }
-    }
-
-    #[cfg(test)]
     pub(crate) fn reveal_running_runs_now_for_test(&mut self) {
         let now = Instant::now();
         for run in &mut self.runs {
@@ -401,20 +385,6 @@ impl HistoryCell for HookCell {
             width,
             /*first_row_prefix_columns*/ 0,
         )
-    }
-
-    /// Produces a coarse cache key for transcript overlays while hook animations are active.
-    fn transcript_animation_tick(&self) -> Option<u64> {
-        if !self.animations_enabled {
-            return None;
-        }
-        let elapsed = self
-            .runs
-            .iter()
-            .filter(|run| run.state.is_running_visible())
-            .find_map(|run| run.state.start_time())?
-            .elapsed();
-        Some(elapsed.as_millis() as u64 / 600)
     }
 }
 
@@ -475,16 +445,6 @@ impl Renderable for HookCell {
 
 impl HookRunCell {
     #[cfg(test)]
-    fn expire_quiet_linger_now_for_test(&mut self) {
-        if let HookRunState::QuietLinger {
-            removal_deadline, ..
-        } = &mut self.state
-        {
-            *removal_deadline = Instant::now();
-        }
-    }
-
-    #[cfg(test)]
     fn reveal_running_now_for_test(&mut self, now: Instant) {
         if let HookRunState::PendingReveal {
             reveal_deadline, ..
@@ -501,7 +461,7 @@ impl HookRunCell {
         } = &mut self.state
         {
             let delayed_deadline = now
-                .checked_sub(QUIET_HOOK_MIN_VISIBLE + Duration::from_millis(100))
+                .checked_sub(HOOK_RUN_REVEAL_DELAY + Duration::from_millis(100))
                 .unwrap_or(now);
             *reveal_deadline = delayed_deadline;
         }
@@ -527,8 +487,7 @@ impl HookRunCell {
     ) {
         let label = hook_event_label(self.event_name);
         match &self.state {
-            HookRunState::VisibleRunning { start_time, .. }
-            | HookRunState::QuietLinger { start_time, .. } => {
+            HookRunState::VisibleRunning { start_time, .. } => {
                 let hook_text = format!("Running {label} hook");
                 push_running_hook_header(
                     lines,
@@ -579,9 +538,7 @@ impl HookRunState {
     /// Returns true while the run is still waiting for a completion event or timer cleanup.
     fn is_active(&self) -> bool {
         match self {
-            HookRunState::PendingReveal { .. }
-            | HookRunState::VisibleRunning { .. }
-            | HookRunState::QuietLinger { .. } => true,
+            HookRunState::PendingReveal { .. } | HookRunState::VisibleRunning { .. } => true,
             HookRunState::Completed { .. } => false,
         }
     }
@@ -589,9 +546,7 @@ impl HookRunState {
     /// Returns true when this run contributes at least one line to the current render.
     fn should_render(&self) -> bool {
         match self {
-            HookRunState::VisibleRunning { .. }
-            | HookRunState::QuietLinger { .. }
-            | HookRunState::Completed { .. } => true,
+            HookRunState::VisibleRunning { .. } | HookRunState::Completed { .. } => true,
             HookRunState::PendingReveal { .. } => false,
         }
     }
@@ -602,9 +557,7 @@ impl HookRunState {
             HookRunState::Completed { status, entries } => {
                 *status != HookRunStatus::Completed || !entries.is_empty()
             }
-            HookRunState::PendingReveal { .. }
-            | HookRunState::VisibleRunning { .. }
-            | HookRunState::QuietLinger { .. } => false,
+            HookRunState::PendingReveal { .. } | HookRunState::VisibleRunning { .. } => false,
         }
     }
 
@@ -614,18 +567,14 @@ impl HookRunState {
     fn start_time(&self) -> Option<Instant> {
         match self {
             HookRunState::PendingReveal { start_time, .. }
-            | HookRunState::VisibleRunning { start_time, .. }
-            | HookRunState::QuietLinger { start_time, .. } => Some(*start_time),
+            | HookRunState::VisibleRunning { start_time, .. } => Some(*start_time),
             HookRunState::Completed { .. } => None,
         }
     }
 
     /// Returns true when the run should be treated as an in-progress row.
     fn is_running_visible(&self) -> bool {
-        matches!(
-            self,
-            HookRunState::VisibleRunning { .. } | HookRunState::QuietLinger { .. }
-        )
+        matches!(self, HookRunState::VisibleRunning { .. })
     }
 
     /// Reveals a pending run once its deadline has passed.
@@ -645,7 +594,6 @@ impl HookRunState {
         }
         *self = HookRunState::VisibleRunning {
             start_time: *start_time,
-            visible_since: now,
         };
         true
     }
@@ -656,48 +604,8 @@ impl HookRunState {
             HookRunState::PendingReveal {
                 reveal_deadline, ..
             } => Some(*reveal_deadline),
-            HookRunState::QuietLinger {
-                removal_deadline, ..
-            } => Some(*removal_deadline),
             HookRunState::VisibleRunning { .. } | HookRunState::Completed { .. } => None,
         }
-    }
-
-    /// Returns true once a quiet success has lingered for long enough.
-    fn quiet_linger_expired(&self, now: Instant) -> bool {
-        match self {
-            HookRunState::QuietLinger {
-                removal_deadline, ..
-            } => now >= *removal_deadline,
-            HookRunState::PendingReveal { .. }
-            | HookRunState::VisibleRunning { .. }
-            | HookRunState::Completed { .. } => false,
-        }
-    }
-
-    /// Converts a visible quiet success into a temporary linger state.
-    ///
-    /// Returns false when the success should be removed immediately: either it was never visible or
-    /// it has already stayed visible for the minimum duration.
-    fn complete_quiet_success(&mut self, now: Instant) -> bool {
-        let HookRunState::VisibleRunning {
-            start_time,
-            visible_since,
-            ..
-        } = self
-        else {
-            return false;
-        };
-        let start_time = *start_time;
-        let minimum_deadline = *visible_since + QUIET_HOOK_MIN_VISIBLE;
-        if now >= minimum_deadline {
-            return false;
-        }
-        *self = HookRunState::QuietLinger {
-            start_time,
-            removal_deadline: minimum_deadline,
-        };
-        true
     }
 }
 
@@ -1169,36 +1077,6 @@ mod tests {
                 "  warning: Heads up Review generated files".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn pending_hook_does_not_animate_transcript() {
-        let cell =
-            HookCell::new_active(hook_run_summary("hook-1"), /*animations_enabled*/ true);
-
-        assert_eq!(cell.transcript_animation_tick(), None);
-    }
-
-    #[test]
-    fn visible_hook_animates_transcript_when_animations_enabled() {
-        let mut cell =
-            HookCell::new_active(hook_run_summary("hook-1"), /*animations_enabled*/ true);
-        cell.reveal_running_runs_now_for_test();
-        cell.advance_time(Instant::now());
-
-        assert_eq!(cell.transcript_animation_tick(), Some(0));
-    }
-
-    #[test]
-    fn visible_hook_does_not_animate_transcript_when_animations_disabled() {
-        let mut cell = HookCell::new_active(
-            hook_run_summary("hook-1"),
-            /*animations_enabled*/ false,
-        );
-        cell.reveal_running_runs_now_for_test();
-        cell.advance_time(Instant::now());
-
-        assert_eq!(cell.transcript_animation_tick(), None);
     }
 
     #[test]

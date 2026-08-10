@@ -537,7 +537,7 @@ impl ChatWidget {
         self.pending_rate_limit_reset_hint_request_id = None;
         let cleared_hint = self.pending_rate_limit_reset_hint.take().is_some();
         if cleared_hint {
-            self.bump_active_cell_revision();
+            self.bump_rate_limit_revision();
             self.request_redraw();
         }
     }
@@ -548,7 +548,7 @@ impl ChatWidget {
 
     pub(crate) fn take_pending_rate_limit_reset_hint(&mut self) -> Option<PlainHistoryCell> {
         let hint = self.pending_rate_limit_reset_hint.take()?;
-        self.bump_active_cell_revision();
+        self.bump_rate_limit_revision();
         Some(hint)
     }
 
@@ -563,7 +563,7 @@ impl ChatWidget {
             ),
             /*hint*/ None,
         ));
-        self.bump_active_cell_revision();
+        self.bump_rate_limit_revision();
         self.request_redraw();
     }
 

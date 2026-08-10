@@ -5,3 +5,4 @@ expression: active_blob(&chat)
 • Explored
   └ Listed dir ls -la
     Read file foo.txt
+    Read file foo.txt

@@ -2,10 +2,8 @@
 source: tui/src/chatwidget/tests/status_and_layout.rs
 expression: normalized_backend_snapshot(terminal.backend())
 ---
-"────────────────────────────────────────────────────────────────────────────────"
-"• Checking files (0s • esc to interrupt) · 1 background terminal running · /ps …"
-"                                                                                "
-"                                                                                "
-"› Ask Codex to do anything                                                      "
-"                                                                                "
-"  gpt-5.6-sol default · /tmp/project                                            "
+"────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
+"                                                                                                                        "
+"› Ask Codex to do anything                                                                                              "
+"                                                                                                                        "
+"  esc interrupt · 1 background terminal running · /ps to view · /stop to close · Checking files 0s   100% context left  "

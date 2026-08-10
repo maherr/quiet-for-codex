@@ -1133,6 +1133,10 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
     }
     assert_matches!(
         rx.try_recv(),
+        Ok(AppEvent::BeginToolRunTurn { turn_id }) if turn_id == "turn-1"
+    );
+    assert_matches!(
+        rx.try_recv(),
         Ok(AppEvent::AppendMessageHistoryEntry { text, .. }) if text == "!echo hi"
     );
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));

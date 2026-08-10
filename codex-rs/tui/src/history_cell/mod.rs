@@ -4,11 +4,9 @@
 //! transcript entries and, transiently, an in-flight active cell that can mutate in place while
 //! streaming.
 //!
-//! The transcript overlay (`Ctrl+T`) appends a cached live tail derived from the active cell, and
-//! that cached tail is refreshed based on an active-cell cache key. Cells that change based on
-//! elapsed time expose `transcript_animation_tick()`, and code that mutates the active cell in place
-//! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
-//! rendered transcript output can change.
+//! The transcript overlay (`Ctrl+T`) appends a cached, non-animated live tail derived from the
+//! active cell. Code that mutates the active cell in place bumps the active-cell revision tracked by
+//! `ChatWidget`, so the cache key changes whenever rendered transcript output can change.
 
 use crate::active_cell_selection::ActiveCellSelectionHandle;
 use crate::diff_model::FileChange;
@@ -322,18 +320,9 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         false
     }
 
-    /// Returns a coarse "animation tick" when transcript output is time-dependent.
-    ///
-    /// The transcript overlay caches the rendered output of the in-flight active cell, so cells
-    /// that include time-based UI (spinner, shimmer, etc.) should return a tick that changes over
-    /// time to signal that the cached tail should be recomputed. Returning `None` means the
-    /// transcript lines are stable, while returning `Some(tick)` during an in-flight animation
-    /// allows the overlay to keep up with the main viewport.
-    ///
-    /// If a cell uses time-based visuals but always returns `None`, `Ctrl+T` can appear "frozen" on
-    /// the first rendered frame even though the main viewport is animating.
-    fn transcript_animation_tick(&self) -> Option<u64> {
-        None
+    /// Cheap semantic projection predicate. Unknown cells fail open as visible barriers.
+    fn is_tool_run_transparent(&self) -> bool {
+        false
     }
 }
 

@@ -39,7 +39,10 @@ fn background_terminal_promotion_replaces_causal_exec_across_interleaved_cells()
     lifecycle.activate();
     lifecycle.record_interaction(String::new());
     let lifecycle: Arc<dyn HistoryCell> = Arc::new(lifecycle);
-    promote_background_terminal_cell(&mut cells, "call-background", lifecycle);
+    assert_eq!(
+        promote_background_terminal_cell(&mut cells, "call-background", lifecycle),
+        Some(0)
+    );
 
     assert_eq!(cells.len(), 2, "unrelated cells should not be consumed");
     assert!(

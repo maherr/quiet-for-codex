@@ -809,11 +809,25 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Commit a finalized live cell while retaining its shared pending projection until insertion.
+    CommitPendingHistoryCell(Arc<dyn HistoryCell>),
+
+    /// Establish the protocol turn that owns subsequent chronological tool cells.
+    BeginToolRunTurn {
+        turn_id: String,
+    },
+
+    /// Seal the chronological tool run owned by this explicit turn boundary.
+    SealToolRun {
+        turn_id: String,
+        reason: crate::quiet_metrics::ToolRunSealReason,
+    },
+
     /// Atomically commit the final semantic cell for a retained stream.
     ///
     /// The app releases the stream-ordering barrier only after inserting this cell, preventing
     /// asynchronous usage output from overtaking the finalized assistant message or plan.
-    CommitRetainedStreamCell(Box<dyn HistoryCell>),
+    CommitRetainedStreamCell(Arc<dyn HistoryCell>),
 
     /// Replace the original exec row with its causal background-terminal lifecycle card.
     /// The card shares mutable source state with `ChatWidget`, so later refresh events redraw the

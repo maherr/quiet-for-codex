@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -105,29 +103,6 @@ fn summarize_interaction_input(input: &str) -> String {
     }
     preview.push_str("...");
     preview
-}
-
-#[derive(Clone)]
-struct ReadDisplay {
-    key: String,
-    label: String,
-}
-
-impl ReadDisplay {
-    fn new(name: &str, path: &Path) -> Self {
-        let path_label = path.to_string_lossy().to_string();
-        let label = if name.trim().is_empty() {
-            path_label.clone()
-        } else {
-            name.to_string()
-        };
-        let key = if path_label.is_empty() {
-            label.clone()
-        } else {
-            path_label
-        };
-        Self { key, label }
-    }
 }
 
 fn agent_command_title(command: &[String]) -> &'static str {
@@ -575,21 +550,24 @@ impl ExecCell {
 
         let mut detail_rows = Vec::new();
         let mut next_source_id = 0usize;
-        let mut pending_reads: Vec<ReadDisplay> = Vec::new();
-        let mut seen_reads: HashSet<String> = HashSet::new();
         for parsed in self.calls.iter().flat_map(|call| call.parsed.iter()) {
             match parsed {
                 ParsedCommand::Read { name, path, .. } => {
-                    pending_reads.push(ReadDisplay::new(name, path));
-                }
-                ParsedCommand::ListFiles { cmd, path } => {
-                    Self::flush_read_displays(
-                        &mut pending_reads,
-                        &mut seen_reads,
+                    let path_label = path.to_string_lossy().to_string();
+                    let label = if name.trim().is_empty() {
+                        path_label
+                    } else {
+                        name.to_string()
+                    };
+                    Self::push_exploring_action(
+                        "Read file",
+                        vec![label.into()],
                         width,
                         &mut detail_rows,
                         &mut next_source_id,
                     );
+                }
+                ParsedCommand::ListFiles { cmd, path } => {
                     Self::push_exploring_action(
                         "Listed dir",
                         vec![path.clone().unwrap_or(cmd.clone()).into()],
@@ -599,13 +577,6 @@ impl ExecCell {
                     );
                 }
                 ParsedCommand::Search { cmd, query, path } => {
-                    Self::flush_read_displays(
-                        &mut pending_reads,
-                        &mut seen_reads,
-                        width,
-                        &mut detail_rows,
-                        &mut next_source_id,
-                    );
                     let spans = match (query, path) {
                         (Some(q), Some(p)) => {
                             vec![q.clone().into(), " in ".dim(), p.clone().into()]
@@ -622,13 +593,6 @@ impl ExecCell {
                     );
                 }
                 ParsedCommand::Unknown { cmd } => {
-                    Self::flush_read_displays(
-                        &mut pending_reads,
-                        &mut seen_reads,
-                        width,
-                        &mut detail_rows,
-                        &mut next_source_id,
-                    );
                     Self::push_exploring_action(
                         "Ran command",
                         vec![cmd.clone().into()],
@@ -639,13 +603,6 @@ impl ExecCell {
                 }
             }
         }
-        Self::flush_read_displays(
-            &mut pending_reads,
-            &mut seen_reads,
-            width,
-            &mut detail_rows,
-            &mut next_source_id,
-        );
 
         rows.extend(detail_rows.into_iter().enumerate().map(|(index, line)| {
             let prefix = if index == 0 { "  └ " } else { "    " };
@@ -805,34 +762,6 @@ impl ExecCell {
         ExecDisplay::new(rows)
     }
 
-    fn flush_read_displays(
-        pending_reads: &mut Vec<ReadDisplay>,
-        seen_reads: &mut HashSet<String>,
-        width: u16,
-        detail_rows: &mut Vec<ExecDisplayLine>,
-        next_source_id: &mut usize,
-    ) {
-        let mut read_spans: Vec<Span<'static>> = Vec::new();
-        for read in pending_reads
-            .drain(..)
-            .filter(|read| seen_reads.insert(read.key.clone()))
-        {
-            if !read_spans.is_empty() {
-                read_spans.push(", ".dim());
-            }
-            read_spans.push(read.label.into());
-        }
-        if !read_spans.is_empty() {
-            Self::push_exploring_action(
-                "Read file",
-                read_spans,
-                width,
-                detail_rows,
-                next_source_id,
-            );
-        }
-    }
-
     fn push_exploring_action(
         title: &'static str,
         spans: Vec<Span<'static>>,
@@ -915,7 +844,7 @@ impl ExecCell {
     ) -> Vec<ExecDisplayLine> {
         let transcript = output
             .transcript_lines()
-            .map(|line| line.into_owned())
+            .map(std::borrow::Cow::into_owned)
             .collect::<Vec<_>>();
         let output_line_count = transcript.len();
         let output_char_count = transcript

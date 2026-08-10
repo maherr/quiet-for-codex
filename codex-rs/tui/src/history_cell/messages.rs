@@ -370,6 +370,10 @@ impl HistoryCell for ReasoningSummaryCell {
         }
     }
 
+    fn is_tool_run_transparent(&self) -> bool {
+        self.transcript_only && self.content.trim().is_empty()
+    }
+
     fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
         if self.transcript_only {
             return SelectionContribution::Transparent;

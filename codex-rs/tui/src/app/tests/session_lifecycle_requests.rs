@@ -950,7 +950,11 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
     app.close_transcript_overlay(&mut tui);
 
     let terminal_width = tui.terminal.last_known_screen_size.into();
-    app.reflow_transcript_now(&mut tui, terminal_width)?;
+    app.reflow_transcript_now(
+        &mut tui,
+        terminal_width,
+        crate::app::resize_reflow::InlineReflowReason::Structural,
+    )?;
     let request = loop {
         match app_event_rx.recv().await {
             Some(event @ AppEvent::RequestOlderScrollbackHistory { .. }) => break event,
@@ -1501,6 +1505,19 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                         is_closed: false,
                     })
                 );
+
+                // This test drives App methods directly instead of the normal event loop. Ack any
+                // queued history handoffs so the live-tail bridge does not duplicate committed
+                // session history underneath the picker.
+                let pending_commits = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+                    .filter_map(|event| match conversation_event_payload(event) {
+                        AppEvent::CommitPendingHistoryCell(cell) => Some(cell),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                for cell in pending_commits {
+                    app.chat_widget.note_history_commit_completed(&cell);
+                }
 
                 let child_store = Arc::clone(
                     &app.thread_event_channels

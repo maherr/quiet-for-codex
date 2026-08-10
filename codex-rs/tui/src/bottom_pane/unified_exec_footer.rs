@@ -33,10 +33,6 @@ impl UnifiedExecFooter {
         true
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.processes.is_empty()
-    }
-
     /// Returns the unindented summary text used by both footer and status-row rendering.
     ///
     /// The returned string intentionally omits leading spaces and separators so

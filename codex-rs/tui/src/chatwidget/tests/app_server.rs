@@ -677,9 +677,11 @@ async fn live_app_server_turn_started_sets_feedback_turn_id() {
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
+    let feedback = std::iter::from_fn(|| rx.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::SubmitFeedback { .. }));
     assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::SubmitFeedback {
+        feedback,
+        Some(AppEvent::SubmitFeedback {
             category: crate::app_event::FeedbackCategory::Bug,
             reason: None,
             turn_id: Some(turn_id),
@@ -894,7 +896,12 @@ async fn live_app_server_command_output_delta_transcript_snapshot() {
     handle_turn_interrupted(&mut chat, "turn-1");
     let mut completed = None;
     while let Ok(event) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
+        let cell = match event {
+            AppEvent::InsertHistoryCell(cell) => Some(Arc::<dyn HistoryCell>::from(cell)),
+            AppEvent::CommitPendingHistoryCell(cell) => Some(cell),
+            _ => None,
+        };
+        if let Some(cell) = cell {
             let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
             if transcript.contains("printf 'stdout\\nstderr\\n'") {
                 completed = Some(transcript);

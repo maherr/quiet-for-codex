@@ -4,4 +4,6 @@ expression: active_blob(&chat)
 ---
 • Explored
   └ Listed dir ls -la
-    Read file foo.txt, bar.txt
+    Read file foo.txt
+    Read file foo.txt
+    Read file bar.txt

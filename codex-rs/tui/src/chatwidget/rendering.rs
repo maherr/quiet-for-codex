@@ -13,6 +13,17 @@ impl ChatWidget {
 
     pub(crate) fn as_renderable(&self) -> RenderableItem<'_> {
         let active_cell_right_reserve = self.ambient_pet_wrap_reserved_cols();
+        let mut flex = FlexRenderable::new();
+        for cell in &self.transcript.pending_history_commits {
+            flex.push(
+                /*flex*/ 1,
+                RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                    child: cell.as_ref(),
+                    top: 1,
+                    right: active_cell_right_reserve,
+                })),
+            );
+        }
         let active_cell_renderable = match &self.transcript.active_cell {
             Some(cell) => RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
                 child: cell.as_ref(),
@@ -21,19 +32,7 @@ impl ChatWidget {
             })),
             None => RenderableItem::Owned(Box::new(())),
         };
-        let active_hook_cell_renderable = match &self.active_hook_cell {
-            Some(cell) if cell.should_render() => {
-                RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
-                    child: cell,
-                    top: 1,
-                    right: active_cell_right_reserve,
-                }))
-            }
-            _ => RenderableItem::Owned(Box::new(())),
-        };
-        let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
-        flex.push(/*flex*/ 0, active_hook_cell_renderable);
         if let Some(cell) = self.pending_token_activity_output() {
             flex.push(
                 /*flex*/ 1,
@@ -150,6 +149,7 @@ impl TranscriptAreaRenderable<'_> {
 
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.observe_live_tail_frame(area.width);
         self.as_renderable().render(area, buf);
         self.note_rendered_width(area.width);
     }

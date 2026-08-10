@@ -167,6 +167,10 @@ mod pager_layout;
 mod pager_overlay;
 mod permission_compat;
 pub(crate) mod public_widgets;
+#[cfg(feature = "quiet-bench")]
+#[doc(hidden)]
+pub mod quiet_bench;
+mod quiet_metrics;
 mod render;
 mod resize_reflow_cap;
 mod resume_picker;

@@ -34,6 +34,12 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::transcript_reflow::TRANSCRIPT_REFLOW_DEBOUNCE;
 use crate::tui;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InlineReflowReason {
+    Seal,
+    Structural,
+}
+
 /// Full terminal width before transcript-specific layout reservations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct TerminalWidth(u16);
@@ -85,14 +91,6 @@ impl App {
             && !self.chat_widget.compact_tool_groups_expanded
     }
 
-    pub(super) fn appended_cell_touches_compact_tool_group(&self, width: u16) -> bool {
-        self.compact_tool_groups_enabled()
-            && compact_tool_groups::appended_cell_touches_compact_group(
-                &self.chat_widget.transcript_cells,
-                width,
-            )
-    }
-
     pub(super) fn toggle_compact_tool_groups_expanded(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.chat_widget.compact_tool_groups_expanded =
             !self.chat_widget.compact_tool_groups_expanded;
@@ -101,7 +99,7 @@ impl App {
                 self.sync_owned_screen_cells();
             } else {
                 let terminal_width = tui.terminal.last_known_screen_size.into();
-                self.reflow_transcript_now(tui, terminal_width)?;
+                self.reflow_transcript_now(tui, terminal_width, InlineReflowReason::Structural)?;
             }
         }
         tui.frame_requester().schedule_frame();
@@ -200,6 +198,9 @@ impl App {
     /// This mirrors terminal scrollback behavior and avoids making startup replay cheaper or more
     /// expensive than a later resize rebuild of the same transcript.
     pub(super) fn finish_initial_history_replay_buffer(&mut self, tui: &mut tui::Tui) {
+        // Replay completion is itself a semantic boundary. Commit the final projection marker
+        // while drawing is still deferred so the first visible frame is already settled.
+        self.seal_trailing_tool_run(tui);
         if self.has_owned_screen() {
             self.finish_owned_screen_replay();
             tui.frame_requester().schedule_frame();
@@ -551,7 +552,8 @@ impl App {
         let reflow_ran_during_stream = !self.chat_widget.transcript_cells.is_empty()
             && self.should_mark_reflow_as_stream_time();
 
-        let width = self.reflow_transcript_now(tui, screen_size.into())?;
+        let width =
+            self.reflow_transcript_now(tui, screen_size.into(), InlineReflowReason::Structural)?;
         self.chat_widget
             .transcript_reflow
             .mark_reflowed_width(width.0);
@@ -571,12 +573,20 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         terminal_width: TerminalWidth,
+        reason: InlineReflowReason,
     ) -> Result<TerminalWidth> {
         if self.has_owned_screen() {
             self.chat_widget.transcript_reflow.clear();
             tui.clear_pending_history_lines();
             return Ok(terminal_width);
         }
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::InlineReflow);
+        crate::quiet_metrics::bump(match reason {
+            InlineReflowReason::Seal => crate::quiet_metrics::QuietMetric::InlineReflowSeal,
+            InlineReflowReason::Structural => {
+                crate::quiet_metrics::QuietMetric::InlineReflowStructural
+            }
+        });
         let width = self.chat_widget.history_wrap_width(terminal_width.0);
         if self.chat_widget.transcript_cells.is_empty() {
             // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.

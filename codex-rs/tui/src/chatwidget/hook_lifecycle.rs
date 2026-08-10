@@ -9,7 +9,7 @@ impl ChatWidget {
     /// Drop transient live hook status without flushing it into history.
     pub(super) fn clear_active_hook_cell(&mut self) {
         if self.active_hook_cell.take().is_some() {
-            self.bump_active_cell_revision();
+            self.bottom_pane.set_hook_status(None);
             self.request_pending_usage_output_insertion();
         }
     }
@@ -20,16 +20,15 @@ impl ChatWidget {
         match self.active_hook_cell.as_mut() {
             Some(cell) => {
                 cell.start_run(run);
-                self.bump_active_cell_revision();
             }
             None => {
                 self.active_hook_cell = Some(history_cell::new_active_hook_cell(
                     run,
                     self.config.animations,
                 ));
-                self.bump_active_cell_revision();
             }
         }
+        self.sync_active_hook_footer();
         self.request_redraw();
     }
 
@@ -42,26 +41,23 @@ impl ChatWidget {
             .as_mut()
             .map(|cell| cell.complete_run(completed.clone()))
             .unwrap_or(false);
-        if completed_existing_run {
-            self.bump_active_cell_revision();
-        } else {
+        if !completed_existing_run {
             match self.active_hook_cell.as_mut() {
                 Some(cell) => {
                     cell.add_completed_run(completed);
-                    self.bump_active_cell_revision();
                 }
                 None => {
                     let cell =
                         history_cell::new_completed_hook_cell(completed, self.config.animations);
                     if !cell.is_empty() {
                         self.active_hook_cell = Some(cell);
-                        self.bump_active_cell_revision();
                     }
                 }
             }
         }
         self.flush_completed_hook_output();
         self.finish_active_hook_cell_if_idle();
+        self.sync_active_hook_footer();
         self.request_redraw();
     }
 
@@ -80,10 +76,8 @@ impl ChatWidget {
         if active_cell_is_empty {
             self.active_hook_cell = None;
         }
-        self.bump_active_cell_revision();
         self.transcript.needs_final_message_separator = true;
-        self.app_event_tx
-            .send(AppEvent::InsertHistoryCell(Box::new(completed_cell)));
+        self.queue_pending_history_commit(Box::new(completed_cell), /*retained_stream*/ false);
         self.request_pending_usage_output_insertion();
     }
 
@@ -93,17 +87,14 @@ impl ChatWidget {
         };
         if cell.is_empty() {
             self.active_hook_cell = None;
-            self.bump_active_cell_revision();
             self.request_pending_usage_output_insertion();
             return;
         }
         if cell.should_flush()
             && let Some(cell) = self.active_hook_cell.take()
         {
-            self.bump_active_cell_revision();
             self.transcript.needs_final_message_separator = true;
-            self.app_event_tx
-                .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+            self.queue_pending_history_commit(Box::new(cell), /*retained_stream*/ false);
             self.request_pending_usage_output_insertion();
         }
     }
@@ -113,23 +104,12 @@ impl ChatWidget {
             return;
         };
         let now = Instant::now();
-        if cell.advance_time(now) {
-            self.bump_active_cell_revision();
-        }
+        cell.advance_time(now);
         self.finish_active_hook_cell_if_idle();
+        self.sync_active_hook_footer();
     }
 
     pub(super) fn schedule_hook_timer_if_needed(&self) {
-        if self.config.animations
-            && self
-                .active_hook_cell
-                .as_ref()
-                .is_some_and(HookCell::has_visible_running_run)
-        {
-            self.frame_requester
-                .schedule_frame_in(Duration::from_millis(50));
-        }
-
         let Some(deadline) = self
             .active_hook_cell
             .as_ref()
@@ -139,5 +119,13 @@ impl ChatWidget {
         };
         let delay = deadline.saturating_duration_since(Instant::now());
         self.frame_requester.schedule_frame_in(delay);
+    }
+
+    fn sync_active_hook_footer(&mut self) {
+        let status = self
+            .active_hook_cell
+            .as_ref()
+            .and_then(HookCell::visible_running_status);
+        self.bottom_pane.set_hook_status(status);
     }
 }

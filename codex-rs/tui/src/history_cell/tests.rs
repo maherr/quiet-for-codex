@@ -1951,7 +1951,7 @@ fn session_header_directory_front_truncates_long_segment() {
 }
 
 #[test]
-fn coalesces_sequential_reads_within_one_call() {
+fn sequential_reads_within_one_call_keep_distinct_rows() {
     // Build one exec cell with a Search followed by two Reads
     let call_id = "c1".to_string();
     let mut cell = ExecCell::new(
@@ -1992,7 +1992,7 @@ fn coalesces_sequential_reads_within_one_call() {
 }
 
 #[test]
-fn coalesces_reads_across_multiple_calls() {
+fn reads_across_multiple_calls_keep_distinct_rows() {
     let mut cell = ExecCell::new(
         ExecCall {
             call_id: "c1".to_string(),
@@ -2045,7 +2045,7 @@ fn coalesces_reads_across_multiple_calls() {
 }
 
 #[test]
-fn coalesced_reads_dedupe_names() {
+fn repeated_read_names_keep_distinct_rows() {
     let mut cell = ExecCell::new(
         ExecCall {
             call_id: "c1".to_string(),

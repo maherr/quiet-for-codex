@@ -237,6 +237,7 @@ mod thread_goal_actions;
 mod thread_routing;
 mod thread_session_state;
 mod thread_settings;
+pub(crate) mod tool_run_projection;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -1451,23 +1452,30 @@ See the Codex keymap documentation for supported actions and examples."
     }
 
     fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui, screen_size: Size) -> Result<Rect> {
-        if let Some(rendered_area) = self.render_owned_screen_frame(tui)? {
-            return Ok(rendered_area);
-        }
-        self.with_chat_widget_frame(screen_size.width, |desired_height, chat_widget| {
-            let mut rendered_area = Rect::default();
-            tui.draw_with_resize_reflow(desired_height, screen_size, |frame| {
-                let area = frame.area();
-                rendered_area = area;
-                chat_widget.render(area, frame.buffer);
-                self.chat_widget.note_rendered_width(area.width);
-                if let Some((x, y)) = chat_widget.cursor_pos(area) {
-                    frame.set_cursor_style(chat_widget.cursor_style(area));
-                    frame.set_cursor_position((x, y));
-                }
-            })?;
-            Ok(rendered_area)
-        })
+        #[cfg(any(debug_assertions, test, feature = "quiet-bench"))]
+        let started_at = Instant::now();
+        let result = (|| {
+            if let Some(rendered_area) = self.render_owned_screen_frame(tui)? {
+                return Ok(rendered_area);
+            }
+            self.with_chat_widget_frame(screen_size.width, |desired_height, chat_widget| {
+                let mut rendered_area = Rect::default();
+                tui.draw_with_resize_reflow(desired_height, screen_size, |frame| {
+                    let area = frame.area();
+                    rendered_area = area;
+                    chat_widget.render(area, frame.buffer);
+                    self.chat_widget.note_rendered_width(area.width);
+                    if let Some((x, y)) = chat_widget.cursor_pos(area) {
+                        frame.set_cursor_style(chat_widget.cursor_style(area));
+                        frame.set_cursor_position((x, y));
+                    }
+                })?;
+                Ok(rendered_area)
+            })
+        })();
+        #[cfg(any(debug_assertions, test, feature = "quiet-bench"))]
+        crate::quiet_metrics::record_render_time(started_at.elapsed());
+        result
     }
 
     fn with_chat_widget_frame<T>(
@@ -1475,6 +1483,7 @@ See the Codex keymap documentation for supported actions and examples."
         width: u16,
         render: impl FnOnce(u16, &dyn Renderable) -> T,
     ) -> T {
+        self.chat_widget.observe_live_tail_frame(width);
         let chat_widget = self.chat_widget.as_renderable();
         render(chat_widget.desired_height(width), &chat_widget)
     }

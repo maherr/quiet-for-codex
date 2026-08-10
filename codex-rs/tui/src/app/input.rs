@@ -164,7 +164,11 @@ impl App {
             return;
         }
         let terminal_width = tui.terminal.last_known_screen_size.into();
-        if let Err(err) = self.reflow_transcript_now(tui, terminal_width) {
+        if let Err(err) = self.reflow_transcript_now(
+            tui,
+            terminal_width,
+            super::resize_reflow::InlineReflowReason::Structural,
+        ) {
             tracing::warn!(error = %err, "failed to reflow transcript after raw output mode toggle");
             self.chat_widget
                 .add_error_message(format!("Failed to redraw transcript: {err}"));
@@ -262,13 +266,18 @@ impl App {
             && compact_tool_group_inspect_shortcut_matches(key_event)
             && self.chat_widget.composer_text_with_pending().is_empty()
         {
-            let width = self
-                .chat_widget
-                .history_wrap_width(tui.terminal.last_known_screen_size.width);
-            if let Some(cells) = compact_tool_groups::latest_compact_tool_group_cells(
-                &self.chat_widget.transcript_cells,
-                width,
-            ) {
+            let cells = if self.has_owned_screen() {
+                self.owned_screen_tool_group_inspection_cells()
+            } else {
+                let width = self
+                    .chat_widget
+                    .history_wrap_width(tui.terminal.last_known_screen_size.width);
+                compact_tool_groups::latest_compact_tool_group_cells(
+                    &self.chat_widget.transcript_cells,
+                    width,
+                )
+            };
+            if let Some(cells) = cells {
                 let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_work_inspector(
                     cells,

@@ -2,7 +2,7 @@
 source: tui/src/app/owned_screen_tests.rs
 expression: expanded.backend()
 ---
-"▾ Work: read 2 files · Alt+I inspect · Alt+O all                                "
+"▾ Work: read 2 files                                                            "
 "                                                                                "
 "• Explored                                                                      "
 "  └ Read file app.rs                                                            "
@@ -13,4 +13,4 @@ expression: expanded.backend()
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.6-sol default · /tmp/project                                            "
+"  gpt-5.6-sol default · /tmp/project · Alt+I inspect Work                       "

@@ -20,6 +20,7 @@ use super::owned_screen_resize::OwnedScreenLayout;
 use super::owned_screen_resize::OwnedScreenSplitState;
 use super::owned_screen_resize::PaneSplitPreference;
 use super::thread_events::ThreadBufferedEvent;
+use super::tool_run_projection::ToolRunLifecycle;
 use crate::app_event::ConversationOrigin;
 use crate::app_event::PaneSlot;
 use crate::chatwidget::ChatWidget;
@@ -50,6 +51,7 @@ pub(crate) struct ConversationPane {
     pub(super) chat_widget: ChatWidget,
     pub(super) file_search: FileSearchManager,
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    pub(super) tool_run_lifecycle: ToolRunLifecycle,
     pub(super) owned_screen: Option<OwnedScreen>,
     pub(super) transcript_reflow: TranscriptReflowState,
     pub(super) initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
@@ -82,6 +84,7 @@ impl ConversationPane {
             chat_widget: init.chat_widget,
             file_search: init.file_search,
             transcript_cells: Vec::new(),
+            tool_run_lifecycle: ToolRunLifecycle::default(),
             owned_screen: init.owned_screen,
             transcript_reflow: TranscriptReflowState::default(),
             initial_history_replay_buffer: None,

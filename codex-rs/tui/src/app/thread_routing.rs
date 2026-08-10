@@ -178,9 +178,14 @@ impl App {
     /// intentionally hidden until there is more than one known thread so single-thread sessions do
     /// not spend footer space restating that the user is already on the main conversation.
     pub(super) fn sync_active_agent_label(&mut self) {
-        let label = self
+        let agent_label = self
             .agent_navigation
             .active_agent_label(self.current_displayed_thread_id(), self.primary_thread_id);
+        let has_inspectable_work = super::compact_tool_groups::latest_compact_tool_group_id(
+            &self.chat_widget.transcript_cells,
+        )
+        .is_some();
+        let label = contextual_footer_label(agent_label, has_inspectable_work);
         self.chat_widget.set_active_agent_label(label);
         self.sync_side_thread_ui();
     }
@@ -1761,11 +1766,35 @@ impl App {
     }
 }
 
+fn contextual_footer_label(
+    agent_label: Option<String>,
+    has_inspectable_work: bool,
+) -> Option<String> {
+    match (agent_label, has_inspectable_work) {
+        (Some(label), true) => Some(format!("{label} · Alt+I inspect Work")),
+        (None, true) => Some("Alt+I inspect Work".to_string()),
+        (label, false) => label,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use codex_protocol::models::ActivePermissionProfile;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+
+    #[test]
+    fn contextual_footer_mentions_inspection_only_when_work_exists() {
+        assert_eq!(contextual_footer_label(None, false), None);
+        assert_eq!(
+            contextual_footer_label(None, true).as_deref(),
+            Some("Alt+I inspect Work")
+        );
+        assert_eq!(
+            contextual_footer_label(Some("Agent 2".to_string()), true).as_deref(),
+            Some("Agent 2 · Alt+I inspect Work")
+        );
+    }
 
     async fn config_with_workspace_profile() -> Config {
         let temp_dir = tempfile::tempdir().expect("tempdir");

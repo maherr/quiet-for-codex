@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ToolGroupItem {
     pub(crate) summary: ToolGroupSummary,
-    pub(crate) collapse_single: bool,
 }
 
 #[derive(Clone, Debug, Default)]

@@ -191,9 +191,39 @@ fn live_cell(
             )
             .into_projection(),
         ),
-        lines,
+        lines: Arc::from(lines),
         is_stream_continuation,
     }
+}
+
+#[test]
+fn live_tail_renderable_reuses_shared_line_storage() {
+    let retained: Arc<[HyperlinkLine]> = Arc::from(vec![HyperlinkLine::from("live output")]);
+    let mut viewport = viewport(Vec::new());
+    viewport.sync_live_tail(
+        /*width*/ 32,
+        Some(ActiveCellRenderKey {
+            revision: 1,
+            primary_present: true,
+            is_stream_continuation: false,
+            token_activity_revision: None,
+            rate_limit_revision: None,
+        }),
+        |_, _| {
+            Some(vec![ActiveCellDisplaySnapshot {
+                lines: Arc::clone(&retained),
+                selection_projection: ActiveCellSelectionHandle::ready(None),
+                is_stream_continuation: false,
+            }])
+        },
+    );
+
+    // `retained`, the snapshot, and its temporary renderable all share one immutable allocation.
+    assert_eq!(Arc::strong_count(&retained), 3);
+    assert!(std::ptr::eq(
+        Arc::as_ptr(&retained),
+        Arc::as_ptr(&viewport.live_cells[0].lines),
+    ));
 }
 
 fn viewport(cells: Vec<Arc<dyn HistoryCell>>) -> ConversationViewport {
@@ -226,6 +256,176 @@ fn committed_hit_measures_each_cell_only_through_the_pager_layout() {
         })
     );
     assert_eq!(display_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn local_range_replacement_preserves_bottom_below_and_above_anchors() {
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 2,
+    );
+
+    let mut following = viewport(vec![cell("a"), cell("b"), cell("c"), cell("d")]);
+    following.render(area, &mut Buffer::empty(area));
+    assert!(following.is_following_bottom());
+    following.replace_range(
+        area.width,
+        /*start*/ 0,
+        /*remove_count*/ 2,
+        vec![cell("merged")],
+    );
+    assert!(following.is_following_bottom());
+    let mut following_buffer = Buffer::empty(area);
+    following.render(area, &mut following_buffer);
+    assert!(buffer_text(&following_buffer, area).contains("d"));
+
+    let mut below = viewport(vec![cell("a"), cell("b"), cell("c"), cell("d")]);
+    below.preserve_scroll_offset_through_next_render(/*scroll_offset*/ 0);
+    below.render(area, &mut Buffer::empty(area));
+    assert_eq!(below.scroll_offset(), 0);
+    below.replace_range(
+        area.width,
+        /*start*/ 2,
+        /*remove_count*/ 2,
+        vec![cell("merged")],
+    );
+    assert_eq!(
+        below.scroll_offset(),
+        0,
+        "a replacement entirely below the viewport must not move it"
+    );
+
+    let mut above = viewport(vec![cell("a"), cell("b"), cell("c"), cell("d")]);
+    above.preserve_scroll_offset_through_next_render(/*scroll_offset*/ 4);
+    above.render(area, &mut Buffer::empty(area));
+    assert_eq!(above.scroll_offset(), 4);
+    above.replace_range(
+        area.width,
+        /*start*/ 0,
+        /*remove_count*/ 2,
+        vec![cell("merged")],
+    );
+    assert_eq!(
+        above.scroll_offset(),
+        2,
+        "the exact two-row height delta above the viewport should be removed from the offset"
+    );
+    let mut above_buffer = Buffer::empty(area);
+    above.render(area, &mut above_buffer);
+    assert!(
+        buffer_text(&above_buffer, area).contains("c"),
+        "the same logical top source should remain visible"
+    );
+}
+
+#[test]
+fn stable_width_render_budget_hits_the_prepared_cell_cache_after_warmup() {
+    let display_calls = Arc::new(AtomicUsize::new(0));
+    let mut viewport = viewport(vec![Arc::new(CountingCell {
+        display: "prepared cell",
+        display_calls: Arc::clone(&display_calls),
+    })]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 4,
+    );
+
+    crate::quiet_metrics::reset_for_test();
+    viewport.render(area, &mut Buffer::empty(area));
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(
+            crate::quiet_metrics::QuietMetric::PreparedCellCacheMiss
+        ),
+        1
+    );
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(
+            crate::quiet_metrics::QuietMetric::LayoutStableCellMeasurement,
+        ),
+        1
+    );
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(
+            crate::quiet_metrics::QuietMetric::LayoutVisibleCellDraw,
+        ),
+        1
+    );
+
+    crate::quiet_metrics::reset_for_test();
+    viewport.render(area, &mut Buffer::empty(area));
+    let hits =
+        crate::quiet_metrics::get_for_test(crate::quiet_metrics::QuietMetric::PreparedCellCacheHit);
+    let misses = crate::quiet_metrics::get_for_test(
+        crate::quiet_metrics::QuietMetric::PreparedCellCacheMiss,
+    );
+    assert!(
+        hits >= 1,
+        "stable redraw should reuse prepared lines and height"
+    );
+    assert_eq!(misses, 0);
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(
+            crate::quiet_metrics::QuietMetric::LayoutStableCellMeasurement,
+        ),
+        0,
+        "an unchanged stable cell must not be measured again at the same width"
+    );
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(
+            crate::quiet_metrics::QuietMetric::LayoutVisibleCellDraw,
+        ),
+        1
+    );
+    assert_eq!(display_calls.load(Ordering::Relaxed), 1);
+
+    let narrow = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 4,
+    );
+    crate::quiet_metrics::reset_for_test();
+    viewport.render(narrow, &mut Buffer::empty(narrow));
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(
+            crate::quiet_metrics::QuietMetric::PreparedCellCacheMiss
+        ),
+        1
+    );
+    assert_eq!(display_calls.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn same_width_append_measures_only_the_new_stable_cell() {
+    let retained_calls = Arc::new(AtomicUsize::new(0));
+    let appended_calls = Arc::new(AtomicUsize::new(0));
+    let retained = Arc::new(CountingCell {
+        display: "retained",
+        display_calls: Arc::clone(&retained_calls),
+    }) as Arc<dyn HistoryCell>;
+    let appended = Arc::new(CountingCell {
+        display: "appended",
+        display_calls: Arc::clone(&appended_calls),
+    }) as Arc<dyn HistoryCell>;
+    let mut viewport = viewport(vec![retained]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 4,
+    );
+    viewport.render(area, &mut Buffer::empty(area));
+    assert_eq!(retained_calls.load(Ordering::Relaxed), 1);
+    crate::quiet_metrics::reset_for_test();
+
+    viewport.push_cell(appended);
+    viewport.render(area, &mut Buffer::empty(area));
+
+    assert_eq!(
+        retained_calls.load(Ordering::Relaxed),
+        1,
+        "same-width append must retain the existing prepared cell"
+    );
+    assert_eq!(appended_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(
+            crate::quiet_metrics::QuietMetric::LayoutStableCellMeasurement,
+        ),
+        1,
+        "only the appended renderable may be measured"
+    );
 }
 
 #[test]
@@ -313,10 +513,12 @@ fn renders_main_display_and_live_tail_without_pager_chrome() {
         /*width*/ 32,
         Some(ActiveCellRenderKey {
             revision: 1,
+            primary_present: true,
             is_stream_continuation: false,
-            animation_tick: None,
+            token_activity_revision: None,
+            rate_limit_revision: None,
         }),
-        |width| {
+        |width, _| {
             Some(vec![live_cell(
                 width,
                 "live tail",
@@ -512,16 +714,39 @@ fn rich_line_background_reaches_the_owned_viewport_edge() {
 }
 
 #[test]
+fn filling_line_background_to_width_preserves_measured_height() {
+    let renderable = ConversationCellRenderable {
+        cell: Arc::new(LineStyleCell),
+        render_mode: HistoryRenderMode::Rich,
+        prepared: RefCell::new(None),
+    };
+    let width = 12;
+    let (prepared, measured_height) = renderable.prepare(width);
+    let mut padded = visible_lines_ref(&prepared);
+    fill_line_backgrounds_to_width(&mut padded, width);
+    let padded_height: u16 = Paragraph::new(Text::from(padded))
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .try_into()
+        .expect("padded height fits u16");
+
+    assert_eq!(measured_height, 1);
+    assert_eq!(padded_height, measured_height);
+}
+
+#[test]
 fn append_keeps_live_tail_after_committed_cells() {
     let mut viewport = viewport(Vec::new());
     viewport.sync_live_tail(
         /*width*/ 24,
         Some(ActiveCellRenderKey {
             revision: 1,
+            primary_present: true,
             is_stream_continuation: false,
-            animation_tick: None,
+            token_activity_revision: None,
+            rate_limit_revision: None,
         }),
-        |width| {
+        |width, _| {
             Some(vec![live_cell(
                 width,
                 "live tail",
@@ -557,10 +782,12 @@ fn selection_uses_stream_continuation_separator_before_live_cells() {
             /*width*/ 24,
             Some(ActiveCellRenderKey {
                 revision: 1,
+                primary_present: true,
                 is_stream_continuation,
-                animation_tick: None,
+                token_activity_revision: None,
+                rate_limit_revision: None,
             }),
-            |width| Some(vec![live_cell(width, "live", is_stream_continuation)]),
+            |width, _| Some(vec![live_cell(width, "live", is_stream_continuation)]),
         );
         let area = Rect::new(
             /*x*/ 0, /*y*/ 0, /*width*/ 24, /*height*/ 4,
@@ -607,10 +834,12 @@ fn multiple_live_cells_keep_individual_selection_projections() {
         /*width*/ 24,
         Some(ActiveCellRenderKey {
             revision: 1,
+            primary_present: true,
             is_stream_continuation: false,
-            animation_tick: None,
+            token_activity_revision: None,
+            rate_limit_revision: None,
         }),
-        |width| {
+        |width, _| {
             Some(vec![
                 live_cell(width, "tool output", /*is_stream_continuation*/ false),
                 live_cell(width, "hook output", /*is_stream_continuation*/ false),
@@ -631,14 +860,86 @@ fn multiple_live_cells_keep_individual_selection_projections() {
 }
 
 #[test]
+fn live_tail_rebuilds_only_the_lane_whose_revision_changed() {
+    let mut viewport = viewport(Vec::new());
+    let initial = ActiveCellRenderKey {
+        revision: 7,
+        primary_present: true,
+        is_stream_continuation: false,
+        token_activity_revision: Some(11),
+        rate_limit_revision: Some(13),
+    };
+    viewport.sync_live_tail(/*width*/ 32, Some(initial), |width, lane| {
+        let label = match lane {
+            ActiveCellLane::Primary => "primary",
+            ActiveCellLane::TokenActivity => "token 11",
+            ActiveCellLane::RateLimit => "rate 13",
+        };
+        Some(vec![live_cell(
+            width, label, /*is_stream_continuation*/ false,
+        )])
+    });
+
+    crate::quiet_metrics::reset_for_test();
+    let calls = std::cell::RefCell::new(Vec::new());
+    viewport.sync_live_tail(
+        /*width*/ 32,
+        Some(ActiveCellRenderKey {
+            token_activity_revision: Some(12),
+            ..initial
+        }),
+        |width, lane| {
+            calls.borrow_mut().push(lane);
+            let label = match lane {
+                ActiveCellLane::Primary => "unexpected primary",
+                ActiveCellLane::TokenActivity => "token 12",
+                ActiveCellLane::RateLimit => "unexpected rate",
+            };
+            Some(vec![live_cell(
+                width, label, /*is_stream_continuation*/ false,
+            )])
+        },
+    );
+
+    assert_eq!(&*calls.borrow(), &[ActiveCellLane::TokenActivity]);
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(crate::quiet_metrics::QuietMetric::LivePrimaryRebuild),
+        0
+    );
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(crate::quiet_metrics::QuietMetric::LiveTokenRebuild),
+        1
+    );
+    assert_eq!(
+        crate::quiet_metrics::get_for_test(crate::quiet_metrics::QuietMetric::LiveRateLimitRebuild),
+        0
+    );
+    let rendered = viewport
+        .live_cells
+        .iter()
+        .flat_map(|snapshot| snapshot.lines.iter())
+        .map(|line| {
+            line.line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(rendered, vec!["primary", "token 12", "rate 13"]);
+}
+
+#[test]
 fn replacing_cells_invalidates_and_respaces_the_live_tail() {
     let key = ActiveCellRenderKey {
         revision: 1,
+        primary_present: true,
         is_stream_continuation: false,
-        animation_tick: None,
+        token_activity_revision: None,
+        rate_limit_revision: None,
     };
     let mut viewport = viewport(Vec::new());
-    viewport.sync_live_tail(/*width*/ 24, Some(key), |width| {
+    viewport.sync_live_tail(/*width*/ 24, Some(key), |width, _| {
         Some(vec![live_cell(
             width,
             "live tail",
@@ -647,7 +948,7 @@ fn replacing_cells_invalidates_and_respaces_the_live_tail() {
     });
 
     viewport.replace_cells(vec![cell("replacement")]);
-    viewport.sync_live_tail(/*width*/ 24, Some(key), |width| {
+    viewport.sync_live_tail(/*width*/ 24, Some(key), |width, _| {
         Some(vec![live_cell(
             width,
             "live tail",
@@ -681,12 +982,14 @@ fn preserves_semantic_links_for_committed_and_live_content() {
         /*width*/ 28,
         Some(ActiveCellRenderKey {
             revision: 1,
+            primary_present: true,
             is_stream_continuation: false,
-            animation_tick: None,
+            token_activity_revision: None,
+            rate_limit_revision: None,
         }),
-        |width| {
+        |width, _| {
             Some(vec![ActiveCellDisplaySnapshot {
-                lines: live.display_hyperlink_lines(width),
+                lines: Arc::from(live.display_hyperlink_lines(width)),
                 selection_projection: live
                     .active_cell_selection_handle(width, HistoryRenderMode::Rich),
                 is_stream_continuation: live.is_stream_continuation(),
@@ -1167,10 +1470,12 @@ fn live_tail_updates_are_frozen_while_selecting_live_text() {
         /*width*/ 20,
         Some(ActiveCellRenderKey {
             revision: 1,
+            primary_present: true,
             is_stream_continuation: false,
-            animation_tick: Some(1),
+            token_activity_revision: None,
+            rate_limit_revision: None,
         }),
-        |width| {
+        |width, _| {
             Some(vec![live_cell(
                 width, live_text, /*is_stream_continuation*/ false,
             )])
@@ -1189,10 +1494,12 @@ fn live_tail_updates_are_frozen_while_selecting_live_text() {
         area.width,
         Some(ActiveCellRenderKey {
             revision: 1,
+            primary_present: true,
             is_stream_continuation: false,
-            animation_tick: Some(1),
+            token_activity_revision: None,
+            rate_limit_revision: None,
         }),
-        |width| {
+        |width, _| {
             Some(vec![live_cell(
                 width, live_text, /*is_stream_continuation*/ false,
             )])
@@ -1205,11 +1512,13 @@ fn live_tail_updates_are_frozen_while_selecting_live_text() {
     viewport.sync_live_tail(
         area.width,
         Some(ActiveCellRenderKey {
-            revision: 1,
+            revision: 2,
+            primary_present: true,
             is_stream_continuation: false,
-            animation_tick: Some(2),
+            token_activity_revision: None,
+            rate_limit_revision: None,
         }),
-        |width| {
+        |width, _| {
             Some(vec![live_cell(
                 width,
                 "live two now wraps across several terminal rows",

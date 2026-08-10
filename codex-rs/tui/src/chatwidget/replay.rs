@@ -28,6 +28,9 @@ impl ChatWidget {
                 completed_at,
                 duration_ms,
             } = turn;
+            self.app_event_tx.send(AppEvent::BeginToolRunTurn {
+                turn_id: turn_id.clone(),
+            });
             if matches!(status, TurnStatus::InProgress) {
                 self.turn_lifecycle.last_turn_id = Some(turn_id.clone());
                 self.last_non_retry_error = None;

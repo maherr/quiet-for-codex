@@ -183,6 +183,10 @@ async fn queued_slash_compact_dispatches_after_active_turn() {
             .action,
         QueuedInputAction::ParseSlash
     );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::BeginToolRunTurn { turn_id }) if turn_id == "turn-1"
+    );
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
@@ -1498,7 +1502,7 @@ async fn completed_token_activity_refresh_waits_for_active_history_cell() {
 
     chat.flush_active_cell();
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::CommitPendingHistoryCell(_)));
     assert_matches!(rx.try_recv(), Ok(AppEvent::CommitPendingUsageOutput));
 }
 

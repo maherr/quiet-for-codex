@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use codex_protocol::parse_command::ParsedCommand;
@@ -14,12 +14,12 @@ use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use serde_json::Value;
 
-use crate::chatwidget::ActiveCellDisplaySnapshot;
+use super::tool_run_projection::RunId;
+use super::tool_run_projection::seal_cell;
 use crate::compact_tool_group_item::ToolGroupItem;
 use crate::compact_tool_group_item::ToolGroupSummary;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
-use crate::exec_cell::compact_command_for_viewport;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::DynamicToolCallCell;
 use crate::history_cell::HistoryCell;
@@ -33,11 +33,8 @@ use crate::history_cell::WebSearchCell;
 use crate::history_cell::contains_ascii_case_insensitive;
 use crate::history_cell::selection_contribution_from_display_lines;
 use crate::history_cell::tool_result_requires_user_action;
+use crate::line_truncation::line_width;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
-use crate::render::line_utils::line_to_static;
-use crate::terminal_hyperlinks::plain_hyperlink_lines;
-use crate::wrapping::RtOptions;
-use crate::wrapping::adaptive_wrap_line;
 
 /// Large successful outputs stay expanded instead of being copied and parsed solely to decide
 /// whether they can collapse into a one-line Work summary.
@@ -59,12 +56,15 @@ pub(super) struct CompactToolGroup {
 }
 
 struct CompactToolGroupAnalysis {
+    id: CompactToolGroupId,
     detail: String,
     consumed_cells: usize,
+    source_cells: usize,
+    action_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(super) struct CompactToolGroupId(usize);
+pub(super) struct CompactToolGroupId(u64);
 
 /// Render-local hover state shared by the retained Work headers in one owned pane.
 ///
@@ -72,11 +72,10 @@ pub(super) struct CompactToolGroupId(usize);
 /// reads it through each projected cell's `rich_block_style`.
 #[derive(Debug, Default)]
 pub(super) struct CompactToolGroupHover {
-    id: AtomicUsize,
+    id: AtomicU64,
 }
 
 impl CompactToolGroupHover {
-    #[cfg(test)]
     pub(super) fn hovered(&self) -> Option<CompactToolGroupId> {
         match self.id.load(Ordering::Relaxed) {
             0 => None,
@@ -102,6 +101,7 @@ impl CompactToolGroupHover {
 #[derive(Debug)]
 struct CompactToolGroupCell {
     id: CompactToolGroupId,
+    action_count: usize,
     expanded: bool,
     hover: Arc<CompactToolGroupHover>,
     state: Mutex<CompactToolGroupCellState>,
@@ -119,11 +119,13 @@ impl CompactToolGroupCell {
         id: CompactToolGroupId,
         source_cells: Vec<Arc<dyn HistoryCell>>,
         detail: String,
+        action_count: usize,
         expanded: bool,
         hover: Arc<CompactToolGroupHover>,
     ) -> Self {
         Self {
             id,
+            action_count,
             expanded,
             hover,
             state: Mutex::new(CompactToolGroupCellState {
@@ -148,16 +150,6 @@ impl CompactToolGroupCell {
         );
         lines
     }
-
-    fn append_source(&self, source: Arc<dyn HistoryCell>, detail: String) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.source_cells.push(source);
-        state.detail = detail;
-        state.display_cache = None;
-    }
 }
 
 impl HistoryCell for CompactToolGroupCell {
@@ -171,7 +163,8 @@ impl HistoryCell for CompactToolGroupCell {
         {
             return lines.clone();
         }
-        let lines = render_compact_tool_group_lines(&state.detail, width, self.expanded);
+        let lines =
+            render_compact_tool_group_lines(&state.detail, self.action_count, width, self.expanded);
         state.display_cache = Some((width, lines.clone()));
         lines
     }
@@ -220,29 +213,42 @@ pub(super) fn project_owned_cells_with_expanded(
     hover: &Arc<CompactToolGroupHover>,
 ) -> Vec<Arc<dyn HistoryCell>> {
     if !compact_tool_groups {
-        return cells.to_vec();
+        return cells
+            .iter()
+            .filter(|cell| seal_cell(cell.as_ref()).is_none())
+            .cloned()
+            .collect();
     }
 
     let mut projected = Vec::with_capacity(cells.len());
+    let last_seal_index = last_tool_run_seal_index(cells);
     let mut index = 0usize;
     while index < cells.len() {
+        if last_seal_index.is_none_or(|last_seal| index > last_seal) {
+            projected.extend(cells[index..].iter().cloned());
+            break;
+        }
         if let Some(group) = analyze_compact_tool_group_at(cells, index) {
             let end = index.saturating_add(group.consumed_cells).min(cells.len());
-            let id = compact_tool_group_id(&cells[index]);
+            let source_end = index.saturating_add(group.source_cells).min(end);
+            let id = group.id;
             let expanded = expanded_groups.contains(&id);
             projected.push(Arc::new(CompactToolGroupCell::new(
                 id,
-                cells[index..end].to_vec(),
+                cells[index..source_end].to_vec(),
                 group.detail,
+                group.action_count,
                 expanded,
                 Arc::clone(hover),
             )) as Arc<dyn HistoryCell>);
             if expanded {
-                projected.extend(cells[index..end].iter().cloned());
+                projected.extend(cells[index..source_end].iter().cloned());
             }
             index = end;
         } else {
-            projected.push(cells[index].clone());
+            if seal_cell(cells[index].as_ref()).is_none() {
+                projected.push(cells[index].clone());
+            }
             index += 1;
         }
     }
@@ -253,16 +259,61 @@ pub(super) fn compact_tool_group_ids(
     cells: &[Arc<dyn HistoryCell>],
 ) -> HashSet<CompactToolGroupId> {
     let mut ids = HashSet::new();
+    let Some(last_seal_index) = last_tool_run_seal_index(cells) else {
+        return ids;
+    };
     let mut index = 0usize;
-    while index < cells.len() {
-        if let Some(group) = compact_tool_group_at(cells, index, /*width*/ u16::MAX) {
-            ids.insert(compact_tool_group_id(&cells[index]));
+    while index <= last_seal_index {
+        if let Some(group) = analyze_compact_tool_group_at(cells, index) {
+            ids.insert(group.id);
             index = index.saturating_add(group.consumed_cells);
         } else {
             index += 1;
         }
     }
     ids
+}
+
+pub(super) fn compact_tool_group_ids_in_order(
+    cells: &[Arc<dyn HistoryCell>],
+) -> Vec<CompactToolGroupId> {
+    let mut ids = Vec::new();
+    let Some(last_seal_index) = last_tool_run_seal_index(cells) else {
+        return ids;
+    };
+    let mut index = 0usize;
+    while index <= last_seal_index {
+        if let Some(group) = analyze_compact_tool_group_at(cells, index) {
+            ids.push(group.id);
+            index = index.saturating_add(group.consumed_cells);
+        } else {
+            index += 1;
+        }
+    }
+    ids
+}
+
+pub(super) fn compact_tool_group_id_containing_cell(
+    cells: &[Arc<dyn HistoryCell>],
+    target: &Arc<dyn HistoryCell>,
+) -> Option<CompactToolGroupId> {
+    let last_seal_index = last_tool_run_seal_index(cells)?;
+    let mut index = 0usize;
+    while index <= last_seal_index {
+        if let Some(group) = analyze_compact_tool_group_at(cells, index) {
+            let source_end = index.saturating_add(group.source_cells).min(cells.len());
+            if cells[index..source_end]
+                .iter()
+                .any(|cell| Arc::ptr_eq(cell, target))
+            {
+                return Some(group.id);
+            }
+            index = index.saturating_add(group.consumed_cells);
+        } else {
+            index += 1;
+        }
+    }
+    None
 }
 
 pub(super) fn compact_tool_group_header_id(
@@ -274,294 +325,200 @@ pub(super) fn compact_tool_group_header_id(
     (row_within_cell < cell.display_lines(width).len()).then_some(cell.id)
 }
 
-/// Builds a compact retained-view projection for a multi-call exploring cell while a turn is
-/// still running. Completed safe actions become the Work summary and the current command remains
-/// visible on a second row. Any failure, action prompt, user shell call, or streamed output falls
-/// back to the source cell so live information is never hidden behind an optimistic summary.
-#[allow(clippy::redundant_closure_for_method_calls)]
-pub(super) fn compact_active_exec_snapshot(
-    cell: &dyn HistoryCell,
-    width: u16,
-) -> Option<ActiveCellDisplaySnapshot> {
-    let exec = cell.as_any().downcast_ref::<ExecCell>()?;
-    if !exec.is_exploring_cell() || exec.iter_calls().any(|call| call.is_user_shell_command()) {
-        return None;
-    }
-
-    let mut summary = ToolGroupSummary::default();
-    let mut running = Vec::new();
-    for call in exec.iter_calls() {
-        if call.duration.is_none() {
-            if call
-                .output
-                .as_ref()
-                .is_some_and(|output| output.transcript_lines().next().is_some())
-            {
-                return None;
-            }
-            running.push(call);
-            continue;
-        }
-
-        let output = call.output.as_ref()?;
-        if output.exit_code != 0 {
-            return None;
-        }
-        let transcript = bounded_transcript_for_compaction(output)?;
-        if successful_output_requires_user_action(&transcript, &call.command) {
-            return None;
-        }
-        if call.parsed.is_empty() {
-            add_command(&mut summary, &call.command.join(" "));
-        } else {
-            for parsed in &call.parsed {
-                add_parsed_command(&mut summary, parsed);
-            }
-        }
-    }
-
-    let running_actions = running
-        .iter()
-        .map(|call| call.parsed.len().max(1))
-        .sum::<usize>();
-    if summary.actions == 0 || summary.actions.saturating_add(running_actions) < 2 {
-        return None;
-    }
-    if running.len() > 1 {
-        return None;
-    }
-
-    let detail = summary.parts().join(" · ");
-    if detail.is_empty() {
-        return None;
-    }
-    let header = Line::from(vec![
-        "• ".cyan().bold(),
-        "Work".bold(),
-        ": ".dim(),
-        detail.into(),
-    ]);
-    let mut lines = adaptive_wrap_line(
-        &header,
-        RtOptions::new(usize::from(width.max(1)))
-            .initial_indent(Line::from(""))
-            .subsequent_indent(Line::from("  ")),
-    )
-    .into_iter()
-    .map(|line| line_to_static(&line))
-    .collect::<Vec<_>>();
-
-    if !running.is_empty() {
-        let running_line = if let [call] = running.as_slice() {
-            let command = compact_command_for_viewport(&strip_bash_lc_and_escape(&call.command));
-            Line::from(vec!["  └ ".dim(), "Running: ".bold(), command.into()])
-        } else {
-            Line::from(vec![
-                "  └ ".dim(),
-                format!("Running {} commands", running.len()).bold(),
-            ])
-        };
-        lines.push(truncate_line_with_ellipsis_if_overflow(
-            running_line,
-            usize::from(width.max(1)),
-        ));
-    }
-
-    let selection_projection =
-        selection_contribution_from_display_lines(lines.clone(), width).into_projection();
-    Some(ActiveCellDisplaySnapshot {
-        lines: plain_hyperlink_lines(lines),
-        selection_projection: crate::active_cell_selection::ActiveCellSelectionHandle::ready(
-            selection_projection,
-        ),
-        is_stream_continuation: cell.is_stream_continuation(),
-    })
+pub(super) struct CompactToolGroupProjection {
+    pub(super) id: CompactToolGroupId,
+    pub(super) source_start: usize,
+    pub(super) source_cells: usize,
+    pub(super) cells: Vec<Arc<dyn HistoryCell>>,
 }
 
-fn compact_tool_group_id(cell: &Arc<dyn HistoryCell>) -> CompactToolGroupId {
-    CompactToolGroupId(Arc::as_ptr(cell) as *const () as usize)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct CompactToolGroupSourceRange {
+    pub(super) id: CompactToolGroupId,
+    pub(super) source_start: usize,
+    pub(super) source_cells: usize,
+    pub(super) consumed_cells: usize,
 }
 
-pub(super) fn trailing_compact_tool_run_start(cells: &[Arc<dyn HistoryCell>]) -> usize {
-    let mut start = cells.len();
+pub(super) fn compact_tool_group_containing_source_index(
+    cells: &[Arc<dyn HistoryCell>],
+    source_index: usize,
+) -> Option<CompactToolGroupSourceRange> {
+    let last_seal_index = last_tool_run_seal_index(cells)?;
+    if source_index > last_seal_index {
+        return None;
+    }
+    let mut start = 0usize;
+    while start <= last_seal_index {
+        if let Some(group) = analyze_compact_tool_group_at(cells, start) {
+            let source_end = start.saturating_add(group.source_cells).min(cells.len());
+            if (start..source_end).contains(&source_index) {
+                return Some(CompactToolGroupSourceRange {
+                    id: group.id,
+                    source_start: start,
+                    source_cells: group.source_cells,
+                    consumed_cells: group.consumed_cells,
+                });
+            }
+            start = start.saturating_add(group.consumed_cells);
+        } else {
+            start += 1;
+        }
+    }
+    None
+}
+
+pub(super) fn compact_tool_group_before_seal(
+    cells: &[Arc<dyn HistoryCell>],
+    seal_index: usize,
+    expanded: bool,
+    hover: &Arc<CompactToolGroupHover>,
+) -> Option<CompactToolGroupProjection> {
+    seal_cell(cells.get(seal_index)?.as_ref())?;
+    let mut start = seal_index;
     while start > 0 {
-        let cell = cells[start - 1].as_ref();
-        if tool_group_item(cell).is_some() || is_transparent_tool_group_cell(cell) {
+        let candidate = cells[start - 1].as_ref();
+        if tool_group_item(candidate).is_some() || is_transparent_tool_group_cell(candidate) {
             start -= 1;
         } else {
             break;
         }
     }
-    start
+    let analysis = analyze_compact_tool_group_at(cells, start)?;
+    if start.saturating_add(analysis.consumed_cells) != seal_index.saturating_add(1) {
+        return None;
+    }
+    let source_end = start.saturating_add(analysis.source_cells);
+    let source_cells = cells[start..source_end].to_vec();
+    let group = Arc::new(CompactToolGroupCell::new(
+        analysis.id,
+        source_cells.clone(),
+        analysis.detail,
+        analysis.action_count,
+        expanded,
+        Arc::clone(hover),
+    )) as Arc<dyn HistoryCell>;
+    let mut projected = vec![group];
+    if expanded {
+        projected.extend(source_cells);
+    }
+    Some(CompactToolGroupProjection {
+        id: analysis.id,
+        source_start: start,
+        source_cells: analysis.source_cells,
+        cells: projected,
+    })
 }
 
-pub(super) enum TrailingCompactToolRunUpdate {
-    Push(Arc<dyn HistoryCell>),
-    Replace {
-        remove_count: usize,
-        replacement: Vec<Arc<dyn HistoryCell>>,
-    },
-}
-
-pub(super) struct TrailingCompactToolRun {
-    source_cells: Vec<Arc<dyn HistoryCell>>,
-    summary: ToolGroupSummary,
-    tool_cells: usize,
-    collapse_single: bool,
-    projected_group: Option<Arc<dyn HistoryCell>>,
-}
-
-impl TrailingCompactToolRun {
-    fn detail(&self) -> Option<String> {
-        if self.tool_cells == 0 || (self.tool_cells == 1 && !self.collapse_single) {
-            return None;
-        }
-        let detail = self.summary.parts().join(" · ");
-        (!detail.is_empty()).then_some(detail)
-    }
-
-    fn projected_count(&self, expanded_groups: &HashSet<CompactToolGroupId>) -> usize {
-        if self.detail().is_none() {
-            return self.source_cells.len();
-        }
-        if expanded_groups.contains(&self.id()) {
-            self.source_cells.len().saturating_add(1)
-        } else {
-            1
-        }
-    }
-
-    fn id(&self) -> CompactToolGroupId {
-        compact_tool_group_id(&self.source_cells[0])
-    }
-
-    fn bind_projected_group(&mut self, projected: &[Arc<dyn HistoryCell>]) {
-        if self.detail().is_none() {
-            self.projected_group = None;
-            return;
-        }
-        let id = self.id();
-        self.projected_group = projected
-            .iter()
-            .rev()
-            .find(|cell| {
-                cell.as_any()
-                    .downcast_ref::<CompactToolGroupCell>()
-                    .is_some_and(|group| group.id == id)
-            })
-            .cloned();
-    }
-
-    fn replace_projection(
-        &mut self,
-        detail: String,
-        appended_cell: Arc<dyn HistoryCell>,
-        expanded_groups: &HashSet<CompactToolGroupId>,
-        hover: &Arc<CompactToolGroupHover>,
-        reuse_projected_group: bool,
-    ) -> Vec<Arc<dyn HistoryCell>> {
-        let group = if reuse_projected_group
-            && let Some(group) = self.projected_group.as_ref()
-            && let Some(compact) = group.as_any().downcast_ref::<CompactToolGroupCell>()
-        {
-            compact.append_source(appended_cell, detail);
-            Arc::clone(group)
-        } else {
-            Arc::new(CompactToolGroupCell::new(
-                self.id(),
-                self.source_cells.clone(),
-                detail,
-                expanded_groups.contains(&self.id()),
-                Arc::clone(hover),
-            )) as Arc<dyn HistoryCell>
-        };
-        self.projected_group = Some(Arc::clone(&group));
-
-        let mut replacement = vec![group];
-        if expanded_groups.contains(&self.id()) {
-            replacement.extend(self.source_cells.iter().cloned());
-        }
-        replacement
-    }
-}
-
-pub(super) fn trailing_compact_tool_run(
+pub(super) fn seal_completes_compact_tool_group(
     cells: &[Arc<dyn HistoryCell>],
-    projected: &[Arc<dyn HistoryCell>],
-) -> Option<TrailingCompactToolRun> {
-    let mut entries = Vec::new();
-    for cell in cells.iter().rev() {
-        if let Some(item) = tool_group_item(cell.as_ref()) {
-            entries.push((Arc::clone(cell), Some(item)));
-        } else if is_transparent_tool_group_cell(cell.as_ref()) {
-            entries.push((Arc::clone(cell), None));
+    seal_index: usize,
+) -> bool {
+    let Some(cell) = cells.get(seal_index) else {
+        return false;
+    };
+    if seal_cell(cell.as_ref()).is_none() {
+        return false;
+    }
+    let mut start = seal_index;
+    while start > 0 {
+        let candidate = cells[start - 1].as_ref();
+        if tool_group_item(candidate).is_some() || is_transparent_tool_group_cell(candidate) {
+            start -= 1;
         } else {
             break;
         }
     }
-    entries.reverse();
-
-    let first_tool = entries.iter().position(|(_, item)| item.is_some())?;
-    let mut run = TrailingCompactToolRun {
-        source_cells: Vec::with_capacity(entries.len().saturating_sub(first_tool)),
-        summary: ToolGroupSummary::default(),
-        tool_cells: 0,
-        collapse_single: false,
-        projected_group: None,
-    };
-    for (cell, item) in entries.into_iter().skip(first_tool) {
-        run.source_cells.push(cell);
-        if let Some(item) = item {
-            run.summary.merge(item.summary);
-            run.tool_cells += 1;
-            run.collapse_single |= item.collapse_single;
-        }
-    }
-    run.bind_projected_group(projected);
-    Some(run)
+    analyze_compact_tool_group_at(cells, start).is_some_and(|group| {
+        start.saturating_add(group.consumed_cells) == seal_index.saturating_add(1)
+    })
 }
 
-pub(super) fn append_to_trailing_compact_tool_run(
-    run: &mut Option<TrailingCompactToolRun>,
-    cell: Arc<dyn HistoryCell>,
-    expanded_groups: &HashSet<CompactToolGroupId>,
+pub(super) fn compact_tool_group_cells_by_id(
+    cells: &[Arc<dyn HistoryCell>],
+    id: CompactToolGroupId,
+) -> Option<Vec<Arc<dyn HistoryCell>>> {
+    let last_seal_index = last_tool_run_seal_index(cells)?;
+    let mut start = 0usize;
+    while start <= last_seal_index {
+        if let Some(group) = analyze_compact_tool_group_at(cells, start) {
+            if group.id == id {
+                let source_end = start.saturating_add(group.source_cells).min(cells.len());
+                return Some(cells[start..source_end].to_vec());
+            }
+            start = start.saturating_add(group.consumed_cells);
+        } else {
+            start += 1;
+        }
+    }
+    None
+}
+
+pub(super) fn compact_tool_group_projection_by_id(
+    cells: &[Arc<dyn HistoryCell>],
+    id: CompactToolGroupId,
+    expanded: bool,
     hover: &Arc<CompactToolGroupHover>,
-    reuse_projected_group: bool,
-) -> TrailingCompactToolRunUpdate {
-    let item = tool_group_item(cell.as_ref());
-    let transparent = item.is_none() && is_transparent_tool_group_cell(cell.as_ref());
-    if item.is_none() && !transparent {
-        *run = None;
-        return TrailingCompactToolRunUpdate::Push(cell);
+) -> Option<CompactToolGroupProjection> {
+    let last_seal_index = last_tool_run_seal_index(cells)?;
+    let mut start = 0usize;
+    while start <= last_seal_index {
+        let Some(analysis) = analyze_compact_tool_group_at(cells, start) else {
+            start += 1;
+            continue;
+        };
+        if analysis.id == id {
+            let source_end = start.saturating_add(analysis.source_cells).min(cells.len());
+            let source_cells = cells[start..source_end].to_vec();
+            let group = Arc::new(CompactToolGroupCell::new(
+                analysis.id,
+                source_cells.clone(),
+                analysis.detail,
+                analysis.action_count,
+                expanded,
+                Arc::clone(hover),
+            )) as Arc<dyn HistoryCell>;
+            let mut projected = vec![group];
+            if expanded {
+                projected.extend(source_cells);
+            }
+            return Some(CompactToolGroupProjection {
+                id: analysis.id,
+                source_start: start,
+                source_cells: analysis.source_cells,
+                cells: projected,
+            });
+        }
+        start = start.saturating_add(analysis.consumed_cells);
     }
-    if run.is_none() && transparent {
-        return TrailingCompactToolRunUpdate::Push(cell);
-    }
+    None
+}
 
-    let run = run.get_or_insert_with(|| TrailingCompactToolRun {
-        source_cells: Vec::new(),
-        summary: ToolGroupSummary::default(),
-        tool_cells: 0,
-        collapse_single: false,
-        projected_group: None,
-    });
-    let remove_count = run.projected_count(expanded_groups);
-    run.source_cells.push(Arc::clone(&cell));
-    if let Some(item) = item {
-        run.summary.merge(item.summary);
-        run.tool_cells += 1;
-        run.collapse_single |= item.collapse_single;
+pub(super) fn latest_compact_tool_group_id(
+    cells: &[Arc<dyn HistoryCell>],
+) -> Option<CompactToolGroupId> {
+    let last_seal_index = last_tool_run_seal_index(cells)?;
+    let mut latest = None;
+    let mut start = 0usize;
+    while start <= last_seal_index {
+        if let Some(group) = analyze_compact_tool_group_at(cells, start) {
+            latest = Some(group.id);
+            start = start.saturating_add(group.consumed_cells);
+        } else {
+            start += 1;
+        }
     }
+    latest
+}
 
-    let Some(detail) = run.detail() else {
-        return TrailingCompactToolRunUpdate::Push(cell);
-    };
-    let replacement =
-        run.replace_projection(detail, cell, expanded_groups, hover, reuse_projected_group);
-    TrailingCompactToolRunUpdate::Replace {
-        remove_count,
-        replacement,
-    }
+fn compact_tool_group_id(run_id: RunId) -> CompactToolGroupId {
+    CompactToolGroupId(run_id.get())
+}
+
+fn last_tool_run_seal_index(cells: &[Arc<dyn HistoryCell>]) -> Option<usize> {
+    cells
+        .iter()
+        .rposition(|cell| seal_cell(cell.as_ref()).is_some())
 }
 
 impl ToolGroupSummary {
@@ -669,7 +626,12 @@ fn compact_tool_group_at_with_state(
 ) -> Option<CompactToolGroup> {
     let analysis = analyze_compact_tool_group_at(cells, start)?;
     Some(CompactToolGroup {
-        lines: render_compact_tool_group_lines(&analysis.detail, width, expanded),
+        lines: render_compact_tool_group_lines(
+            &analysis.detail,
+            analysis.action_count,
+            width,
+            expanded,
+        ),
         consumed_cells: analysis.consumed_cells,
     })
 }
@@ -681,12 +643,10 @@ fn analyze_compact_tool_group_at(
     let mut summary = ToolGroupSummary::default();
     let mut consumed_cells = 0usize;
     let mut tool_cells = 0usize;
-    let mut collapse_single = false;
 
     for cell in cells.iter().skip(start) {
         if let Some(item) = tool_group_item(cell.as_ref()) {
             summary.merge(item.summary);
-            collapse_single |= item.collapse_single;
             consumed_cells += 1;
             tool_cells += 1;
             continue;
@@ -695,74 +655,87 @@ fn analyze_compact_tool_group_at(
             consumed_cells += 1;
             continue;
         }
-        break;
+        let seal = seal_cell(cell.as_ref())?;
+        consumed_cells += 1;
+        let source_cells = consumed_cells.saturating_sub(1);
+        if seal.action_count() != summary.actions || seal.source_count() != source_cells {
+            let seal_index = start.saturating_add(consumed_cells).saturating_sub(1);
+            let declared_start = seal_index.checked_sub(seal.source_count());
+            if declared_start.is_none() || declared_start == Some(start) {
+                crate::quiet_metrics::bump(
+                    crate::quiet_metrics::QuietMetric::SealClassificationDivergence,
+                );
+            }
+            return None;
+        }
+        if tool_cells == 0 || summary.actions < 2 || seal.action_count() < 2 {
+            return None;
+        }
+
+        let detail = summary.parts().join(" · ");
+        if detail.is_empty() {
+            return None;
+        }
+        return Some(CompactToolGroupAnalysis {
+            id: compact_tool_group_id(seal.run_id()),
+            detail,
+            consumed_cells,
+            source_cells,
+            action_count: summary.actions,
+        });
     }
 
-    if tool_cells == 0 || (tool_cells == 1 && !collapse_single) {
-        return None;
-    }
-
-    let detail = summary.parts().join(" · ");
-    if detail.is_empty() {
-        return None;
-    }
-
-    Some(CompactToolGroupAnalysis {
-        detail,
-        consumed_cells,
-    })
+    // An unterminated suffix is still live chronological output. It must not compact merely
+    // because all currently visible calls happen to have completed.
+    None
 }
 
-fn render_compact_tool_group_lines(detail: &str, width: u16, expanded: bool) -> Vec<Line<'static>> {
+fn render_compact_tool_group_lines(
+    detail: &str,
+    action_count: usize,
+    width: u16,
+    expanded: bool,
+) -> Vec<Line<'static>> {
     #[cfg(test)]
     COMPACT_PRESENTATION_RENDER_COUNT.with(|count| count.set(count.get() + 1));
 
-    let line = Line::from(vec![
-        (if expanded { "▾ " } else { "▸ " }).dim(),
-        "Work".bold(),
-        ": ".dim(),
-        detail.to_string().into(),
-        " · ".dim(),
-        "Alt+I inspect · Alt+O all".dim(),
-    ]);
-    adaptive_wrap_line(
-        &line,
-        RtOptions::new(usize::from(width.max(1)))
-            .initial_indent(Line::from(""))
-            .subsequent_indent(Line::from("  ")),
-    )
-    .into_iter()
-    .map(|line| line_to_static(&line))
-    .collect()
-}
-
-pub(super) fn appended_cell_touches_compact_group(
-    cells: &[Arc<dyn HistoryCell>],
-    width: u16,
-) -> bool {
-    let len = cells.len();
-    if len == 0 {
-        return false;
-    }
-
-    let run_start = trailing_compact_tool_run_start(cells);
-    (run_start..len).rev().any(|start| {
-        compact_tool_group_at(cells, start, width)
-            .is_some_and(|group| start.saturating_add(group.consumed_cells) == len)
-    })
+    let marker = if expanded { "▾ " } else { "▸ " };
+    let row = |suffix: Option<String>| {
+        let mut spans = vec![marker.dim(), "Work".bold()];
+        if let Some(suffix) = suffix {
+            spans.push(format!(": {suffix}").dim());
+        }
+        Line::from(spans)
+    };
+    let full = row(Some(detail.to_string()));
+    let medium = row(Some(format!("{action_count} actions")));
+    let narrow = row(None);
+    let selected = if line_width(&full) <= usize::from(width) {
+        full
+    } else if line_width(&medium) <= usize::from(width) {
+        medium
+    } else {
+        narrow
+    };
+    vec![truncate_line_with_ellipsis_if_overflow(
+        selected,
+        usize::from(width.max(1)),
+    )]
 }
 
 pub(super) fn latest_compact_tool_group_cells(
     cells: &[Arc<dyn HistoryCell>],
-    width: u16,
+    _width: u16,
 ) -> Option<Vec<Arc<dyn HistoryCell>>> {
+    let last_seal_index = last_tool_run_seal_index(cells)?;
     let mut latest = None;
     let mut start = 0usize;
 
-    while start < cells.len() {
-        if let Some(group) = compact_tool_group_at(cells, start, width) {
+    while start <= last_seal_index {
+        if let Some(group) = analyze_compact_tool_group_at(cells, start) {
             let end = start.saturating_add(group.consumed_cells).min(cells.len());
-            latest = Some(cells[start..end].to_vec());
+            let source_end = start.saturating_add(group.source_cells).min(end);
+            latest = Some(cells[start..source_end].to_vec());
             start = end;
         } else {
             start += 1;
@@ -782,19 +755,24 @@ pub(super) fn render_transcript_lines(
     let mut lines = Vec::new();
     let mut has_emitted_cell = false;
     let mut i = 0usize;
+    let last_seal_index = compact_tool_groups
+        .then(|| last_tool_run_seal_index(cells))
+        .flatten();
 
     while i < cells.len() {
-        let (display, is_stream_continuation, consumed_cells) =
-            if compact_tool_groups && let Some(group) = compact_tool_group_at(cells, i, width) {
-                (group.lines, false, group.consumed_cells)
-            } else {
-                let cell = cells[i].clone();
-                (
-                    cell.display_lines_for_mode(width, render_mode),
-                    cell.is_stream_continuation(),
-                    1,
-                )
-            };
+        let (display, is_stream_continuation, consumed_cells) = if compact_tool_groups
+            && last_seal_index.is_some_and(|last_seal| i <= last_seal)
+            && let Some(group) = compact_tool_group_at(cells, i, width)
+        {
+            (group.lines, false, group.consumed_cells)
+        } else {
+            let cell = cells[i].clone();
+            (
+                cell.display_lines_for_mode(width, render_mode),
+                cell.is_stream_continuation(),
+                1,
+            )
+        };
 
         if !display.is_empty() {
             if !is_stream_continuation {
@@ -821,7 +799,7 @@ pub(super) fn render_transcript_lines(
     (lines, history_was_truncated)
 }
 
-fn tool_group_item(cell: &dyn HistoryCell) -> Option<ToolGroupItem> {
+pub(super) fn tool_group_item(cell: &dyn HistoryCell) -> Option<ToolGroupItem> {
     if let Some(exec) = cell.as_any().downcast_ref::<ExecCell>() {
         return exec_tool_group_item(exec);
     }
@@ -843,15 +821,14 @@ fn tool_group_item(cell: &dyn HistoryCell) -> Option<ToolGroupItem> {
 /// Hidden reasoning summaries are transcript-only source records, not visible conversation
 /// boundaries. Keep them inside a surrounding Work group so they remain available to inspectors
 /// and transcript recovery without splitting two otherwise adjacent completed tool calls.
-fn is_transparent_tool_group_cell(cell: &dyn HistoryCell) -> bool {
-    cell.as_any().is::<ReasoningSummaryCell>()
-        && cell.display_lines(u16::MAX).is_empty()
-        && cell.raw_lines().is_empty()
+pub(super) fn is_transparent_tool_group_cell(cell: &dyn HistoryCell) -> bool {
+    cell.as_any().is::<ReasoningSummaryCell>() && cell.is_tool_run_transparent()
 }
 
 #[allow(clippy::redundant_closure_for_method_calls)]
 fn exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
     if exec.is_active() {
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::ClassificationInFlightBypass);
         return None;
     }
 
@@ -860,6 +837,7 @@ fn exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
 
 #[allow(clippy::redundant_closure_for_method_calls)]
 fn classify_exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
+    crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::ClassificationOutputScan);
     if exec.iter_calls().any(|call| call.is_user_shell_command()) {
         return None;
     }
@@ -885,10 +863,7 @@ fn classify_exec_tool_group_item(exec: &ExecCell) -> Option<ToolGroupItem> {
         }
     }
 
-    Some(ToolGroupItem {
-        collapse_single: true,
-        summary,
-    })
+    Some(ToolGroupItem { summary })
 }
 
 fn bounded_transcript_for_compaction(output: &CommandOutput) -> Option<String> {
@@ -1008,13 +983,11 @@ fn has_unquoted_shell_control(command: &str) -> bool {
                 '"' => quote = Quote::Unquoted,
                 '`' => return true,
                 '$' if chars.peek() == Some(&'(') => return true,
-                '\\' => {
-                    if chars
-                        .peek()
-                        .is_some_and(|next| matches!(next, '$' | '`' | '"' | '\\' | '\n'))
-                    {
-                        chars.next();
-                    }
+                '\\' if chars
+                    .peek()
+                    .is_some_and(|next| matches!(next, '$' | '`' | '"' | '\\' | '\n')) =>
+                {
+                    chars.next();
                 }
                 _ => {}
             },
@@ -1237,11 +1210,15 @@ fn is_url_terminator(ch: char) -> bool {
 }
 
 fn mcp_tool_group_item(mcp: &McpToolCallCell) -> Option<ToolGroupItem> {
-    mcp.completed_invocation()?;
+    if mcp.completed_invocation().is_none() {
+        crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::ClassificationInFlightBypass);
+        return None;
+    }
     mcp.get_or_init_compact_tool_group_item(|| classify_mcp_tool_group_item(mcp))
 }
 
 fn classify_mcp_tool_group_item(mcp: &McpToolCallCell) -> Option<ToolGroupItem> {
+    crate::quiet_metrics::bump(crate::quiet_metrics::QuietMetric::ClassificationOutputScan);
     let (invocation, success) = mcp.completed_invocation()?;
     if !success || !mcp.is_safe_to_compact() {
         return None;
@@ -1250,10 +1227,7 @@ fn classify_mcp_tool_group_item(mcp: &McpToolCallCell) -> Option<ToolGroupItem> 
     let label = format!("{}.{}", invocation.server, invocation.tool);
     summary.mcp_counts.insert(label, 1);
     summary.actions = 1;
-    Some(ToolGroupItem {
-        summary,
-        collapse_single: true,
-    })
+    Some(ToolGroupItem { summary })
 }
 
 fn dynamic_tool_group_item(tool: &DynamicToolCallCell) -> Option<ToolGroupItem> {
@@ -1261,10 +1235,7 @@ fn dynamic_tool_group_item(tool: &DynamicToolCallCell) -> Option<ToolGroupItem> 
     let mut summary = ToolGroupSummary::default();
     summary.dynamic_tool_counts.insert(label, 1);
     summary.actions = 1;
-    Some(ToolGroupItem {
-        summary,
-        collapse_single: true,
-    })
+    Some(ToolGroupItem { summary })
 }
 
 fn web_tool_group_item(web: &WebSearchCell) -> Option<ToolGroupItem> {
@@ -1279,10 +1250,7 @@ fn web_tool_group_item(web: &WebSearchCell) -> Option<ToolGroupItem> {
         codex_app_server_protocol::WebSearchAction::OpenPage { .. } => summary.web_open_count = 1,
         codex_app_server_protocol::WebSearchAction::FindInPage { .. } => summary.web_find_count = 1,
     }
-    Some(ToolGroupItem {
-        summary,
-        collapse_single: true,
-    })
+    Some(ToolGroupItem { summary })
 }
 
 fn patch_tool_group_item(patch: &PatchHistoryCell) -> Option<ToolGroupItem> {
@@ -1296,9 +1264,6 @@ fn patch_tool_group_item(patch: &PatchHistoryCell) -> Option<ToolGroupItem> {
             actions: 1,
             ..Default::default()
         },
-        // Patch cells are committed at apply-begin and do not carry completion state.
-        // Keep an isolated patch visible until the cell gains explicit completion state.
-        collapse_single: false,
     })
 }
 
@@ -1495,13 +1460,209 @@ mod tests {
     use codex_protocol::plan_tool::StepStatus;
     use codex_protocol::plan_tool::UpdatePlanArgs;
     use serde_json::json;
+    use unicode_segmentation::UnicodeSegmentation;
 
     use super::*;
+    use crate::app::tool_run_projection::ToolRunLifecycle;
     use crate::diff_model::FileChange;
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::new_active_exec_command;
     use crate::history_cell::McpInvocation;
     use crate::history_cell::new_active_mcp_tool_call;
+
+    #[test]
+    fn first_run_id_is_distinct_from_the_no_hover_sentinel() {
+        let hover = CompactToolGroupHover::default();
+        let first = CompactToolGroupId(1);
+
+        assert_eq!(hover.hovered(), None);
+        assert!(hover.update(Some(first)));
+        assert_eq!(hover.hovered(), Some(first));
+        assert!(hover.update(None));
+        assert_eq!(hover.hovered(), None);
+    }
+
+    #[test]
+    fn work_header_width_matrix_preserves_extended_graphemes_on_one_row() {
+        let detail = "read 文件.rs · inspected 👩‍💻-e\u{301}.md · opened https://example.com/路径";
+        let candidates = [
+            format!("▸ Work: {detail}"),
+            "▸ Work: 7 actions".to_string(),
+            "▸ Work".to_string(),
+        ];
+
+        for width in [0_u16, 1, 20, 40, 80, 120] {
+            let lines = render_compact_tool_group_lines(
+                detail, /*action_count*/ 7, width, /*expanded*/ false,
+            );
+            assert_eq!(lines.len(), 1, "width {width}");
+            assert!(
+                line_width(&lines[0]) <= usize::from(width.max(1)),
+                "width {width}: {:?}",
+                lines[0]
+            );
+            let rendered = lines[0]
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            let base = rendered.strip_suffix('…').unwrap_or(&rendered);
+            assert!(
+                candidates.iter().any(|candidate| {
+                    let mut prefixes = vec![String::new()];
+                    let mut prefix = String::new();
+                    for grapheme in candidate.graphemes(/*is_extended*/ true) {
+                        prefix.push_str(grapheme);
+                        prefixes.push(prefix.clone());
+                    }
+                    prefixes.iter().any(|prefix| prefix == base)
+                }),
+                "width {width} split or reordered a grapheme: {rendered:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn work_header_exact_fit_counts_halfwidth_sound_mark_graphemes() {
+        let detail = "read ｶﾞ.rs";
+        let full = render_compact_tool_group_lines(
+            detail,
+            /*action_count*/ 2,
+            u16::MAX,
+            /*expanded*/ false,
+        );
+        let exact_width = u16::try_from(line_width(&full[0])).expect("header width fits u16");
+
+        let exact = render_compact_tool_group_lines(
+            detail,
+            /*action_count*/ 2,
+            exact_width,
+            /*expanded*/ false,
+        );
+
+        assert_eq!(render_line_text(&exact[0]), render_line_text(&full[0]));
+        assert!(!render_line_text(&exact[0]).contains('…'));
+    }
+
+    #[test]
+    fn seal_classification_divergence_fails_open_and_turns_detector_red() {
+        crate::quiet_metrics::reset_for_test();
+        let cells = vec![
+            completed_read_exec("read-1", "app.rs"),
+            completed_read_exec("read-2", "lib.rs"),
+            Arc::new(
+                crate::app::tool_run_projection::ToolRunSealCell::with_test_counts(
+                    /*run_id*/ 1, /*first_source_id*/ 0, /*last_source_id*/ 1,
+                    /*action_count*/ 99,
+                ),
+            ) as Arc<dyn HistoryCell>,
+        ];
+
+        assert!(analyze_compact_tool_group_at(&cells, 0).is_none());
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::SealClassificationDivergence,
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn false_candidate_before_declared_run_does_not_count_as_divergence() {
+        crate::quiet_metrics::reset_for_test();
+        let cells = vec![
+            completed_read_exec("outside-run", "outside.rs"),
+            completed_read_exec("read-1", "app.rs"),
+            completed_read_exec("read-2", "lib.rs"),
+            Arc::new(
+                crate::app::tool_run_projection::ToolRunSealCell::with_test_counts(
+                    /*run_id*/ 1, /*first_source_id*/ 1, /*last_source_id*/ 2,
+                    /*action_count*/ 2,
+                ),
+            ) as Arc<dyn HistoryCell>,
+        ];
+
+        let projected = project_owned_cells(&cells, /*compact_tool_groups*/ true);
+
+        assert_eq!(projected.len(), 2, "ordinary prefix plus one Work row");
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::SealClassificationDivergence,
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn unterminated_tool_suffix_projects_without_quadratic_classification_scans() {
+        let cells = (0..128)
+            .map(|index| {
+                completed_read_exec(&format!("open-{index}"), &format!("source-{index}.rs"))
+            })
+            .collect::<Vec<_>>();
+        crate::quiet_metrics::reset_for_test();
+
+        let projected = project_owned_cells(&cells, /*compact_tool_groups*/ true);
+
+        assert_eq!(projected.len(), cells.len());
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationMemoPopulate,
+            ),
+            0,
+            "without a seal, projection should copy the chronological suffix without classifying it"
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationOutputScan,
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn zero_and_single_action_seals_add_no_visible_rows_in_rich_raw_or_inline_views() {
+        let empty_seal = Arc::new(
+            crate::app::tool_run_projection::ToolRunSealCell::with_test_counts(
+                /*run_id*/ 1, /*first_source_id*/ 0, /*last_source_id*/ 0,
+                /*action_count*/ 0,
+            ),
+        ) as Arc<dyn HistoryCell>;
+        let singleton = completed_read_exec("read-1", "app.rs");
+        let singleton_seal = Arc::new(
+            crate::app::tool_run_projection::ToolRunSealCell::with_test_counts(
+                /*run_id*/ 2, /*first_source_id*/ 1, /*last_source_id*/ 1,
+                /*action_count*/ 1,
+            ),
+        ) as Arc<dyn HistoryCell>;
+
+        for (mode, compact) in [
+            (HistoryRenderMode::Rich, true),
+            (HistoryRenderMode::Raw, false),
+            (HistoryRenderMode::Rich, false),
+        ] {
+            let (empty_lines, _) = render_transcript_lines(
+                std::slice::from_ref(&empty_seal),
+                /*width*/ 80,
+                mode,
+                compact,
+                None,
+            );
+            assert!(empty_lines.is_empty(), "mode={mode:?} compact={compact}");
+
+            let (singleton_lines, _) = render_transcript_lines(
+                &[Arc::clone(&singleton), Arc::clone(&singleton_seal)],
+                /*width*/ 80,
+                mode,
+                compact,
+                None,
+            );
+            let rendered = render_lines_text(&singleton_lines);
+            assert!(rendered.contains("app.rs"), "{mode:?}: {rendered}");
+            assert!(!rendered.contains("Work"), "{mode:?}: {rendered}");
+        }
+    }
+
     use crate::history_cell::new_patch_event;
     use crate::history_cell::new_plan_update;
     use crate::history_cell::new_web_search_call;
@@ -1528,6 +1689,24 @@ mod tests {
             .map(render_line_text)
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn with_tool_run_seals(cells: Vec<Arc<dyn HistoryCell>>) -> Vec<Arc<dyn HistoryCell>> {
+        let mut lifecycle = ToolRunLifecycle::default();
+        let turn_id = "test-turn".to_string();
+        assert!(lifecycle.begin_turn(turn_id.clone()).is_none());
+        let mut sealed: Vec<Arc<dyn HistoryCell>> =
+            Vec::with_capacity(cells.len().saturating_add(2));
+        for cell in cells {
+            if let Some(seal) = lifecycle.before_source_append(cell.as_ref()) {
+                sealed.push(Arc::new(seal));
+            }
+            sealed.push(cell);
+        }
+        if let Some(seal) = lifecycle.seal_turn(&turn_id) {
+            sealed.push(Arc::new(seal));
+        }
+        sealed
     }
 
     fn completed_read_exec(call_id: &str, name: &str) -> Arc<dyn HistoryCell> {
@@ -1695,35 +1874,6 @@ mod tests {
         Arc::new(new_patch_event(changes, Path::new("/repo")))
     }
 
-    fn apply_trailing_update(
-        projected: &mut Vec<Arc<dyn HistoryCell>>,
-        update: TrailingCompactToolRunUpdate,
-    ) {
-        match update {
-            TrailingCompactToolRunUpdate::Push(cell) => projected.push(cell),
-            TrailingCompactToolRunUpdate::Replace {
-                remove_count,
-                replacement,
-            } => {
-                projected.truncate(projected.len().saturating_sub(remove_count));
-                projected.extend(replacement);
-            }
-        }
-    }
-
-    fn projection_signature(cells: &[Arc<dyn HistoryCell>]) -> Vec<(String, String, String)> {
-        cells
-            .iter()
-            .map(|cell| {
-                (
-                    render_lines_text(&cell.display_lines(/*width*/ 88)),
-                    render_lines_text(&cell.raw_lines()),
-                    render_lines_text(&cell.transcript_lines(/*width*/ 88)),
-                )
-            })
-            .collect()
-    }
-
     #[test]
     fn large_exec_output_stays_out_of_compact_work_groups() {
         let at_limit = completed_command_with_output(
@@ -1732,7 +1882,8 @@ mod tests {
             0,
             "x".repeat(MAX_COMPACT_OUTPUT_SCAN_BYTES),
         );
-        let bounded_cells = vec![at_limit, completed_read_exec("read-1", "report.txt")];
+        let bounded_cells =
+            with_tool_run_seals(vec![at_limit, completed_read_exec("read-1", "report.txt")]);
         assert!(
             compact_tool_group_at(&bounded_cells, 0, 100).is_some(),
             "the byte limit itself should remain eligible"
@@ -1744,7 +1895,11 @@ mod tests {
             0,
             "x".repeat(MAX_COMPACT_OUTPUT_SCAN_BYTES + 1),
         );
-        let oversized_cells = vec![over_limit, completed_read_exec("read-2", "report.txt")];
+        assert!(tool_group_item(over_limit.as_ref()).is_none());
+        let oversized_cells = with_tool_run_seals(vec![
+            over_limit,
+            completed_read_exec("read-2", "report.txt"),
+        ]);
         assert!(
             compact_tool_group_at(&oversized_cells, 0, 100).is_none(),
             "oversized output should remain expanded without full classification"
@@ -1756,7 +1911,11 @@ mod tests {
             0,
             "\n".repeat(MAX_COMPACT_OUTPUT_SCAN_BYTES + 2),
         );
-        let blank_line_cells = vec![blank_lines, completed_read_exec("read-3", "report.txt")];
+        assert!(tool_group_item(blank_lines.as_ref()).is_none());
+        let blank_line_cells = with_tool_run_seals(vec![
+            blank_lines,
+            completed_read_exec("read-3", "report.txt"),
+        ]);
         assert!(
             compact_tool_group_at(&blank_line_cells, 0, 100).is_none(),
             "oversized blank-line output must count its separators toward the limit"
@@ -1790,9 +1949,12 @@ mod tests {
         );
         assert!(
             compact_tool_group_at(
-                &[metadata, completed_read_exec("read-meta", "artifact.json")],
+                &with_tool_run_seals(vec![
+                    metadata,
+                    completed_read_exec("read-meta", "artifact.json"),
+                ]),
                 0,
-                100
+                100,
             )
             .is_some(),
             "mixed-case metadata URLs should remain compactable"
@@ -1804,11 +1966,15 @@ mod tests {
             0,
             "OPEN HTTPS://example.com/OAuth/device".to_string(),
         );
+        assert!(tool_group_item(action.as_ref()).is_none());
         assert!(
             compact_tool_group_at(
-                &[action, completed_read_exec("read-action", "artifact.json")],
+                &with_tool_run_seals(vec![
+                    action,
+                    completed_read_exec("read-action", "artifact.json"),
+                ]),
                 0,
-                100
+                100,
             )
             .is_none(),
             "mixed-case action URLs must remain visible"
@@ -1817,24 +1983,24 @@ mod tests {
 
     #[test]
     fn compact_group_summarizes_adjacent_tool_cells() {
-        let cells = vec![
+        let cells = with_tool_run_seals(vec![
             completed_read_exec("read-1", "app.rs"),
             completed_read_exec("read-2", "lib.rs"),
             completed_mcp("mcp-1", "gmail", "read_thread"),
-        ];
+        ]);
 
         let group = compact_tool_group_at(&cells, 0, 120).expect("compact group");
 
-        assert_eq!(group.consumed_cells, 3);
+        assert_eq!(group.consumed_cells, 4);
         assert_eq!(
             render_group_text(group),
-            "▸ Work: read 2 files · called gmail.read_thread · Alt+I inspect · Alt+O all"
+            "▸ Work: read 2 files · called gmail.read_thread"
         );
     }
 
     #[test]
     fn safe_single_tools_fold_while_plan_updates_remain_expanded() {
-        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+        let cells = with_tool_run_seals(vec![
             completed_read_exec("read-before", "before.rs"),
             Arc::new(new_plan_update(UpdatePlanArgs {
                 explanation: None,
@@ -1844,7 +2010,7 @@ mod tests {
                 }],
             })),
             completed_read_exec("read-after", "after.rs"),
-        ];
+        ]);
 
         let projected = project_owned_cells(&cells, /*compact_tool_groups*/ true);
         let rendered = render_transcript_lines(
@@ -1857,17 +2023,19 @@ mod tests {
         .0;
 
         insta::assert_snapshot!(render_lines_text(&rendered), @r###"
-        ▸ Work: read before.rs · Alt+I inspect · Alt+O all
+        • Explored
+          └ Read file before.rs
 
         • Updated Plan
           └ □ Keep this checklist visible
 
-        ▸ Work: read after.rs · Alt+I inspect · Alt+O all
+        • Explored
+          └ Read file after.rs
         "###);
     }
 
     #[test]
-    fn completed_safe_single_tool_kinds_with_lifecycle_fold() {
+    fn completed_safe_single_tool_kinds_with_lifecycle_stay_ordinary() {
         let cases: Vec<(&str, Arc<dyn HistoryCell>)> = vec![
             ("exec", completed_read_exec("read", "app.rs")),
             ("mcp", completed_mcp("mcp", "files", "read")),
@@ -1893,11 +2061,12 @@ mod tests {
         ];
 
         for (label, cell) in cases {
-            let projected = project_owned_cells(&[cell], /*compact_tool_groups*/ true);
+            let source = with_tool_run_seals(vec![Arc::clone(&cell)]);
+            let projected = project_owned_cells(&source, /*compact_tool_groups*/ true);
             assert_eq!(projected.len(), 1, "{label} projection changed cardinality");
             assert!(
-                projected[0].as_any().is::<CompactToolGroupCell>(),
-                "{label} singleton stayed expanded"
+                Arc::ptr_eq(&projected[0], &cell),
+                "{label} singleton was replaced by a Work header"
             );
         }
     }
@@ -1914,7 +2083,7 @@ mod tests {
 
     #[test]
     fn compact_group_summarizes_replayed_dynamic_tool_calls() {
-        let cells = vec![
+        let cells = with_tool_run_seals(vec![
             dynamic_tool(
                 Some("functions"),
                 "exec",
@@ -1925,15 +2094,12 @@ mod tests {
                 "exec",
                 codex_app_server_protocol::DynamicToolCallStatus::Completed,
             ),
-        ];
+        ]);
 
         let group = compact_tool_group_at(&cells, 0, 120).expect("compact group");
 
-        assert_eq!(group.consumed_cells, 2);
-        assert_eq!(
-            render_group_text(group),
-            "▸ Work: called functions.exec x2 · Alt+I inspect · Alt+O all"
-        );
+        assert_eq!(group.consumed_cells, 3);
+        assert_eq!(render_group_text(group), "▸ Work: called functions.exec x2");
     }
 
     #[test]
@@ -1955,148 +2121,20 @@ mod tests {
     }
 
     #[test]
-    fn live_exploring_cell_compacts_completed_work_and_keeps_current_command_visible() {
-        let cell = active_exploring_exec();
-
-        let snapshot = compact_active_exec_snapshot(&cell, /*width*/ 80)
-            .expect("compact active exploring cell");
-        let rendered = snapshot
-            .lines
-            .iter()
-            .map(|line| render_line_text(&line.line))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert_eq!(rendered, "• Work: read app.rs\n  └ Running: cat lib.rs");
-        assert!(
-            snapshot
-                .selection_projection
-                .resolve(&snapshot.lines)
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn live_summary_uses_the_canonical_shell_command_display() {
-        let first_command = vec!["cat".to_string(), "app.rs".to_string()];
-        let mut cell = new_active_exec_command(
-            "read-1".to_string(),
-            first_command.clone(),
-            vec![ParsedCommand::Read {
-                cmd: first_command.join(" "),
-                name: "app.rs".to_string(),
-                path: "app.rs".into(),
-            }],
-            ExecCommandSource::Agent,
-            /*interaction_input*/ None,
-            /*animations_enabled*/ false,
-        );
-        assert!(cell.complete_call(
-            "read-1",
-            CommandOutput::new(/*exit_code*/ 0, String::new()),
-            Duration::from_millis(10),
-        ));
-        let wrapped = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "cat 'lib file.rs'".to_string(),
-        ];
-        assert!(cell.add_call(
-            "read-2".to_string(),
-            wrapped,
-            vec![ParsedCommand::Read {
-                cmd: "cat 'lib file.rs'".to_string(),
-                name: "lib file.rs".to_string(),
-                path: "lib file.rs".into(),
-            }],
-            ExecCommandSource::Agent,
-            /*interaction_input*/ None,
-        ));
-
-        let snapshot = compact_active_exec_snapshot(&cell, /*width*/ 80)
-            .expect("compact active exploring cell");
-        let rendered = snapshot
-            .lines
-            .iter()
-            .map(|line| render_line_text(&line.line))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(rendered.contains("Running: cat 'lib file.rs'"));
-        assert!(!rendered.contains("bash -lc"));
-    }
-
-    #[test]
-    fn live_summary_falls_back_for_multiple_running_commands() {
-        let mut cell = active_exploring_exec();
-        let third_command = vec!["cat".to_string(), "main.rs".to_string()];
-        assert!(cell.add_call(
-            "read-3".to_string(),
-            third_command.clone(),
-            vec![ParsedCommand::Read {
-                cmd: third_command.join(" "),
-                name: "main.rs".to_string(),
-                path: "main.rs".into(),
-            }],
-            ExecCommandSource::Agent,
-            /*interaction_input*/ None,
-        ));
-
-        assert!(compact_active_exec_snapshot(&cell, /*width*/ 80).is_none());
-    }
-
-    #[test]
-    fn live_exploring_cell_falls_back_when_output_or_failure_needs_full_visibility() {
-        let mut streamed = active_exploring_exec();
-        assert!(streamed.append_output("read-2", "waiting for confirmation\n"));
-        assert!(compact_active_exec_snapshot(&streamed, 80).is_none());
-
-        let mut failed = active_exploring_exec();
-        assert!(failed.complete_call(
-            "read-2",
-            CommandOutput::new(/*exit_code*/ 7, "permission denied".to_string()),
-            Duration::from_millis(10),
-        ));
-        assert!(compact_active_exec_snapshot(&failed, 80).is_none());
-
-        let single = new_active_exec_command(
-            "single".to_string(),
-            vec!["cat".to_string(), "only.rs".to_string()],
-            vec![ParsedCommand::Read {
-                cmd: "cat only.rs".to_string(),
-                name: "only.rs".to_string(),
-                path: "only.rs".into(),
-            }],
-            ExecCommandSource::Agent,
-            /*interaction_input*/ None,
-            /*animations_enabled*/ false,
-        );
-        assert!(compact_active_exec_snapshot(&single, 80).is_none());
-    }
-
-    #[test]
-    fn transcript_only_reasoning_bridges_tools_and_preserves_source_order() {
-        let hidden_reasoning = reasoning_summary("hidden reasoning detail", true);
+    fn empty_transcript_only_reasoning_bridges_tools_and_preserves_source_order() {
+        let hidden_reasoning = reasoning_summary("", true);
         assert!(hidden_reasoning.display_lines(/*width*/ 80).is_empty());
         assert!(hidden_reasoning.raw_lines().is_empty());
-        assert!(
-            render_lines_text(&hidden_reasoning.transcript_lines(/*width*/ 80))
-                .contains("hidden reasoning detail")
-        );
-        let cells = vec![
+        assert!(hidden_reasoning.transcript_lines(/*width*/ 80).is_empty());
+        let cells = with_tool_run_seals(vec![
             completed_read_exec("read-1", "app.rs"),
             hidden_reasoning,
             completed_read_exec("read-2", "lib.rs"),
-        ];
+        ]);
 
         let group = compact_tool_group_at(&cells, 0, 120).expect("compact group");
-        assert_eq!(group.consumed_cells, 3);
-        assert_eq!(
-            render_group_text(group),
-            "▸ Work: read 2 files · Alt+I inspect · Alt+O all"
-        );
-        assert_eq!(trailing_compact_tool_run_start(&cells[..2]), 0);
-        assert!(appended_cell_touches_compact_group(&cells, 120));
+        assert_eq!(group.consumed_cells, 4);
+        assert_eq!(render_group_text(group), "▸ Work: read 2 files");
 
         let projected = project_owned_cells(&cells, /*compact_tool_groups*/ true);
         assert_eq!(projected.len(), 1);
@@ -2110,35 +2148,50 @@ mod tests {
 
         let inspected = latest_compact_tool_group_cells(&cells, 120).expect("latest group");
         assert_eq!(inspected.len(), 3);
+        assert!(inspected[1].transcript_lines(/*width*/ 80).is_empty());
+    }
+
+    #[test]
+    fn nonempty_transcript_only_reasoning_is_a_hard_group_boundary() {
+        let hidden_reasoning = reasoning_summary("hidden reasoning detail", true);
+        assert!(hidden_reasoning.display_lines(/*width*/ 80).is_empty());
+        assert!(hidden_reasoning.raw_lines().is_empty());
         assert!(
-            render_lines_text(&inspected[1].transcript_lines(/*width*/ 80))
+            render_lines_text(&hidden_reasoning.transcript_lines(/*width*/ 80))
                 .contains("hidden reasoning detail")
         );
+        let cells = with_tool_run_seals(vec![
+            completed_read_exec("read-1", "app.rs"),
+            hidden_reasoning,
+            completed_read_exec("read-2", "lib.rs"),
+        ]);
+
+        assert!(compact_tool_group_at(&cells, 0, 120).is_none());
+        assert!(latest_compact_tool_group_cells(&cells, 120).is_none());
     }
 
     #[test]
     fn visible_reasoning_remains_a_hard_group_boundary() {
-        let cells = vec![
+        let cells = with_tool_run_seals(vec![
             completed_read_exec("read-1", "app.rs"),
             completed_read_exec("read-2", "lib.rs"),
             reasoning_summary("Visible reasoning", false),
             completed_read_exec("read-3", "main.rs"),
             completed_read_exec("read-4", "mod.rs"),
-        ];
+        ]);
 
         assert_eq!(
             compact_tool_group_at(&cells, 0, 100)
                 .expect("first compact group")
                 .consumed_cells,
-            2
+            3
         );
-        assert!(compact_tool_group_at(&cells, 2, 100).is_none());
-        assert!(!appended_cell_touches_compact_group(&cells[..3], 100));
+        assert!(compact_tool_group_at(&cells, 3, 100).is_none());
         assert_eq!(
-            compact_tool_group_at(&cells, 3, 100)
+            compact_tool_group_at(&cells, 4, 100)
                 .expect("second compact group")
                 .consumed_cells,
-            2
+            3
         );
         let rendered = render_lines_text(
             &render_transcript_lines(&cells, 100, HistoryRenderMode::Rich, true, None).0,
@@ -2148,10 +2201,10 @@ mod tests {
 
     #[test]
     fn owned_projection_compacts_rich_view_and_preserves_raw_sources() {
-        let cells = vec![
+        let cells = with_tool_run_seals(vec![
             completed_read_exec("read-1", "app.rs"),
             completed_read_exec("read-2", "lib.rs"),
-        ];
+        ]);
 
         let projected = project_owned_cells(&cells, /*compact_tool_groups*/ true);
         assert_eq!(projected.len(), 1);
@@ -2161,7 +2214,7 @@ mod tests {
             .map(render_line_text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(rich, "▸ Work: read 2 files · Alt+I inspect · Alt+O all");
+        assert_eq!(rich, "▸ Work: read 2 files");
 
         let raw = projected[0]
             .raw_lines()
@@ -2184,10 +2237,10 @@ mod tests {
 
     #[test]
     fn retained_work_header_caches_semantics_and_wrapping_between_draws() {
-        let cells = vec![
+        let cells = with_tool_run_seals(vec![
             completed_read_exec("read-1", "app.rs"),
             completed_read_exec("read-2", "lib.rs"),
-        ];
+        ]);
         let projected = project_owned_cells(&cells, /*compact_tool_groups*/ true);
         assert_eq!(projected.len(), 1);
         COMPACT_OUTPUT_SCAN_COUNT.with(|count| count.set(0));
@@ -2209,10 +2262,24 @@ mod tests {
     fn in_flight_exec_does_not_poison_completed_classification_cache() {
         let mut cell = active_exploring_exec();
         COMPACT_OUTPUT_SCAN_COUNT.with(|count| count.set(0));
+        crate::quiet_metrics::reset_for_test();
 
         assert!(exec_tool_group_item(&cell).is_none());
         COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), 0));
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationInFlightBypass
+            ),
+            1
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheMiss
+            ),
+            0
+        );
 
+        crate::quiet_metrics::reset_for_test();
         assert!(cell.complete_call(
             "read-2",
             CommandOutput::new(/*exit_code*/ 0, String::new()),
@@ -2225,155 +2292,118 @@ mod tests {
         let cached = exec_tool_group_item(&cell).expect("cached classification");
         assert_eq!(cached.summary.actions, 2);
         COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), 2));
-    }
-
-    #[test]
-    fn long_trailing_work_run_classifies_only_each_appended_cell_once() {
-        const CELL_COUNT: usize = 256;
-        let expanded_groups = HashSet::new();
-        let hover = Arc::new(CompactToolGroupHover::default());
-        let mut run = None;
-        let mut projected = Vec::new();
-        let mut retained_header = None;
-        COMPACT_OUTPUT_SCAN_COUNT.with(|count| count.set(0));
-
-        for index in 0..CELL_COUNT {
-            let cell = completed_read_exec(&format!("read-{index}"), &format!("file-{index}.rs"));
-            let update = append_to_trailing_compact_tool_run(
-                &mut run,
-                cell,
-                &expanded_groups,
-                &hover,
-                /*reuse_projected_group*/ true,
-            );
-            apply_trailing_update(&mut projected, update);
-            if index == 1 {
-                retained_header = projected.first().cloned();
-            }
-        }
-
-        assert_eq!(projected.len(), 1);
-        assert!(Arc::ptr_eq(
-            retained_header.as_ref().expect("first compact header"),
-            &projected[0]
-        ));
-        COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), CELL_COUNT));
         assert_eq!(
-            render_lines_text(&projected[0].display_lines(/*width*/ 100)),
-            "▸ Work: read 256 files · Alt+I inspect · Alt+O all"
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheInvalidation
+            ),
+            1
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheMiss
+            ),
+            1
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheHit
+            ),
+            1
         );
 
-        COMPACT_PRESENTATION_RENDER_COUNT.with(|count| count.set(0));
-        let _first_draw = projected[0].display_lines(/*width*/ 72);
-        let _second_draw = projected[0].display_lines(/*width*/ 72);
-        COMPACT_PRESENTATION_RENDER_COUNT.with(|count| assert_eq!(count.get(), 1));
-        COMPACT_OUTPUT_SCAN_COUNT.with(|count| assert_eq!(count.get(), CELL_COUNT));
-    }
-
-    #[test]
-    fn incremental_failure_and_action_required_cells_remain_hard_boundaries() {
-        let boundaries = [
-            completed_command("failed", "cargo build", 7),
-            completed_command_with_output(
-                "login",
-                "service login",
-                0,
-                "Open https://example.com/device to sign in".to_string(),
+        crate::quiet_metrics::reset_for_test();
+        assert!(cell.append_output("read-2", "late output\n"));
+        assert!(exec_tool_group_item(&cell).is_some());
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheInvalidation
             ),
-        ];
-
-        for boundary in boundaries {
-            let expanded_groups = HashSet::new();
-            let hover = Arc::new(CompactToolGroupHover::default());
-            let mut run = None;
-            let mut projected = Vec::new();
-            for cell in [
-                completed_read_exec("read-1", "app.rs"),
-                completed_read_exec("read-2", "lib.rs"),
-                boundary,
-            ] {
-                let update = append_to_trailing_compact_tool_run(
-                    &mut run,
-                    cell,
-                    &expanded_groups,
-                    &hover,
-                    /*reuse_projected_group*/ true,
-                );
-                apply_trailing_update(&mut projected, update);
-            }
-
-            assert!(run.is_none());
-            assert_eq!(projected.len(), 2);
-            assert!(render_lines_text(&projected[0].display_lines(100)).starts_with("▸ Work"));
-            let boundary_text = render_lines_text(&projected[1].display_lines(100));
-            assert!(
-                boundary_text.contains("failed (exit 7)")
-                    || boundary_text.contains("https://example.com/device")
-            );
-        }
+            1
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheMiss
+            ),
+            1
+        );
     }
 
     #[test]
-    fn incremental_projection_matches_full_projection_across_boundaries_and_expansion() {
-        for reuse_projected_group in [true, false] {
-            let mut collapse_single = active_exploring_exec();
-            assert!(collapse_single.complete_call(
-                "read-2",
-                CommandOutput::new(/*exit_code*/ 0, String::new()),
-                Duration::from_millis(10),
-            ));
-            let sequence: Vec<Arc<dyn HistoryCell>> = vec![
-                completed_read_exec("read-1", "app.rs"),
-                reasoning_summary("hidden reasoning", true),
-                completed_read_exec("read-2", "lib.rs"),
-                completed_patch(&["src/app.rs"]),
-                completed_command("failed", "cargo build", 7),
-                Arc::new(collapse_single),
-                completed_mcp("mcp-1", "files", "read"),
-                reasoning_summary("Visible reasoning", false),
-                completed_read_exec("read-3", "main.rs"),
-                completed_read_exec("read-4", "mod.rs"),
-            ];
-            let hover = Arc::new(CompactToolGroupHover::default());
-            let mut expanded_groups = HashSet::new();
-            let mut source = Vec::new();
-            let mut projected = Vec::new();
-            let mut run = None;
+    fn in_flight_mcp_does_not_poison_completed_classification_cache() {
+        let mut cell = new_active_mcp_tool_call(
+            "mcp-cache".to_string(),
+            McpInvocation {
+                server: "files".to_string(),
+                tool: "read".to_string(),
+                arguments: Some(json!({ "path": "app.rs" })),
+            },
+            /*animations_enabled*/ false,
+        );
+        crate::quiet_metrics::reset_for_test();
 
-            for (index, cell) in sequence.into_iter().enumerate() {
-                source.push(Arc::clone(&cell));
-                apply_trailing_update(
-                    &mut projected,
-                    append_to_trailing_compact_tool_run(
-                        &mut run,
-                        cell,
-                        &expanded_groups,
-                        &hover,
-                        reuse_projected_group,
-                    ),
-                );
-                if index == 2 {
-                    expanded_groups.insert(compact_tool_group_id(&source[0]));
-                    projected = project_owned_cells_with_expanded(
-                        &source,
-                        /*compact_tool_groups*/ true,
-                        &expanded_groups,
-                        &hover,
-                    );
-                    run = trailing_compact_tool_run(&source, &projected);
-                }
-                let full = project_owned_cells_with_expanded(
-                    &source,
-                    /*compact_tool_groups*/ true,
-                    &expanded_groups,
-                    &hover,
-                );
-                assert_eq!(
-                    projection_signature(&projected),
-                    projection_signature(&full)
-                );
-            }
-        }
+        assert!(mcp_tool_group_item(&cell).is_none());
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationInFlightBypass
+            ),
+            1
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheMiss
+            ),
+            0
+        );
+
+        crate::quiet_metrics::reset_for_test();
+        assert!(
+            cell.complete(
+                Duration::from_millis(10),
+                Ok(CallToolResult {
+                    content: Vec::new(),
+                    structured_content: None,
+                    is_error: Some(false),
+                    meta: None,
+                }),
+            )
+            .is_none()
+        );
+        assert!(mcp_tool_group_item(&cell).is_some());
+        assert!(mcp_tool_group_item(&cell).is_some());
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheInvalidation
+            ),
+            1
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheMiss
+            ),
+            1
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheHit
+            ),
+            1
+        );
+
+        crate::quiet_metrics::reset_for_test();
+        cell.mark_failed();
+        assert!(mcp_tool_group_item(&cell).is_none());
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheInvalidation
+            ),
+            1
+        );
+        assert_eq!(
+            crate::quiet_metrics::get_for_test(
+                crate::quiet_metrics::QuietMetric::ClassificationCacheMiss
+            ),
+            1
+        );
     }
 
     #[test]
@@ -2404,20 +2434,17 @@ mod tests {
             CommandOutput::new(/*exit_code*/ 0, String::new()),
             Duration::from_millis(10),
         ));
-        let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(cell)];
+        let cells = with_tool_run_seals(vec![Arc::new(cell)]);
 
         let group = compact_tool_group_at(&cells, 0, 80).expect("compact group");
 
-        assert_eq!(group.consumed_cells, 1);
-        assert_eq!(
-            render_group_text(group),
-            "▸ Work: read app.rs · searched · Alt+I inspect · Alt+O all"
-        );
+        assert_eq!(group.consumed_cells, 2);
+        assert_eq!(render_group_text(group), "▸ Work: read app.rs · searched");
     }
 
     #[test]
     fn web_searches_compact_when_adjacent() {
-        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+        let cells = with_tool_run_seals(vec![
             Arc::new(new_web_search_call(
                 "web-1".to_string(),
                 "coffee montreal".to_string(),
@@ -2441,20 +2468,20 @@ mod tests {
                     pattern: Some("needle".to_string()),
                 },
             )),
-        ];
+        ]);
 
         let group = compact_tool_group_at(&cells, 0, 120).expect("compact group");
 
-        assert_eq!(group.consumed_cells, 3);
+        assert_eq!(group.consumed_cells, 4);
         assert_eq!(
             render_group_text(group),
-            "▸ Work: searched web · opened web page · found on page · Alt+I inspect · Alt+O all"
+            "▸ Work: searched web · opened web page · found on page"
         );
     }
 
     #[test]
     fn outcome_first_work_bundle_golden() {
-        let cells = vec![
+        let cells = with_tool_run_seals(vec![
             completed_read_exec("read-1", "app.rs"),
             completed_read_exec("read-2", "lib.rs"),
             completed_patch(&["src/app.rs", "src/lib.rs"]),
@@ -2462,7 +2489,7 @@ mod tests {
             completed_command("build-1", "cargo build", 0),
             completed_command("check-1", "cargo clippy", 0),
             completed_mcp("mcp-1", "gmail", "read_thread"),
-        ];
+        ]);
 
         let rendered = render_group_text(compact_tool_group_at(&cells, 0, 120).unwrap());
 
@@ -2471,26 +2498,26 @@ mod tests {
 
     #[test]
     fn failures_break_groups_and_render_their_error_tail() {
-        let cells = vec![
+        let cells = with_tool_run_seals(vec![
             completed_read_exec("read-1", "app.rs"),
             completed_read_exec("read-2", "lib.rs"),
             completed_command("failed", "cargo build", 7),
             completed_read_exec("read-3", "main.rs"),
             completed_read_exec("read-4", "mod.rs"),
-        ];
+        ]);
 
         assert_eq!(
             compact_tool_group_at(&cells, 0, 100)
                 .unwrap()
                 .consumed_cells,
-            2
+            3
         );
-        assert!(compact_tool_group_at(&cells, 2, 100).is_none());
+        assert!(compact_tool_group_at(&cells, 3, 100).is_none());
         assert_eq!(
-            compact_tool_group_at(&cells, 3, 100)
+            compact_tool_group_at(&cells, 4, 100)
                 .unwrap()
                 .consumed_cells,
-            2
+            3
         );
 
         let rendered = render_lines_text(
@@ -2523,6 +2550,8 @@ mod tests {
                 meta: None,
             }),
         );
+        assert!(tool_group_item(failed.as_ref()).is_none());
+        assert!(tool_group_item(action_required.as_ref()).is_none());
         let cells = vec![
             completed_read_exec("read-1", "app.rs"),
             completed_read_exec("read-2", "lib.rs"),
@@ -2575,6 +2604,7 @@ mod tests {
             .into_iter()
             .enumerate()
         {
+            assert!(tool_group_item(result.as_ref()).is_none());
             let cells = vec![
                 result,
                 completed_read_exec(&format!("read-large-{index}"), "result.json"),
@@ -2594,6 +2624,7 @@ mod tests {
             0,
             "Open the following URL to sign in: https://example.com/device".to_string(),
         );
+        assert!(tool_group_item(action_required.as_ref()).is_none());
         let cells = vec![
             completed_read_exec("read-1", "app.rs"),
             completed_read_exec("read-2", "lib.rs"),
@@ -2642,14 +2673,17 @@ mod tests {
 
         for (call_id, command, output) in cases {
             let url_output = completed_command_with_output(call_id, command, 0, output);
-            let cells = vec![url_output, completed_read_exec("read", "metadata.json")];
+            let cells = with_tool_run_seals(vec![
+                url_output,
+                completed_read_exec("read", "metadata.json"),
+            ]);
             let group = compact_tool_group_at(&cells, 0, 120)
                 .unwrap_or_else(|| panic!("real {call_id} metadata did not compact"));
 
-            assert_eq!(group.consumed_cells, 2);
+            assert_eq!(group.consumed_cells, 3);
             assert_eq!(
                 render_group_text(group),
-                "▸ Work: read metadata.json · ran command · Alt+I inspect · Alt+O all"
+                "▸ Work: read metadata.json · ran command"
             );
         }
     }
@@ -2662,13 +2696,14 @@ mod tests {
             0,
             "Approval required: confirm in https://example.com/deploy/123".to_string(),
         );
-        let cells = vec![
+        assert!(tool_group_item(approval_required.as_ref()).is_none());
+        let cells = with_tool_run_seals(vec![
             completed_read_exec("read-1", "app.rs"),
             completed_read_exec("read-2", "lib.rs"),
             approval_required,
             completed_read_exec("read-3", "main.rs"),
             completed_read_exec("read-4", "mod.rs"),
-        ];
+        ]);
 
         assert!(compact_tool_group_at(&cells, 2, 100).is_none());
         let rendered = render_lines_text(
@@ -2708,6 +2743,7 @@ mod tests {
             };
             let action_required =
                 completed_command_with_output(call_id, command, 0, output.to_string());
+            assert!(tool_group_item(action_required.as_ref()).is_none());
             let cells = vec![action_required, completed_read_exec("read", "status.json")];
 
             assert!(
@@ -2758,6 +2794,7 @@ mod tests {
                 ),
                 Duration::from_millis(10),
             ));
+            assert!(tool_group_item(&cell).is_none());
             let cells: Vec<Arc<dyn HistoryCell>> =
                 vec![Arc::new(cell), completed_read_exec("read", "metadata.json")];
 
@@ -2770,13 +2807,13 @@ mod tests {
 
     #[test]
     fn latest_group_inspector_returns_only_the_latest_bundle_source_cells() {
-        let cells = vec![
+        let cells = with_tool_run_seals(vec![
             completed_read_exec("read-1", "app.rs"),
             completed_read_exec("read-2", "lib.rs"),
             completed_command("failed", "false", 1),
             completed_read_exec("read-3", "main.rs"),
             completed_read_exec("read-4", "mod.rs"),
-        ];
+        ]);
 
         let inspected = latest_compact_tool_group_cells(&cells, 100).unwrap();
         let rendered = render_lines_text(
@@ -2792,9 +2829,13 @@ mod tests {
 
     #[test]
     fn compact_rows_are_bounded_and_raw_source_remains_recoverable() {
-        let cells = (0..8)
-            .map(|index| completed_read_exec(&format!("read-{index}"), &format!("file-{index}.rs")))
-            .collect::<Vec<_>>();
+        let cells = with_tool_run_seals(
+            (0..8)
+                .map(|index| {
+                    completed_read_exec(&format!("read-{index}"), &format!("file-{index}.rs"))
+                })
+                .collect::<Vec<_>>(),
+        );
 
         let (compact, _) =
             render_transcript_lines(&cells, 120, HistoryRenderMode::Rich, true, Some(2));
