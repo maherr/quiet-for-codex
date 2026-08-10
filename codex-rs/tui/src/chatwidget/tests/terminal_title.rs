@@ -4,6 +4,21 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn terminal_title_spinner_requests_activity_scoped_frames() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (frame_requester, mut scheduled) = FrameRequester::test_channel();
+    chat.frame_requester = frame_requester;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.refresh_terminal_title();
+
+    let schedule = scheduled
+        .try_recv()
+        .expect("scheduled terminal-title frame");
+    assert_eq!(schedule.scope, crate::tui::FrameScope::Activity);
+}
+
+#[tokio::test]
 async fn terminal_title_shows_action_required_while_exec_approval_is_pending() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);

@@ -1521,6 +1521,9 @@ impl App {
             return Ok(false);
         };
         let focused = self.chat_widget.focused_slot();
+        if let Some(pane) = self.chat_widget.by_slot_mut(focused) {
+            pane.chat_widget.refresh_terminal_title();
+        }
         let chat_widget = &mut self.chat_widget;
         Ok(tui.draw_partial(area, |frame| {
             if let Some(rendered) =

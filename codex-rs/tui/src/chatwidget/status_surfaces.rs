@@ -28,7 +28,7 @@ pub(super) const TERMINAL_TITLE_SPINNER_FRAMES: [&str; 10] =
     ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Time between spinner frame advances in the terminal title.
-pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
+pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = crate::motion::ACTIVITY_FRAME_INTERVAL;
 
 /// Time between action-required blink phases in the terminal title.
 const TERMINAL_TITLE_ACTION_REQUIRED_INTERVAL: Duration = Duration::from_secs(1);
@@ -241,7 +241,7 @@ impl ChatWidget {
         let animation_interval = self.terminal_title_animation_interval_with_selections(selections);
         if self.last_terminal_title == title {
             if let Some(interval) = animation_interval {
-                self.frame_requester.schedule_frame_in(interval);
+                self.schedule_terminal_title_animation(selections, interval);
             }
             return;
         }
@@ -267,6 +267,18 @@ impl ChatWidget {
         }
 
         if let Some(interval) = animation_interval {
+            self.schedule_terminal_title_animation(selections, interval);
+        }
+    }
+
+    fn schedule_terminal_title_animation(
+        &self,
+        selections: &StatusSurfaceSelections,
+        interval: Duration,
+    ) {
+        if self.should_animate_terminal_title_spinner_with_selections(selections) {
+            self.frame_requester.schedule_activity_frame_in(interval);
+        } else {
             self.frame_requester.schedule_frame_in(interval);
         }
     }

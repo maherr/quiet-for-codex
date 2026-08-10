@@ -653,8 +653,11 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
             column += width.max(1); // treat zero-width symbols as width 1
         }
 
-        if last_nonblank_column + 1 < row.len() {
-            let (x, y) = a.pos_of(row_start + last_nonblank_column + 1);
+        let clear_start = last_nonblank_column + 1;
+        if clear_start < row.len()
+            && row[clear_start..] != a.content[row_start + clear_start..row_end]
+        {
+            let (x, y) = a.pos_of(row_start + clear_start);
             updates.push(DrawCommand::ClearToEnd { x, y, bg });
         }
 
@@ -1080,6 +1083,15 @@ mod tests {
             .expect("full draw after partial");
         assert_eq!(terminal.previous_buffer()[(0, 0)].symbol(), "K");
         assert_eq!(terminal.previous_buffer()[(0, 3)].symbol(), "n");
+    }
+
+    #[test]
+    fn unchanged_blank_rows_emit_no_clear_commands() {
+        let area = Rect::new(0, 0, 12, 4);
+        let before = Buffer::empty(area);
+        let after = before.clone();
+
+        assert!(diff_buffers(&before, &after).is_empty());
     }
 
     #[test]
