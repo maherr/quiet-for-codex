@@ -20,8 +20,8 @@
 
 - Capped the main activity animation at eight frames per second, coalesced its
   default terminal-title animation into the same activity-scoped redraw, and
-  stopped unchanged blank rows from emitting terminal clears. Compact tool
-  indicators keep their existing treatment.
+  limited per-frame motion to the spinner cell. Compact tool indicators keep
+  their existing treatment.
 - Release monitoring now binds the run to the expected source SHA and tag, then
   polls the GitHub API until the workflow and its dynamically discovered matrix
   jobs finish successfully. Unknown skipped jobs fail the gate instead of
