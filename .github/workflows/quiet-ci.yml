@@ -321,6 +321,7 @@ jobs:
           package_dir="$RUNNER_TEMP/quiet-candidate-package"
           mkdir -p candidate-dist
           archive="candidate-dist/codex-quiet-candidate-$GITHUB_SHA-$TARGET.tar.gz"
+          symbols_archive="candidate-dist/codex-symbols-candidate-$GITHUB_SHA-$TARGET.tar.gz"
           python3 scripts/build_codex_package.py \
             --target "$TARGET" \
             --cargo-profile release \
@@ -329,6 +330,13 @@ jobs:
             --zsh-manifest scripts/release/no-zsh.json \
             --bwrap-bin "$QUIET_BWRAP_BIN" \
             --force
+          bash .github/scripts/archive-release-symbols-and-strip-binaries.sh \
+            --target "$TARGET" \
+            --artifact-name "candidate-$GITHUB_SHA-$TARGET" \
+            --release-dir "$CARGO_TARGET_DIR/$TARGET/release" \
+            --archive-dir candidate-dist \
+            --binaries "codex codex-code-mode-host"
+          test -s "$symbols_archive"
           expected="codex-quiet $CODEX_QUIET_VERSION"
           actual="$("$package_dir/bin/codex" --version)"
           if [[ "$actual" != "$expected" ]]; then
@@ -375,6 +383,8 @@ jobs:
           (
             cd candidate-dist
             sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256"
+            sha256sum "$(basename "$symbols_archive")" \
+              > "$(basename "$symbols_archive").sha256"
           )
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

@@ -635,6 +635,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "scripts/build_codex_package.py",
             "--cargo-profile release",
             "--zsh-manifest scripts/release/no-zsh.json",
+            "archive-release-symbols-and-strip-binaries.sh",
+            "codex-symbols-candidate-$GITHUB_SHA-$TARGET.tar.gz",
             "codex-quiet-candidate-$GITHUB_SHA-$TARGET.tar.gz",
             'expected="codex-quiet $CODEX_QUIET_VERSION"',
             'actual="$("$package_dir/bin/codex" --version)"',
