@@ -59,8 +59,6 @@ class ArchiveReleaseSymbolsTest(unittest.TestCase):
                 ],
                 check=True,
                 env=environment,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
                 text=True,
                 timeout=20,
             )
@@ -277,8 +275,6 @@ debug = "line-tables-only"
                 ],
                 check=True,
                 env=environment,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
                 text=True,
                 timeout=30,
             )

@@ -57,7 +57,18 @@ if [[ -z "$target" || -z "$artifact_name" || -z "$release_dir" || -z "$archive_d
   exit 1
 fi
 
-symbols_root="${RUNNER_TEMP:-/tmp}/codex-symbols-${artifact_name}"
+normalize_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+release_dir="$(normalize_path "$release_dir")"
+archive_dir="$(normalize_path "$archive_dir")"
+runner_temp="$(normalize_path "${RUNNER_TEMP:-/tmp}")"
+symbols_root="${runner_temp%/}/codex-symbols-${artifact_name}"
 symbols_dir="${symbols_root}/codex-symbols-${artifact_name}"
 archive_path="${archive_dir%/}/codex-symbols-${artifact_name}.tar.gz"
 rm -rf "$symbols_root"
