@@ -18,6 +18,20 @@ ARCHIVER = (
 )
 
 
+def bash_executable() -> str:
+    if platform.system() != "Windows":
+        return "bash"
+
+    program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+    for candidate in (
+        program_files / "Git" / "bin" / "bash.exe",
+        program_files / "Git" / "usr" / "bin" / "bash.exe",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    raise FileNotFoundError("Git for Windows bash.exe not found")
+
+
 def native_linux_target() -> str:
     machine = platform.machine().lower()
     if machine in {"aarch64", "arm64"}:
@@ -44,7 +58,7 @@ class ArchiveReleaseSymbolsTest(unittest.TestCase):
             )
             subprocess.run(
                 [
-                    "bash",
+                    bash_executable(),
                     str(ARCHIVER),
                     "--target",
                     target,
@@ -103,7 +117,7 @@ class ArchiveReleaseSymbolsTest(unittest.TestCase):
             )
             result = subprocess.run(
                 [
-                    "bash",
+                    bash_executable(),
                     str(ARCHIVER),
                     "--target",
                     target,
@@ -151,7 +165,7 @@ class ArchiveReleaseSymbolsTest(unittest.TestCase):
             )
             subprocess.run(
                 [
-                    "bash",
+                    bash_executable(),
                     str(ARCHIVER),
                     "--target",
                     target,
@@ -260,7 +274,7 @@ debug = "line-tables-only"
             )
             subprocess.run(
                 [
-                    "bash",
+                    bash_executable(),
                     str(ARCHIVER),
                     "--target",
                     target,
