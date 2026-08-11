@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use codex_app_server_protocol::Thread;
@@ -40,6 +41,7 @@ const RESTORE_COUNTERS_FILENAME: &str = "quiet-legacy-tool-history-counters.json
 const RESTORE_COUNTERS_LOCK_FILENAME: &str = ".quiet-legacy-tool-history-counters.lock";
 const RESTORE_COUNTER_LOCK_RETRIES: usize = 50;
 const RESTORE_COUNTER_LOCK_DELAY: Duration = Duration::from_millis(5);
+static RESTORE_COUNTER_PROCESS_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Copy, Debug)]
 enum LegacyToolRestoreOutcome {
@@ -296,6 +298,10 @@ fn update_restore_counters(
     codex_home: &Path,
     outcome: Option<LegacyToolRestoreOutcome>,
 ) -> io::Result<()> {
+    // Serialize writers in this process before entering the bounded cross-process lock loop.
+    let _process_guard = RESTORE_COUNTER_PROCESS_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     std::fs::create_dir_all(codex_home)?;
     let counters_path = codex_home.join(RESTORE_COUNTERS_FILENAME);
     let lock_path = codex_home.join(RESTORE_COUNTERS_LOCK_FILENAME);

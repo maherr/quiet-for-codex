@@ -1,10 +1,25 @@
 # Changelog
 
+## 1.2.3 - 2026-08-10
+
+### Added
+
+- Publishes the 1.2 interaction cohort and symbol-sidecar repairs prepared in
+  1.2.2, 1.2.1, and 1.2.0 below.
+
+### Fixed
+
+- Serialize legacy restore-counter writers within each Quiet process before
+  entering the bounded cross-process file-lock loop. This prevents
+  same-process worker starvation from exhausting the 250 ms retry window.
+  `quiet-v1.2.2` was not published after its tagged TUI verification exposed
+  the contention; its immutable tag remains the failed source record.
+
 ## 1.2.2 - 2026-08-10
 
 ### Added
 
-- Publishes the 1.2 interaction cohort and Linux build-ID repair prepared in
+- Prepared the 1.2 interaction cohort and Linux build-ID repair introduced in
   1.2.1 and 1.2.0 below.
 
 ### Fixed
