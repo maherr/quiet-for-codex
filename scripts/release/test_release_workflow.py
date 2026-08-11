@@ -352,8 +352,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("link-arg=-Wl,--build-id=sha1", rustflags)
         self.assertIn("linux-symbols-arm64:", self.quiet_ci)
         self.assertIn("runs-on: ubuntu-24.04-arm", self.quiet_ci)
+        self.assertIn("windows-symbols-arm64:", self.quiet_ci)
+        self.assertIn("runs-on: windows-11-arm", self.quiet_ci)
+        self.assertIn(
+            "Exercise Cargo PDB naming and the symbol archiver on arm64",
+            self.quiet_ci,
+        )
         self.assertIn(
             "python3 scripts/release/test_archive_release_symbols.py",
+            self.quiet_ci,
+        )
+        self.assertIn(
+            "python scripts/release/test_archive_release_symbols.py",
             self.quiet_ci,
         )
 
@@ -616,9 +626,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )[0]
         linux_symbols_arm64 = self.quiet_ci.split(
             "  linux-symbols-arm64:\n", 1
+        )[1].split("  windows-symbols-arm64:\n", 1)[0]
+        windows_symbols_arm64 = self.quiet_ci.split(
+            "  windows-symbols-arm64:\n", 1
         )[1].split("  platform-check:\n", 1)[0]
         platform_check = self.quiet_ci.split("  platform-check:\n", 1)[1]
-        for job in (quality, linux_symbols_arm64, platform_check):
+        for job in (
+            quality,
+            linux_symbols_arm64,
+            windows_symbols_arm64,
+            platform_check,
+        ):
             self.assertIn(non_refresh_condition, job)
 
     def test_quiet_ci_builds_source_bound_hosted_linux_candidate(self) -> None:

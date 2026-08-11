@@ -405,6 +405,26 @@ jobs:
       - name: Exercise the Linux symbol archiver on arm64
         run: python3 scripts/release/test_archive_release_symbols.py
 
+  windows-symbols-arm64:
+    name: Check aarch64 Windows symbol sidecars
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.refresh_snapshots }}
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: aarch64-pc-windows-msvc
+      - name: Configure MSVC
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: aarch64-pc-windows-msvc
+      - name: Exercise Cargo PDB naming and the symbol archiver on arm64
+        shell: pwsh
+        run: python scripts/release/test_archive_release_symbols.py
+
   platform-check:
     name: Check ${{ matrix.target }}
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.refresh_snapshots }}

@@ -147,12 +147,16 @@ case "$target" in
     for binary in "${binary_names[@]}"; do
       binary_path="${release_dir%/}/${binary}.exe"
       pdb_path="${release_dir%/}/${binary}.pdb"
+      normalized_pdb_path="${release_dir%/}/${binary//-/_}.pdb"
       if [[ ! -f "$binary_path" ]]; then
         echo "Binary $binary_path not found" >&2
         exit 1
       fi
+      if [[ ! -f "$pdb_path" && -f "$normalized_pdb_path" ]]; then
+        pdb_path="$normalized_pdb_path"
+      fi
       if [[ ! -f "$pdb_path" ]]; then
-        echo "PDB $pdb_path not found" >&2
+        echo "PDB for $binary not found; checked ${release_dir%/}/${binary}.pdb and $normalized_pdb_path" >&2
         exit 1
       fi
 

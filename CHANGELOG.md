@@ -1,10 +1,27 @@
 # Changelog
 
+## 1.2.2 - 2026-08-10
+
+### Added
+
+- Publishes the 1.2 interaction cohort and Linux build-ID repair prepared in
+  1.2.1 and 1.2.0 below.
+
+### Fixed
+
+- Resolve the underscore-normalized PDB name that Rust emits for the
+  `codex-code-mode-host` binary while preserving its hyphenated public sidecar
+  name.
+- Add a hosted Windows arm64 Cargo fixture that builds both hyphenated binary
+  names and runs the real symbol archiver before any release tag is created.
+  `quiet-v1.2.1` was not published after its arm64 Windows build exposed the PDB
+  lookup mismatch; its immutable tag remains the failed source record.
+
 ## 1.2.1 - 2026-08-10
 
 ### Added
 
-- Publishes the 1.2 interaction cohort: the `#2F68C2` assistant marker,
+- Prepared the 1.2 interaction cohort: the `#2F68C2` assistant marker,
   fixed-phrase working row with model and effort, `↓ newer` navigation cue,
   exact-width composer repair, complete resumed history, and hosted-only build
   flow described in 1.2.0 below.
