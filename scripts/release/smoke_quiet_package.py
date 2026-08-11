@@ -150,7 +150,7 @@ def cleanup_smoke_directory(
 
 def write_replay_smoke_config(codex_home: Path, cwd: Path) -> None:
     """Write an offline, trusted, read-only config for packaged replay checks."""
-    project_key = json.dumps(str(cwd))
+    project_key = json.dumps(str(cwd.resolve()))
     (codex_home / "config.toml").write_text(
         "\n".join(
             (
@@ -182,6 +182,7 @@ def write_replay_smoke_config(codex_home: Path, cwd: Path) -> None:
 
 def write_paginated_replay_fixture(codex_home: Path, cwd: Path) -> Path:
     """Create a durable paginated transcript with a dense newer suffix."""
+    cwd = cwd.resolve()
     timestamp = "2025-01-05T12:00:00Z"
     rollout_dir = codex_home / "sessions" / "2025" / "01" / "05"
     rollout_dir.mkdir(parents=True, exist_ok=True)

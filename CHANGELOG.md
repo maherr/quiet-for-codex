@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.4 - 2026-08-11
+
+### Added
+
+- Publishes the 1.2 interaction cohort and symbol-sidecar repairs prepared in
+  1.2.3, 1.2.2, 1.2.1, and 1.2.0 below.
+
+### Fixed
+
+- Canonicalize the native replay fixture's working directory before writing
+  its trusted-project config and session metadata. This keeps macOS `/var` and
+  `/private/var` aliases from stopping the packaged TUI smoke at an interactive
+  trust prompt. `quiet-v1.2.3` was not published after its arm64 macOS package
+  exposed the mismatch; its immutable tag remains the failed source record.
+
 ## 1.2.3 - 2026-08-10
 
 ### Added

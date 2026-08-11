@@ -98,16 +98,39 @@ class SmokeQuietPackageReplayTest(unittest.TestCase):
     def test_replay_config_is_offline_read_only_and_trusted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            real_cwd = root / "private" / "cwd"
+            real_cwd.mkdir(parents=True)
+            cwd_alias = root / "cwd-alias"
+            cwd_alias.symlink_to(real_cwd, target_is_directory=True)
             codex_home = root / "codex-home"
             codex_home.mkdir()
-            smoke_quiet_package.write_replay_smoke_config(codex_home, root)
+            smoke_quiet_package.write_replay_smoke_config(codex_home, cwd_alias)
             config = (codex_home / "config.toml").read_text(encoding="utf-8")
 
         self.assertIn('sandbox_mode = "read-only"', config)
         self.assertIn('approval_policy = "never"', config)
         self.assertIn("requires_openai_auth = false", config)
         self.assertIn('trust_level = "trusted"', config)
-        self.assertIn(json.dumps(str(root)), config)
+        self.assertIn(json.dumps(str(real_cwd.resolve())), config)
+        self.assertNotIn(json.dumps(str(cwd_alias)), config)
+
+    def test_paginated_fixture_records_the_canonical_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real_cwd = root / "private" / "cwd"
+            real_cwd.mkdir(parents=True)
+            cwd_alias = root / "cwd-alias"
+            cwd_alias.symlink_to(real_cwd, target_is_directory=True)
+            codex_home = root / "codex-home"
+            codex_home.mkdir()
+            rollout = smoke_quiet_package.write_paginated_replay_fixture(
+                codex_home, cwd_alias
+            )
+            first_record = json.loads(
+                rollout.read_text(encoding="utf-8").splitlines()[0]
+            )
+
+        self.assertEqual(first_record["payload"]["cwd"], str(real_cwd.resolve()))
 
     def test_jsonrpc_response_rejects_error_and_non_json_stdout(self) -> None:
         response = smoke_quiet_package.jsonrpc_response(
